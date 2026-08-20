@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>multi-cpu-emu — 8086 / 8085 / 8051</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: ui-monospace, monospace; margin: 0; background: #111; color: #ddd; }
+    header { padding: 12px 16px; background: #1a1a1a; border-bottom: 1px solid #333; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 16px; margin: 0 12px 0 0; color: #7ee787; }
+    select, button { font: inherit; background: #222; color: #ddd; border: 1px solid #444; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+    button:hover { background: #2d2d2d; }
+    button:disabled { opacity: .4; cursor: default; }
+    main { display: grid; grid-template-columns: 1fr 420px; gap: 12px; padding: 12px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    textarea { width: 100%; height: 60vh; resize: vertical; background: #0d0d0d; color: #9fdc9f; border: 1px solid #333; border-radius: 8px; padding: 10px; font: inherit; }
+    .panel { background: #161616; border: 1px solid #333; border-radius: 8px; padding: 10px; }
+    .panel h2 { font-size: 13px; margin: 0 0 8px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+    #status { color: #ffa657; min-height: 18px; font-size: 13px; }
+    #output { background: #0d0d0d; border: 1px solid #333; border-radius: 8px; min-height: 90px; padding: 8px; white-space: pre-wrap; word-break: break-all; font-size: 13px; }
+    #regs { font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+    #regs span { white-space: nowrap; }
+    .rname { color: #79c0ff; }
+    .rval { color: #ddd; }
+    #flags { font-size: 12px; color: #7ee787; min-height: 16px; }
+    #memview { font-size: 11px; color: #8b949e; overflow-wrap: break-word; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>multi-cpu-emu</h1>
+    <label>ISA
+      <select id="isa">
+        <option value="8086" selected>Intel 8086</option>
+        <option value="8085">Intel 8085</option>
+        <option value="8051">Intel 8051</option>
+      </select>
+    </label>
+    <button id="assembleBtn">Assemble</button>
+    <button id="stepBtn" disabled>Step</button>
+    <button id="runBtn" disabled>Run</button>
+    <button id="resetBtn">Reset</button>
+    <span id="status"></span>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>Source</h2>
+      <textarea id="src" spellcheck="false"></textarea>
+    </section>
+    <section>
+      <div class="panel" style="margin-bottom:12px">
+        <h2>Output</h2>
+        <div id="output"></div>
+      </div>
+      <div class="panel" style="margin-bottom:12px">
+        <h2>Registers</h2>
+        <div id="regs"></div>
+        <div id="flags" style="margin-top:6px"></div>
+      </div>
+      <div class="panel">
+        <h2>Memory @ 0</h2>
+        <div id="memview"></div>
+      </div>
+    </section>
+  </main>
+  <script type="module">
+    import init, { Emulator } from './pkg/multi_cpu_emu.js';
+
+    const DEFAULT_SRC = {
+      '8086': `; 8086 hello — assemble, then Run
+ORG 100h
+MOV DX, OFFSET msg
+MOV AH, 09h
+INT 21h
+MOV AH, 4Ch
+INT 21h
+msg: DB 'Hello, 8086!$'
+END
+`,
+      '8085': `; 8085 hello — prints via OUT 01h
+MVI C, 05h
+LXI H, msg
+loop:
+MOV A, M
+CPI '$'
+JZ done
+OUT 01h
+INX H
+JMP loop
+done:
+HLT
+msg: DB 'Hello, 8085!$'
+END
+`,
+      '8051': `; 8051 hello — prints via SBUF
+MOV DPTR, #msg
+MOV R1, #00h
+loop:
+MOV A, R1
+MOVC A, @A+DPTR
+JZ done
+MOV SBUF, A
+INC R1
+SJMP loop
+done:
+SJMP done
+msg: DB 'Hello, 8051!', 0
+END
+`,
+    };
+
+    await init();
+    let emu = null;
+    let accumOut = '';
+
+    const $ = (id) => document.getElementById(id);
+    const isaSel = $('isa'), srcBox = $('src'), status = $('status'),
+          stepBtn = $('stepBtn'), runBtn = $('runBtn'), assembleBtn = $('assembleBtn');
+
+    function newEmulator() {
+      emu = new Emulator(isaSel.value);
+      accumOut = '';
+    }
+
+    function originFor() { return isaSel.value === '8086' ? 0x100 : 0; }
+
+    function refresh() {
+      $('regs').innerHTML = emu.regs().map((r) =>
+        `<span><span class="rname">${r.name.split('=')[0]}</span> = <span class="rval">${r.split('=')[1]}</span></span>`).join('');
+      $('flags').textContent = emu.flags().join(' ');
+      $('memview').textContent = hex(emu.mem(originFor(), 64));
+      const fresh = emu.out();
+      if (fresh) accumOut += fresh;
+      $('output').textContent = accumOut;
+      stepBtn.disabled = runBtn.disabled = emu.halted();
+      status.textContent = `PC=${hex16(emu.pc())} halted=${emu.halted()}`;
+    }
+
+    function hex(b) {
+      return Array.from(new Uint8Array(b)).map((x) => x.toString(16).padStart(2, '0')).join(' ');
+    }
+    function hex16(v) { return v.toString(16).padStart(4, '0'); }
+
+    function loadSource() {
+      if (!(isaSel.value in DEFAULT_SRC)) return;
+      srcBox.value = DEFAULT_SRC[isaSel.value];
+    }
+
+    function assemble() {
+      try {
+        const code = emu.assemble(srcBox.value);
+        newEmulator();
+        emu.load(emu.assemble(srcBox.value), originFor());
+        status.textContent = `assembled ${code.length} bytes @ ${hex16(originFor())}`;
+      } catch (e) {
+        status.textContent = 'error: ' + e;
+      }
+      refresh();
+    }
+
+    assembleBtn.onclick = assemble;
+    stepBtn.onclick = () => { emu.step(); refresh(); };
+    runBtn.onclick = () => { const n = emu.run(1000000); status.textContent = `ran ${n} steps`; refresh(); };
+    resetBtn.onclick = () => { newEmulator(); status.textContent = ''; $('output').textContent = ''; refresh(); };
+    isaSel.onchange = () => { loadSource(); newEmulator(); refresh(); };
+
+    loadSource();
+    newEmulator();
+    refresh();
+  </script>
+</body>
+</html>

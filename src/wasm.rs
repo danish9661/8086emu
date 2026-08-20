@@ -1,0 +1,97 @@
+//! wasm-bindgen surface (feature = "wasm").
+//!
+//! Exposes a single `Emulator` class that swaps between the 8086/8085/8051
+//! cores, mirroring the JS-facing API documented in AGENTS.md.
+
+use crate::{cpu::RunResult, Emulator as Core};
+use wasm_bindgen::prelude::*;
+
+fn to_js<T>(r: Result<T, String>) -> Result<T, JsValue> {
+    r.map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[wasm_bindgen]
+pub struct Emulator {
+    inner: Core,
+}
+
+#[wasm_bindgen]
+impl Emulator {
+    #[wasm_bindgen(constructor)]
+    pub fn new(isa: &str) -> Result<Emulator, JsValue> {
+        to_js(crate::make_emulator(isa).map(|inner| Emulator { inner }))
+    }
+
+    /// Assemble source for the current ISA; returns machine code bytes.
+    pub fn assemble(&self, source: &str) -> Result<Vec<u8>, JsValue> {
+        to_js(self.inner.assemble(source))
+    }
+
+    /// Load raw machine code at `origin` and set PC there.
+    pub fn load(&mut self, code: &[u8], origin: u32) {
+        self.inner.mem_write(origin, code);
+        self.inner.set_pc(origin);
+    }
+
+    /// Execute one instruction.
+    pub fn step(&mut self) {
+        self.inner.step();
+    }
+
+    /// Run up to `max_steps` instructions; returns steps executed.
+    pub fn run(&mut self, max_steps: u32) -> u32 {
+        let r: RunResult = self.inner.run(max_steps);
+        r.steps
+    }
+
+    pub fn pc(&self) -> u32 {
+        self.inner.pc()
+    }
+
+    pub fn regs(&self) -> Vec<String> {
+        self.inner
+            .regs()
+            .iter()
+            .map(|r| format!("{}={:04X}", r.name, r.value & 0xFFFF))
+            .collect()
+    }
+
+    pub fn flags(&self) -> Vec<String> {
+        let f = self.inner.flags();
+        let mut v = Vec::new();
+        if f.carry { v.push("CF".to_string()); }
+        if f.zero { v.push("ZF".to_string()); }
+        if f.sign { v.push("SF".to_string()); }
+        if f.parity { v.push("PF".to_string()); }
+        if f.aux { v.push("AF".to_string()); }
+        if f.overflow { v.push("OF".to_string()); }
+        if f.direction { v.push("DF".to_string()); }
+        if f.interrupt { v.push("IF".to_string()); }
+        v
+    }
+
+    pub fn mem(&self, addr: u32, len: u32) -> Vec<u8> {
+        self.inner.mem_read(addr, len as usize)
+    }
+
+    /// Drain the program output buffer.
+    pub fn out(&mut self) -> String {
+        self.inner.take_output()
+    }
+
+    pub fn halted(&self) -> bool {
+        self.inner.is_halted()
+    }
+
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    pub fn snapshot(&self) -> Vec<u8> {
+        self.inner.snapshot()
+    }
+
+    pub fn restore(&mut self, data: &[u8]) {
+        self.inner.restore(data);
+    }
+}

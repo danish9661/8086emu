@@ -1,0 +1,19 @@
+[package]
+name = "multi-cpu-emu"
+version = "0.1.0"
+edition = "2021"
+description = "8086 / 8085 / 8051 emulator cores in one Rust crate, compiles to WASM"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+
+[features]
+default = []
+wasm = ["dep:wasm-bindgen"]
+
+[profile.release]
+opt-level = 3
+lto = true
