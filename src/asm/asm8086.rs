@@ -405,6 +405,8 @@ fn encode_instr(
                 return Err("LEA: needs reg16, mem".into());
             }
         }
+        "PUSHF" => { o.push(0x9C); }
+        "POPF" => { o.push(0x9D); }
         // ---------------- IN / OUT ----------------
         "IN" => match (a, b) {
             (Some(Operand::Reg8(0)), Some(Operand::Imm(v))) => { o.push(0xE4); o.push(*v as u8); }

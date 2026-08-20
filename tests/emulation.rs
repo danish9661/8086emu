@@ -1084,3 +1084,91 @@ fn run_to_bp_empty_set_runs_to_halt() {
     assert!(r.halted);
     assert_eq!(reg(&emu.regs(), "A"), 1);
 }
+
+#[test]
+fn hw_intr_8086_nmi() {
+    // NMI works even with IF=0 (CLI), vectors through the IVT, IRET returns
+    let src = r#"
+        ORG 100h
+        MOV AX, 1234h
+        CLI
+        HLT
+        ORG 300h
+        MOV CX, 5678h
+        IRET
+        END
+    "#;
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.mem_write(0x08, &[0x00, 0x03, 0x00, 0x00]); // vector 02h -> 0000:0300
+    emu.set_pc(0x100);
+    emu.request_interrupt("NMI", 0).unwrap();
+    let r = emu.run(100);
+    assert!(r.halted, "ISR ran and IRET returned to HLT");
+    assert_eq!(reg(&emu.regs(), "AX"), 0x1234, "instruction before the NMI executed");
+    assert_eq!(reg(&emu.regs(), "CX"), 0x5678, "NMI ISR ran despite CLI");
+}
+
+#[test]
+fn hw_intr_8086_intr_masked() {
+    // INTR is ignored while IF=0
+    let src = "ORG 100h\nMOV AX, 1234h\nCLI\nHLT\nORG 300h\nMOV CX, 5678h\nIRET\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.mem_write(0x20, &[0x00, 0x03, 0x00, 0x00]); // vector 08h -> 0000:0300
+    emu.set_pc(0x100);
+    emu.request_interrupt("INTR", 8).unwrap();
+    let r = emu.run(100);
+    assert!(r.halted);
+    assert_eq!(reg(&emu.regs(), "CX"), 0, "INTR must not fire with IF=0");
+}
+
+#[test]
+fn hw_intr_8086_intr_enabled() {
+    // STI enables INTR; ISR pushes FLAGS with IF cleared; IRET restores
+    let src = r#"
+        ORG 100h
+        MOV AX, 1234h
+        STI
+        HLT
+        ORG 300h
+        MOV CX, 5678h
+        PUSHF
+        POP BX              ; BX = FLAGS saved by the CPU (IF cleared)
+        IRET
+        END
+    "#;
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.mem_write(0x20, &[0x00, 0x03, 0x00, 0x00]); // vector 08h -> 0000:0300
+    emu.set_pc(0x100);
+    emu.request_interrupt("INTR", 8).unwrap();
+    let r = emu.run(100);
+    assert!(r.halted);
+    assert_eq!(reg(&emu.regs(), "CX"), 0x5678, "INTR serviced after STI");
+    assert_eq!(reg(&emu.regs(), "BX") & 0x200, 0, "IF was cleared in the pushed FLAGS");
+}
+
+#[test]
+fn hw_intr_8086_nmi_over_intr_and_snapshot() {
+    // NMI wins over a pending INTR; pending state survives snapshot/restore
+    let src = "ORG 100h\nMOV AX, 1234h\nCLI\nHLT\nORG 300h\nMOV CX, 5678h\nIRET\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.mem_write(0x08, &[0x00, 0x03, 0x00, 0x00]);
+    emu.mem_write(0x20, &[0x00, 0x03, 0x00, 0x00]);
+    emu.set_pc(0x100);
+    emu.request_interrupt("INTR", 8).unwrap();
+    emu.request_interrupt("NMI", 0).unwrap();
+    let snap = emu.snapshot();
+    emu.restore(&snap);
+    emu.step(); // MOV AX executes, then NMI (not INTR) is serviced
+    assert_eq!(emu.pc(), 0x300, "NMI takes priority over INTR");
+    emu.run(100);
+    assert!(emu.is_halted());
+    assert_eq!(reg(&emu.regs(), "CX"), 0x5678, "NMI ISR ran after restore");
+}

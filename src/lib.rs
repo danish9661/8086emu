@@ -129,7 +129,7 @@ impl Emulator {
                 }
             }
             Emulator::Mcs51(c) => c.request_interrupt(kind),
-            _ => Err(format!("interrupts are only supported on the 8085/8051 cores (got '{kind}')")),
+            Emulator::I8086(c) => c.request_interrupt(kind, data),
         }
     }
 

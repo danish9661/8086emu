@@ -38,6 +38,10 @@ pub struct Cpu8086 {
     input_pending: bool, // INT 21h read with empty buffer: IP re-pointed, CPU blocked
     /// I/O port space (256 ports); OUT to port 01h also prints AL.
     pub ports: [u8; 256],
+    // hardware interrupts (latched, serviced at the end of step())
+    pending_nmi: bool,   // NMI pin: non-maskable, vector 02h
+    pending_intr: bool,  // INTR pin: maskable via IF, device-supplied vector
+    intr_vector: u8,
 }
 
 impl Default for Cpu8086 {
@@ -45,6 +49,41 @@ impl Default for Cpu8086 {
 }
 
 impl Cpu8086 {
+    /// Raise a hardware interrupt. "NMI" (non-maskable, vector 02h) or
+    /// "INTR" (maskable via IF, vector = data & 0xFF).
+    pub fn request_interrupt(&mut self, kind: &str, data: u32) -> Result<(), String> {
+        match kind.to_ascii_uppercase().as_str() {
+            "NMI" => { self.pending_nmi = true; Ok(()) }
+            "INTR" => { self.pending_intr = true; self.intr_vector = (data & 0xFF) as u8; Ok(()) }
+            _ => Err(format!("unknown 8086 interrupt '{kind}' (use NMI or INTR)")),
+        }
+    }
+
+    fn hardware_intr(&mut self, vector: u8) {
+        let addr = vector as usize * 4;
+        let ip = self.mem.read16(addr);
+        let cs = self.mem.read16(addr + 2);
+        self.push16(self.flags);
+        self.push16(self.cs);
+        self.push16(self.ip);
+        self.set_flag(IF, false);
+        self.set_flag(TF, false);
+        self.cs = cs;
+        self.ip = ip;
+    }
+
+    /// Service latched hardware interrupts at the end of a step (never while
+    /// halted or blocked on input). NMI > INTR; INTR needs IF set.
+    fn service_interrupts(&mut self) {
+        if self.pending_nmi {
+            self.pending_nmi = false;
+            self.hardware_intr(2);
+        } else if self.pending_intr && self.flag(IF) {
+            self.pending_intr = false;
+            self.hardware_intr(self.intr_vector);
+        }
+    }
+
     pub fn new() -> Self {
         let mut c = Cpu8086 {
             ax: 0, bx: 0, cx: 0, dx: 0,
@@ -59,6 +98,9 @@ impl Cpu8086 {
             seg_ov: None,
             keybuf: VecDeque::new(),
             ports: [0; 256],
+            pending_nmi: false,
+            pending_intr: false,
+            intr_vector: 0,
             input_pending: false,
         };
         c.reset();
@@ -1120,12 +1162,18 @@ impl Cpu for Cpu8086 {
         self.seg_ov = None;
         self.keybuf.clear();
         self.input_pending = false;
+        self.pending_nmi = false;
+        self.pending_intr = false;
+        self.intr_vector = 0;
     }
 
     fn step(&mut self) -> bool {
         if self.halted { return false; }
         if self.input_pending { return true; } // blocked on INT 21h input
         self.exec();
+        if !self.halted {
+            self.service_interrupts();
+        }
         !self.halted
     }
 
@@ -1181,7 +1229,7 @@ impl Cpu for Cpu8086 {
 
     fn snapshot(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256);
-        v.push(2); // version
+        v.push(3); // version
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -1192,6 +1240,9 @@ impl Cpu for Cpu8086 {
         v.extend_from_slice(&(self.keybuf.len() as u16).to_le_bytes());
         v.extend_from_slice(&self.keybuf.iter().copied().collect::<Vec<_>>());
         v.extend_from_slice(&self.ports);
+        v.push(self.pending_nmi as u8);
+        v.push(self.pending_intr as u8);
+        v.push(self.intr_vector);
         v
     }
 
@@ -1225,6 +1276,12 @@ impl Cpu for Cpu8086 {
                 let start = MEM_SIZE + 2 + klen;
                 let n = body.len().saturating_sub(start).min(256);
                 self.ports[..n].copy_from_slice(&body[start..start + n]);
+            }
+            if ver >= 3 {
+                let start = MEM_SIZE + 2 + klen + 256;
+                self.pending_nmi = body.get(start).is_some_and(|b| *b != 0);
+                self.pending_intr = body.get(start + 1).is_some_and(|b| *b != 0);
+                self.intr_vector = body.get(start + 2).copied().unwrap_or(0);
             }
         }
         self.rep = None;

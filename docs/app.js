@@ -46,6 +46,41 @@ END
 `,
     },
     {
+      name: 'Hardware interrupts (NMI/INTR)',
+      src: `; 8086 hardware interrupts. The IVT (interrupt vector table)
+; starts at address 0; each vector is 4 bytes (IP, CS).
+; NMI is vector 02h -> IVT entry at 08h, INTR here uses
+; device vector 08h -> IVT entry at 20h (ORG pads with zeros).
+;
+; While this runs, press NMI or INTR in the IRQ bar:
+;   NMI   -> non-maskable, works even with CLI
+;   INTR  -> maskable via IF (needs STI)
+; Each IRQ sets DX to a marker, then IRET resumes the loop.
+ORG 8
+DW isrNmi        ; vector 02h: IP
+DW 0000h         ; vector 02h: CS
+ORG 20h
+DW isrIntr       ; vector 08h: IP
+DW 0000h         ; vector 08h: CS
+
+ORG 100h
+STI              ; enable INTR (NMI ignores IF anyway)
+MOV CX, 0000h
+spin:
+INC CX
+JMP spin         ; loop forever - press NMI/INTR while it runs
+
+isrNmi:
+MOV DX, 1111h
+IRET
+
+isrIntr:
+MOV DX, 2222h
+IRET
+END
+`,
+    },
+    {
       name: 'Hello (INT 21h)',
       src: `; Print a message with DOS service INT 21h, AH=09
 ; then exit with AH=4Ch
@@ -812,6 +847,7 @@ $('isa').onchange = () => {
   memBase = 0;
   $('intrBar85').style.display = isa === '8085' ? '' : 'none';
   $('intrBar51').style.display = isa === '8051' ? '' : 'none';
+  $('intrBar86').style.display = isa === '8086' ? '' : 'none';
   renderSource();
   refresh();
 };
@@ -823,6 +859,8 @@ $('irq55').onclick = () => { emu.interrupt('RST55', 0); refresh(); };
 $('irqIntr').onclick = () => { emu.interrupt('INTR', 0x08); refresh(); };
 $('irqInt0').onclick = () => { emu.interrupt('INT0', 0); refresh(); };
 $('irqInt1').onclick = () => { emu.interrupt('INT1', 0); refresh(); };
+$('irqNmi').onclick = () => { emu.interrupt('NMI', 0); refresh(); };
+$('irqIntr86').onclick = () => { emu.interrupt('INTR', 0x08); refresh(); };
 
 // ---------- keys ----------
 document.addEventListener('keydown', (e) => {
@@ -845,5 +883,6 @@ document.addEventListener('keydown', (e) => {
 newEmulator();
 loadSource();
 $('intrBar85').style.display = 'none';
-  $('intrBar51').style.display = 'none';
+$('intrBar51').style.display = 'none';
+$('intrBar86').style.display = '';   // default ISA is 8086
 refresh();

@@ -147,6 +147,12 @@ pub trait Cpu {
   INT n/INT3/INTO/IRET, NOP, HLT.
 - DOS/BIOS service subset: INT 21h (AH=01, 02, 06, 07, 08, 09, 0C, 4Ch),
   INT 10h (AH=0Eh). Output goes to the `Output` buffer.
+- Hardware interrupts (raised via `Cpu8086::request_interrupt` /
+  `Emulator::request_interrupt` / wasm `interrupt()`): NMI (vector 02h,
+  non-maskable) and INTR (maskable via IF, device-supplied vector).
+  Latched, serviced at the end of `step()` (never while halted), priority
+  NMI > INTR; service pushes FLAGS/CS/IP, clears IF+TF, jumps through the
+  IVT (vector n at address 4n). Snapshot/restore covers the pending state.
 - I/O ports: IN/OUT (imm8 and DX forms) over a 256-byte port space;
   OUT to port 01h also prints AL to `Output` (8085-style convention).
 - Keyboard input: `Emulator::push_key(ch)` / wasm `push_key()` queue
@@ -245,7 +251,7 @@ snapshot() -> Vec<u8>
 restore(data: &[u8])
 port_read(port: u8) -> u8             // 8085/8086 port space; 8051 P0-P3 (latch|pin)
 port_write(port: u8, val: u8)        // 8085/8086 port space; 8051 pin injection
-interrupt(kind: &str, data: u32)     // 8085: TRAP|RST75|RST65|RST55|INTR; 8051: INT0|INT1
+interrupt(kind: &str, data: u32)     // 8085: TRAP|RST75|RST65|RST55|INTR; 8051: INT0|INT1; 8086: NMI|INTR(data=vector)
 ```
 
 ## Conventions
