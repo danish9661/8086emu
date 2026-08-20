@@ -416,6 +416,9 @@ function refresh() {
   if (fresh) accumOut += fresh;
   outputBox.textContent = accumOut;
 
+  // --- ports ---
+  renderPorts();
+
   // --- status ---
   $('sbPc').textContent = ISA_INFO[isa].pcLabel(pc, regs);
   $('sbSteps').textContent = steps;
@@ -426,6 +429,41 @@ function refresh() {
   $('runBtn').disabled = runTimer || emu.halted();
   $('stopBtn').disabled = !runTimer;
 }
+
+function renderPorts() {
+  const box = $('ports');
+  if (isa === '8051') {
+    box.innerHTML = ['P0', 'P1', 'P2', 'P3'].map((n, i) =>
+      `<span class="port" data-port="${i}" title="${n} pins — click to set">${n} ${fmt(emu.port_read(i), 2)}</span>`).join('');
+    return;
+  }
+  let html = '';
+  for (let i = 0; i < 16; i++) {
+    const v = emu.port_read(i);
+    html += `<span class="port ${v ? 'set' : ''}" data-port="${i}" title="Port ${fmt(i, 2)}h — click to set">${fmt(v, 2)}</span>`;
+  }
+  box.innerHTML = html;
+}
+
+$('ports').addEventListener('click', (e) => {
+  const el = e.target.closest('.port');
+  if (!el) return;
+  const port = parseInt(el.dataset.port, 10);
+  const name = isa === '8051' ? 'P' + port : fmt(port, 2) + 'h';
+  const inp = prompt(name + ' value (hex, 00-FF)', fmt(emu.port_read(port), 2));
+  if (inp === null) return;
+  const v = parseInt(inp.trim(), 16);
+  if (Number.isNaN(v) || v < 0 || v > 0xFF) { toast('Bad port value: ' + inp); return; }
+  emu.port_write(port, v);
+  renderPorts();
+});
+
+$('portsClearBtn').onclick = () => {
+  const n = isa === '8051' ? 4 : 256;
+  for (let i = 0; i < n; i++) emu.port_write(i, 0);
+  renderPorts();
+  toast('Ports cleared');
+};
 
 function chip(name, value, sub = null, isPc = false) {
   return `<div class="rreg ${isPc ? 'pc' : ''}"><div class="n">${name}</div>` +

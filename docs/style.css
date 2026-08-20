@@ -94,6 +94,14 @@ main {
 /* right column */
 .right { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
 .rgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; padding: 10px; }
+#ports { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px; }
+#ports .port {
+  font: 600 11px/1.8 var(--mono); padding: 0 6px; border-radius: 4px;
+  background: var(--panel); border: 1px solid var(--border);
+  color: var(--muted); cursor: pointer; user-select: none;
+}
+#ports .port:hover { border-color: var(--accent); color: var(--accent); }
+#ports .port.set { color: var(--green); border-color: rgba(63, 185, 80, .4); }
 .rreg { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
 .rreg .n { color: var(--accent); font-size: 11px; }
 .rreg .v { font-size: 14px; font-weight: 600; color: #e6edf3; letter-spacing: .5px; }
