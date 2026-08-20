@@ -591,7 +591,7 @@ fn encode_instr(
 }
 
 /// Assemble 8086 source. Two+ passes until label addresses stabilize.
-pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
+pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
     let mut errs = Vec::new();
     let (stmts, parse_errs) = parse_program(source, true, |l| {
         l.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '@')
@@ -607,10 +607,12 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
 
     // iterate until addresses stable; carry label values forward so
     // forward references resolve in later passes
+    let mut info: Vec<LineInfo> = Vec::new();
     let mut prev_labels: HashMap<String, u32> = syms.clone();
     for _pass in 0..10 {
         let mut addr = origin;
         let mut cur_code = Vec::new();
+        let mut cur_info = Vec::new();
         let mut labels: HashMap<String, u32> = prev_labels.clone();
         let mut line_err = false;
         for (ln, stmt) in &stmts {
@@ -633,10 +635,10 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
                 Stmt::End => break,
                 Stmt::Ignore => {}
                 Stmt::Db(items) => {
-                    let mut n = 0;
+                    let start = addr;
                     for it in items {
                         if let Some(s) = string_literal(it) {
-                            for c in s.bytes() { cur_code.push(c); addr += 1; n += 1; }
+                            for c in s.bytes() { cur_code.push(c); addr += 1; }
                             continue;
                         }
                         match parse_expr(it, &labels, addr, origin) {
@@ -645,27 +647,31 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
                                     errs.push(AsmErr::new(*ln, format!("DB value {v} out of range")));
                                     line_err = true;
                                 } else {
-                                    cur_code.push(v as u8); addr += 1; n += 1;
+                                    cur_code.push(v as u8); addr += 1;
                                 }
                             }
                             Err(e) => { errs.push(AsmErr::new(*ln, e)); line_err = true; }
                         }
                     }
-                    let _ = n;
+                    cur_info.push(LineInfo { line: *ln as u32, addr: start, bytes: cur_code[start as usize..addr as usize].to_vec() });
                 }
                 Stmt::Dw(items) => {
+                    let start = addr;
                     for it in items {
                         match parse_expr(it, &labels, addr, origin) {
                             Ok(v) => { cur_code.extend_from_slice(&(v as u16).to_le_bytes()); addr += 2; }
                             Err(e) => { errs.push(AsmErr::new(*ln, e)); line_err = true; }
                         }
                     }
+                    cur_info.push(LineInfo { line: *ln as u32, addr: start, bytes: cur_code[start as usize..addr as usize].to_vec() });
                 }
                 Stmt::Instr { mnemonic, ops } => {
+                    let start = addr;
                     match encode_instr(mnemonic, ops, &labels, addr, origin) {
                         Ok(bytes) => {
                             addr += bytes.len() as u32;
-                            cur_code.extend(bytes);
+                            cur_code.extend(&bytes);
+                            cur_info.push(LineInfo { line: *ln as u32, addr: start, bytes });
                         }
                         Err(e) => {
                             if line_err { /* dedupe */ }
@@ -677,12 +683,13 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
         }
         if labels == prev_labels {
             code = cur_code;
+            info = cur_info;
             break;
         }
         prev_labels = labels;
         code = cur_code;
     }
-    (code, errs)
+    (code, errs, info)
 }
 
 fn string_literal(s: &str) -> Option<&str> {

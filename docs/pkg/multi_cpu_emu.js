@@ -28,6 +28,23 @@ export class Emulator {
         return v2;
     }
     /**
+     * Assemble and return per-line machine code as "ADDR  BYTES" strings
+     * (one per source line, empty for lines that emit nothing).
+     * @param {string} source
+     * @returns {string[]}
+     */
+    assemble_info(source) {
+        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.emulator_assemble_info(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v2 = getArrayJsValueFromWasm0(ret[0], ret[1]);
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v2;
+    }
+    /**
      * @returns {string[]}
      */
     flags() {

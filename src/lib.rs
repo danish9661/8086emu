@@ -32,15 +32,28 @@ pub fn make_emulator(isa: &str) -> Result<Emulator, String> {
 impl Emulator {
     /// Assemble source for this ISA; returns machine code or the first error.
     pub fn assemble(&self, source: &str) -> Result<Vec<u8>, String> {
-        let (code, errs) = match self {
-            Emulator::I8086(_) => asm::parse_8086(source),
-            Emulator::I8085(_) => asm::parse_8085(source),
-            Emulator::Mcs51(_) => asm::parse_8051(source),
-        };
+        let (code, errs, _) = self.assemble_full(source);
         if let Some(e) = errs.first() {
             return Err(format!("line {}: {}", e.line, e.msg));
         }
         Ok(code)
+    }
+
+    /// Assemble and also return per-line machine-code info (line, address, bytes).
+    pub fn assemble_info(&self, source: &str) -> Result<(Vec<u8>, Vec<asm::LineInfo>), String> {
+        let (code, errs, info) = self.assemble_full(source);
+        if let Some(e) = errs.first() {
+            return Err(format!("line {}: {}", e.line, e.msg));
+        }
+        Ok((code, info))
+    }
+
+    fn assemble_full(&self, source: &str) -> (Vec<u8>, Vec<asm::AsmErr>, Vec<asm::LineInfo>) {
+        match self {
+            Emulator::I8086(_) => asm::parse_8086(source),
+            Emulator::I8085(_) => asm::parse_8085(source),
+            Emulator::Mcs51(_) => asm::parse_8051(source),
+        }
     }
 
     pub fn reset(&mut self) {

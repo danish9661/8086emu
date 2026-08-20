@@ -54,15 +54,34 @@ main {
 /* editor */
 #edwrap { position: relative; flex: 1; display: flex; min-height: 0; }
 #gutter {
-  width: 46px; overflow: hidden; background: #0a0e14; border-right: 1px solid var(--border);
+  width: 172px; overflow: hidden; background: #0a0e14; border-right: 1px solid var(--border);
   color: #484f58; text-align: right; padding: 8px 8px 8px 4px; user-select: none; flex: none;
+  font-family: var(--mono);
 }
-#gutter div { height: 20px; line-height: 20px; font-size: 12px; }
+#gutter div { height: 20px; line-height: 20px; font-size: 12px; white-space: nowrap; }
 #gutter div.err { background: var(--red); color: #fff; border-radius: 4px 0 0 4px; font-weight: 700; }
+#gutter .n { color: #484f58; }
+#gutter .c { margin-left: 8px; color: #3f6b4f; font-size: 11px; }
+#gutter div.err .c { color: #ffd9d9; }
+#edbox { position: relative; flex: 1; display: flex; min-width: 0; }
+#hl {
+  position: absolute; inset: 0; margin: 0; padding: 8px 12px; overflow: hidden;
+  line-height: 20px; font-size: 13px; font-family: var(--mono); white-space: pre;
+  pointer-events: none; color: #9ecbff;
+}
+#hl .c { color: #4a5568; font-style: italic; }
+#hl .s { color: #f2c97d; }
+#hl .n { color: #f08a4b; }
+#hl .m { color: #9ecbff; }
+#hl .r { color: #c89bff; }
+#hl .l { color: #7ddb8f; }
+#hl .y { color: #5f6b7d; }
 #editor {
-  flex: 1; resize: none; background: transparent; border: none; outline: none; color: #9ecbff;
+  position: relative; flex: 1; resize: none; background: transparent; border: none; outline: none;
+  color: transparent; caret-color: #9ecbff;
   padding: 8px 12px; line-height: 20px; font-size: 13px; font-family: var(--mono); white-space: pre;
 }
+#editor::selection { background: rgba(120, 160, 255, .25); }
 #errors {
   border-top: 1px solid var(--border); max-height: 90px; overflow-y: auto;
   padding: 6px 12px; font-size: 12px; display: none;

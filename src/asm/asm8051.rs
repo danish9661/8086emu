@@ -291,7 +291,7 @@ fn enc(
 }
 
 /// Assemble 8051 source.
-pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
+pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
     let mut errs = Vec::new();
     let (stmts, parse_errs) = parse_program(source, false, |l| {
         !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '@')
@@ -343,6 +343,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
 
     // pass 2: emit + patch rels
     let mut code = Vec::new();
+    let mut info = Vec::new();
     addr = origin;
     let mut syms2 = syms.clone();
     for (ln, stmt) in &stmts {
@@ -363,6 +364,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
             Stmt::End => break,
             Stmt::Ignore => {}
             Stmt::Db(items) => {
+                let start = addr;
                 for it in items {
                     if let Some(s) = str_lit(it) {
                         for c in s.bytes() { code.push(c); addr += 1; }
@@ -373,20 +375,24 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
                         }
                     }
                 }
+                info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
             }
             Stmt::Dw(items) => {
+                let start = addr;
                 for it in items {
                     match parse_expr(it, &syms2, addr, origin) {
                         Ok(v) => { code.extend_from_slice(&(v as u16).to_le_bytes()); addr += 2; }
                         Err(e) => errs.push(AsmErr::new(*ln, e)),
                     }
                 }
+                info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
             }
             Stmt::Instr { mnemonic, ops } => {
                 match enc(mnemonic, ops, &syms2, addr, origin) {
                     Ok((bytes, rel_patches)) => {
                         let ins_len = bytes.len() as u32;
                         code.extend(&bytes);
+                        let start = addr;
                         // patch rel bytes: rel = target - (addr_after_instruction)
                         for rel_off in rel_patches {
                             let slot_addr = addr + rel_off as u32;
@@ -399,6 +405,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
                             code[slot_addr as usize] = d as i8 as u8;
                         }
                         addr += ins_len;
+                        info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
                     }
                     Err(e) => errs.push(AsmErr::new(*ln, e)),
                 }
@@ -406,7 +413,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
         }
     }
     let _ = syms;
-    (code, errs)
+    (code, errs, info)
 }
 
 fn rel_target_op(rel_off: u8, mnemonic: &str) -> usize {

@@ -20,7 +20,7 @@ Legend:
       assemble / load / step / run / pc / regs / flags / mem / out / halted /
       reset / snapshot / restore / interrupt (8085)
 - [x] Native CLI runner (examples/run.rs)
-- [x] 23 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
+- [x] 24 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
       warning-free
 - [x] `ORG` emits a complete memory image: forward `ORG` pads with zeros
       (place code at hardware vectors), backward `ORG` is an error; load code
@@ -175,10 +175,13 @@ Legend:
 
 - [x] docs/ demo: ISA selector, 16 sample programs (incl. 8085 + 8051
       interrupt demos and 8086 keyboard input), line-numbered editor with
-      error line highlighting, Assemble/Step/Run/Stop/Reset, IRQ buttons
-      (8085 TRAP/RSTs/INTR, 8051 INT0/INT1), keyboard-input dialog (8086),
-      keyboard shortcuts, live registers/flags, pageable memory dump with PC
-      marker, output console, localStorage persistence, Ctrl+S save
+      syntax highlighting (comments/strings/numbers/mnemonics/registers/
+      labels), per-line machine-code column in the gutter (via
+      `assemble_info`), error line highlighting, Assemble/Step/**Step-Back**
+      (snapshot undo)/Run/Stop/Reset, IRQ buttons (8085 TRAP/RSTs/INTR,
+      8051 INT0/INT1), keyboard-input dialog (8086), keyboard shortcuts,
+      live registers/flags, pageable memory dump with PC marker, output
+      console, localStorage persistence, Ctrl+S save
 - [x] GitHub Pages workflow (.github/workflows/pages.yml) — builds wasm pkg,
       runs tests, deploys docs/
 - [x] Live at https://danish9661.github.io/8086emu/ (verified 200 on

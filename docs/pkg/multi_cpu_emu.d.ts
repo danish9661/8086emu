@@ -8,6 +8,11 @@ export class Emulator {
      * Assemble source for the current ISA; returns machine code bytes.
      */
     assemble(source: string): Uint8Array;
+    /**
+     * Assemble and return per-line machine code as "ADDR  BYTES" strings
+     * (one per source line, empty for lines that emit nothing).
+     */
+    assemble_info(source: string): string[];
     flags(): string[];
     halted(): boolean;
     /**
@@ -54,6 +59,7 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_emulator_free: (a: number, b: number) => void;
     readonly emulator_assemble: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_flags: (a: number) => [number, number];
     readonly emulator_halted: (a: number) => number;
     readonly emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];

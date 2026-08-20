@@ -27,6 +27,20 @@ impl Emulator {
         to_js(self.inner.assemble(source))
     }
 
+    /// Assemble and return per-line machine code as "ADDR  BYTES" strings
+    /// (one per source line, empty for lines that emit nothing).
+    pub fn assemble_info(&self, source: &str) -> Result<Vec<String>, JsValue> {
+        let (_, info) = self.inner.assemble_info(source).map_err(|e| JsValue::from_str(&e))?;
+        let n = source.lines().count();
+        let mut out: Vec<String> = vec![String::new(); n];
+        for li in info {
+            if li.bytes.is_empty() { continue; }
+            let hex: Vec<String> = li.bytes.iter().map(|b| format!("{b:02X}")).collect();
+            out[li.line as usize - 1] = format!("{:04X}  {}", li.addr, hex.join(" "));
+        }
+        Ok(out)
+    }
+
     /// Load raw machine code at `origin` and set PC there.
     pub fn load(&mut self, code: &[u8], origin: u32) {
         self.inner.mem_write(origin, code);

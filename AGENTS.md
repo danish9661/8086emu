@@ -204,8 +204,10 @@ pub trait Cpu {
   to place ISRs at hardware vectors, e.g. `ORG 24h`), backward `ORG` is an
   error. Load the assembled image at address 0 (`load(code, 0)`); the entry
   point is 0 for 8085/8051 and 0x100 for 8086 (matching `ORG 100h`).
-- Per-ISA parser produces `(Vec<u8>, Vec<AsmError{line, msg}>)`. For the 8086
-  a two-pass approach resolves forward label references.
+- Per-ISA parser produces `(Vec<u8>, Vec<AsmError{line, msg}>, Vec<LineInfo{line,
+  addr, bytes}>)` — `LineInfo` gives per-line machine code for the IDE gutter
+  (wasm `assemble_info()` returns one "ADDR  BYTES" string per source line).
+  For the 8086 a multi-pass approach resolves forward label references.
 - Mnemonic coverage mirrors the CPU cores above (assembling what the core can
   execute). Errors must report line numbers and human-readable messages.
 
@@ -216,6 +218,7 @@ Exposed class `Emulator`:
 ```
 new(isa: "8086" | "8085" | "8051") -> Emulator
 assemble(source: &str) -> Vec<u8>        // machine code (error via exception/result)
+assemble_info(source: &str) -> Vec<String> // per-line "ADDR  BYTES" strings (IDE gutter)
 load(code: &[u8], origin: u32)           // place code in memory
 step()                                   // one instruction
 run(max_steps: u32) -> u32               // steps executed

@@ -149,7 +149,7 @@ fn enc(mnemonic: &str, ops: &[String], syms: &HashMap<String, u32>, cur: u32, or
 }
 
 /// Assemble 8085 source (single fixed-size pass; labels resolved on pass 2).
-pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
+pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
     let mut errs = Vec::new();
     let (stmts, parse_errs) = parse_program(source, false, |l| {
         !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '@')
@@ -202,6 +202,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
 
     // pass 2: emit
     let mut code = Vec::new();
+    let mut info = Vec::new();
     addr = origin;
     let mut syms2 = syms.clone();
     for (ln, stmt) in &stmts {
@@ -222,6 +223,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
             Stmt::End => break,
             Stmt::Ignore => {}
             Stmt::Db(items) => {
+                let start = addr;
                 for it in items {
                     if let Some(s) = str_lit(it) {
                         for c in s.bytes() { code.push(c); addr += 1; }
@@ -232,25 +234,28 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
                         }
                     }
                 }
+                info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
             }
             Stmt::Dw(items) => {
+                let start = addr;
                 for it in items {
                     match parse_expr(it, &syms2, addr, origin) {
                         Ok(v) => { code.extend_from_slice(&(v as u16).to_le_bytes()); addr += 2; }
                         Err(e) => errs.push(AsmErr::new(*ln, e)),
                     }
                 }
+                info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
             }
             Stmt::Instr { mnemonic, ops } => {
                 match enc(mnemonic, ops, &syms2, addr, origin) {
-                    Ok(b) => { code.extend(&b); addr += b.len() as u32; }
+                    Ok(b) => { code.extend(&b); addr += b.len() as u32; info.push(LineInfo { line: *ln as u32, addr: addr - b.len() as u32, bytes: b }); }
                     Err(e) => errs.push(AsmErr::new(*ln, e)),
                 }
             }
         }
     }
     let _ = syms;
-    (code, errs)
+    (code, errs, info)
 }
 
 fn str_lit(s: &str) -> Option<&str> {

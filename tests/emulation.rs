@@ -448,3 +448,56 @@ fn keyboard_flush_8086() {
     emu.run(100);
     assert_eq!(reg(&emu.regs(), "AX") & 0xFF, b'z' as u32, "only the post-flush key must be read");
 }
+
+#[test]
+fn assemble_info_lines() {
+    // Per-line info: address + bytes for each emitting line, all three ISAs.
+    let cases: [(&str, &str, Vec<(u32, u32, &[u8])>); 3] = [
+        (
+            "8086",
+            "ORG 100h\nMOV AX, 5\nMOV BX, 3\nMUL BX\nADD AX, 2\nMOV AH, 4Ch\nINT 21h\nEND",
+            vec![
+                (2, 0x100, &[0xB8, 0x05, 0x00]),
+                (3, 0x103, &[0xBB, 0x03, 0x00]),
+                (4, 0x106, &[0xF7, 0xE3]),
+                (5, 0x108, &[0x05, 0x02, 0x00]),
+                (6, 0x10B, &[0xB4, 0x4C]),
+                (7, 0x10D, &[0xCD, 0x21]),
+            ],
+        ),
+        (
+            "8085",
+            "ORG 8000h\nMVI A, 05h\nADI 02h\nJMP skip\nNOP\nskip: HLT\nEND",
+            vec![
+                (2, 0x8000, &[0x3E, 0x05]),
+                (3, 0x8002, &[0xC6, 0x02]),
+                (4, 0x8004, &[0xC3, 0x08, 0x80]),
+                (5, 0x8007, &[0x00]),
+                (6, 0x8008, &[0x76]),
+            ],
+        ),
+        (
+            "8051",
+            "ORG 0\nSJMP main\nORG 30h\nmain: MOV A, #05h\nADD A, #02h\nMOV P1, A\nEND",
+            vec![
+                (2, 0x0000, &[0x80, 0x2E]),
+                (4, 0x0030, &[0x74, 0x05]),
+                (5, 0x0032, &[0x24, 0x02]),
+                (6, 0x0034, &[0xF5, 0x90]),
+            ],
+        ),
+    ];
+    for (isa, src, expected) in cases {
+        let mut emu = make_emulator(isa).unwrap();
+        let (code, info) = emu.assemble_info(src).unwrap();
+        let end = info.iter().map(|i| i.addr + i.bytes.len() as u32).max().unwrap_or(0) as usize;
+        assert_eq!(code.len(), end, "{isa}: padded image must end at the last emitted byte");
+        let got: Vec<(u32, u32, Vec<u8>)> = info.iter().map(|i| (i.line, i.addr, i.bytes.clone())).collect();
+        assert_eq!(got.len(), expected.len(), "{isa}: line count");
+        for (g, (el, ea, eb)) in got.iter().zip(expected.iter()) {
+            assert_eq!(g.0, *el, "{isa}: line number");
+            assert_eq!(g.1, *ea, "{isa}: address on line {}", g.0);
+            assert_eq!(&g.2, eb, "{isa}: bytes on line {}", g.0);
+        }
+    }
+}

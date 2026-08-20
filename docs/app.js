@@ -321,15 +321,18 @@ let runTimer = null;
 let stopRequested = false;
 let accumOut = '';
 let errLine = -1;
+let codeMap = [];   // per source line: "ADDR  BYTES" or ''
+let history = [];   // snapshots for Step-Back
 
 const $ = (id) => document.getElementById(id);
-const editor = $('editor'), gutter = $('gutter'), errorsBox = $('errors'),
+const editor = $('editor'), gutter = $('gutter'), hl = $('hl'), errorsBox = $('errors'),
       regsBox = $('regs'), flagsBox = $('flags'), memView = $('memview'),
       outputBox = $('output'), errpop = $('errpop');
 
 function newEmulator() {
   emu = new Emulator(isa);
   steps = 0; accumOut = '';
+  history = [];
   closeInput();
 }
 
@@ -418,6 +421,7 @@ function refresh() {
   $('sbSteps').textContent = steps;
   $('sbState').textContent = emu.halted() ? 'halted' : (emu.waiting_input() ? 'waiting for input' : (runTimer ? 'running…' : 'ready'));
   $('stepBtn').disabled = runTimer || emu.halted();
+  $('backBtn').disabled = runTimer || history.length === 0;
   $('runBtn').disabled = runTimer || emu.halted();
   $('stopBtn').disabled = !runTimer;
 }
@@ -467,20 +471,77 @@ $('mempgDn').onclick = () => { $('memaddr').value = fmt(memBase + PAGE); renderM
 $('memaddr').onchange = () => renderMem(emu.pc());
 
 // ---------- editor ----------
+const HL = {
+  dirs: ['ORG', 'DB', 'DW', 'EQU', 'END'],
+  regs: {
+    '8086': 'AX BX CX DX AH AL BH BL CH CL DH DL SI DI BP SP CS DS ES SS IP FLAGS'.split(' '),
+    '8085': 'A B C D E H L M SP PSW'.split(' '),
+    '8051': 'A B R0 R1 R2 R3 R4 R5 R6 R7 ACC DPTR SP PC PSW P0 P1 P2 P3 TCON TMOD TH0 TL0 TH1 TL1 SCON SBUF IE IP DPL DPH'.split(' '),
+  },
+  mnem: {
+    '8086': 'MOV PUSH POP ADD ADC SUB SBB AND OR XOR CMP INC DEC NEG NOT MUL IMUL DIV IDIV TEST XCHG LEA SHL SHR SAL SAR ROL ROR RCL RCR CBW CWD MOVS MOVSB MOVSW LODS LODSB LODSW STOS STOSB STOSW CMPS CMPSB CMPSW SCAS SCASB SCASW LAHF SAHF CLC STC CMC CLI STI CLD STD JA JAE JB JBE JC JE JG JGE JL JLE JNA JNAE JNB JNBE JNC JNE JNG JNGE JNL JNLE JNO JNP JNS JNZ JO JP JPE JPO JS JZ JMP CALL RET RETF LOOP LOOPZ LOOPNZ JCXZ INT INT3 INTO IRET NOP HLT'.split(' '),
+    '8085': 'MOV MVI LXI LDA STA LDAX STAX LHLD SHLD XCHG ADD ADC SUB SBB ANA XRA ORA CMP ADI ACI SUI SBI ANI XRI ORI CPI INR DCR INX DCX DAD RLC RRC RAL RAR CMA CMC STC DAA JMP JNZ JZ JNC JC JPO JPE JP JM CALL CNZ CZ CNC CC CPO CPE CP CM RET RNZ RZ RNC RC RPO RPE RP RM RST PUSH POP XTHL SPHL PCHL IN OUT EI DI SIM RIM NOP HLT'.split(' '),
+    '8051': 'MOV MOVC MOVX PUSH POP XCH XCHD SWAP ADD ADDC SUBB INC DEC MUL DIV DA ANL ORL XRL CLR CPL RL RR RLC RRC SETB SJMP AJMP LJMP JZ JNZ JC JNC JB JNB JBC CJNE DJNZ ACALL LCALL RET RETI NOP'.split(' '),
+  },
+};
+const TOKEN_RE = /('[^'\n]*')|(;[^\n]*$)|(0[xX][0-9a-fA-F]+)|([0-9a-fA-F]+[hHbBqQ](?![0-9a-fA-F]))|([0-9]+)|([A-Za-z_][A-Za-z0-9_.@]*)|([\[\](),:+\-*/])/g;
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function renderHl() {
+  const labels = new Set();
+  const labRe = /^\s*([A-Za-z_][A-Za-z0-9_.@]*)(:|\s+EQU\b)/i;
+  for (const line of editor.value.split('\n')) {
+    const m = labRe.exec(line);
+    if (m) labels.add(m[1].toUpperCase());
+  }
+  const regs = HL.regs[isa], mnems = HL.mnem[isa], dirs = HL.dirs;
+  hl.textContent = '';
+  const out = editor.value.split('\n').map((line) => {
+    let r = '', last = 0, m;
+    TOKEN_RE.lastIndex = 0;
+    while ((m = TOKEN_RE.exec(line))) {
+      r += escHtml(line.slice(last, m.index));
+      const [tok, str, com, hx, suf, dec, word, sym] = m;
+      let cls;
+      if (str) cls = 's';
+      else if (com) cls = 'c';
+      else if (hx || suf || dec) cls = 'n';
+      else if (sym) cls = 'y';
+      else {
+        const w = word.toUpperCase();
+        if (dirs.includes(w)) cls = 'm';
+        else if (mnems.includes(w)) cls = 'm';
+        else if (regs.includes(w)) cls = 'r';
+        else if (labels.has(w)) cls = 'l';
+        else cls = 'y';
+      }
+      r += `<span class="${cls}">${escHtml(tok)}</span>`;
+      last = m.index + tok.length;
+    }
+    return r + escHtml(line.slice(last));
+  }).join('\n');
+  hl.innerHTML = out;
+}
 function buildGutter() {
-  const n = editor.value.split('\n').length;
+  const lines = editor.value.split('\n');
   let html = '';
-  for (let i = 1; i <= n; i++) html += `<div class="${i === errLine ? 'err' : ''}">${i}</div>`;
+  for (let i = 0; i < lines.length; i++) {
+    const c = codeMap[i] || '';
+    html += `<div class="${i + 1 === errLine ? 'err' : ''}"><span class="n">${i + 1}</span>` +
+            (c ? `<span class="c">${c}</span>` : '') + '</div>';
+  }
   gutter.innerHTML = html;
 }
-editor.oninput = () => { buildGutter(); saveSource(); };
-editor.onscroll = () => { gutter.scrollTop = editor.scrollTop; };
+function renderSource() { buildGutter(); renderHl(); }
+editor.oninput = () => { renderSource(); saveSource(); };
+editor.onscroll = () => { gutter.scrollTop = editor.scrollTop; hl.scrollTop = editor.scrollTop; hl.scrollLeft = editor.scrollLeft; };
 editor.onkeydown = (e) => {
   if (e.key === 'Tab') {
     e.preventDefault();
     const s = editor.selectionStart;
     editor.setRangeText('    ', s, editor.selectionEnd, 'end');
-    buildGutter();
+    renderSource();
   }
 };
 
@@ -515,8 +576,9 @@ function assemble() {
     const src = editor.value;
     const code = emu.assemble(src);
     newEmulator();
-    emu.load(emu.assemble(src), 0);
+    emu.load(code, 0);
     emu.set_pc(entry());
+    codeMap = emu.assemble_info(src);
     errorsBox.style.display = 'none';
     errorsBox.innerHTML = '';
     errLine = -1;
@@ -526,6 +588,7 @@ function assemble() {
     toast(`Assembled ${code.length} bytes, entry ${fmt(entry(), 4)}`);
   } catch (e) {
     showErrors(String(e));
+    codeMap = [];
     $('sbCode').textContent = '—';
     toast(String(e));
   }
@@ -534,6 +597,8 @@ function assemble() {
 
 function stepOnce() {
   if (emu.halted()) return;
+  history.push(emu.snapshot());
+  if (history.length > 50) history.shift();
   emu.step();
   steps++;
   refresh();
@@ -562,6 +627,12 @@ function stopRun() {
 
 $('asmBtn').onclick = assemble;
 $('stepBtn').onclick = stepOnce;
+$('backBtn').onclick = () => {
+  if (!history.length || runTimer) return;
+  emu.restore(history.pop());
+  steps = Math.max(0, steps - 1);
+  refresh();
+};
 $('runBtn').onclick = startRun;
 $('stopBtn').onclick = stopRun;
 $('resetBtn').onclick = () => { newEmulator(); refresh(); toast('CPU reset'); };
@@ -574,7 +645,8 @@ $('exampleBtn').onclick = () => {
   exIndex = (exIndex + 1) % list.length;
   editor.value = list[exIndex].src;
   errLine = -1;
-  buildGutter();
+  codeMap = [];
+  renderSource();
   saveSource();
   toast(`Example: ${list[exIndex].name}`);
 };
@@ -583,7 +655,8 @@ function loadSource() {
   const saved = localStorage.getItem('mcu_src_' + isa);
   editor.value = saved !== null ? saved : ISA_DEFAULTS[isa];
   errLine = -1;
-  buildGutter();
+  codeMap = [];
+  renderSource();
 }
 function saveSource() {
   localStorage.setItem('mcu_src_' + isa, editor.value);
@@ -597,6 +670,7 @@ $('isa').onchange = () => {
   memBase = 0;
   $('intrBar85').style.display = isa === '8085' ? '' : 'none';
   $('intrBar51').style.display = isa === '8051' ? '' : 'none';
+  renderSource();
   refresh();
 };
 

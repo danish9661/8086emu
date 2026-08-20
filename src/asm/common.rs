@@ -9,6 +9,12 @@ pub struct AsmErr {
     pub msg: String,
 }
 
+pub struct LineInfo {
+    pub line: u32,
+    pub addr: u32,
+    pub bytes: Vec<u8>,
+}
+
 impl AsmErr {
     pub fn new(line: usize, msg: impl Into<String>) -> Self {
         AsmErr { line, msg: msg.into() }
