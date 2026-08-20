@@ -20,7 +20,7 @@ Legend:
       assemble / load / step / run / pc / regs / flags / mem / out / halted /
       reset / snapshot / restore / interrupt (8085)
 - [x] Native CLI runner (examples/run.rs)
-- [x] 50 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
+- [x] 53 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
       warning-free
 - [x] `ORG` emits a complete memory image: forward `ORG` pads with zeros
       (place code at hardware vectors), backward `ORG` is an error; load code
@@ -72,11 +72,15 @@ Legend:
 - [x] INT 21h keyboard input (done, see above) — no ANSI/console escape
       sequences (F-keys etc.)
 - [ ] PUSHA/POPA, 386+ instructions (ARPL, 0x64-0x67 prefixes) — no-ops
-- [ ] No hardware-interrupt/timer simulation (8259/8253/PIT not modeled)
+- [x] Hardware interrupts: NMI (vector 02h) + INTR (maskable, device-supplied
+      vector), latched, serviced at end of step, NMI > INTR, IVT dispatch
+      (8259/8253/PIT still not modeled — out of scope)
+- [x] BCD/ASCII adjust DAA/DAS/AAA/AAS/AAM/AAD (AAM base 0 faults like
+      divide-by-zero)
+- [x] TF (trap) flag: real single-step — POPF restores it, every instruction
+      traps into vector 1 (INT 1) while set; exposed as `FlagSet.trap`
+- [x] I/O port space: IN/OUT (imm8 + DX) over 256 bytes; OUT 01h prints AL
 - [ ] FPU, 386+ extensions, DOS file/date services — out of scope
-- [ ] Flags: TF (trap) tracked internally but not exposed in `FlagSet`
-- [ ] I/O port space (IN/OUT instructions) not modeled (all DOS output goes
-      through INT 21h)
 - [ ] `case` sensitivity, macros, `INCLUDE`, structured directives
       (IF/WHILE) from emu8086 dialect — not supported
 
@@ -161,11 +165,12 @@ Legend:
 
 ### Left / known gaps
 
+- [x] INT0/INT1 external pins simulated (`request_interrupt`/wasm `interrupt()`)
+- [x] Serial receive: `Emulator::serial_rx(ch)` / wasm `serial_rx(ch)` sets
+      SBUF + RI so the serial ISR fires (still no baud-rate generation —
+      timer-based baud not modeled)
 - [ ] INT0/INT1 level-triggered (ITx=0) treated like edge — latch cleared on
       service, no level re-assertion without a new request (documented)
-- [ ] Serial port (SCON/SBUF) transmit only; no receive (RI never set), no
-      baud-rate generation (timer-based baud not modeled)
-- [ ] External interrupts (INT0/INT1), INTO/INT1 pins — not simulated
 - [ ] Timer counting is per-emulator-step (no real-time calibration /
       machine-cycle accuracy)
 - [ ] External memory beyond 64 KiB (up to 256 KiB via ports) — not modeled
@@ -178,16 +183,15 @@ Legend:
       syntax highlighting (comments/strings/numbers/mnemonics/registers/
       labels), per-line machine-code column in the gutter (via
       `assemble_info`), error line highlighting, Assemble/Step/**Step-Back**
-      (snapshot undo)/Run/Stop/Reset, IRQ buttons (8085 TRAP/RSTs/INTR,
-      8051 INT0/INT1), keyboard-input dialog (8086), keyboard shortcuts,
+(snapshot undo)/Run/Stop/Reset, IRQ buttons (8085 TRAP/RSTs/INTR,
+       8051 INT0/INT1, 8086 NMI/INTR), keyboard-input dialog (8086), keyboard
+      shortcuts,
       live registers/flags, pageable memory dump with PC marker, output
       console, localStorage persistence, Ctrl+S save
 - [x] GitHub Pages workflow (.github/workflows/pages.yml) — builds wasm pkg,
       runs tests, deploys docs/
 - [x] Live at https://danish9661.github.io/8086emu/ (verified 200 on
-      index/wasm/js)
-- [ ] Only remaining: enable Pages source "GitHub Actions" in repo settings
-      if the workflow's auto-enable didn't take effect
+      index/wasm/js; Pages source "GitHub Actions" active)
 
 ## Suggested next steps (priority order)
 
@@ -209,3 +213,12 @@ Legend:
         only on overflow (TL could never wrap/TF never fire)
       plus assembler fixes: PUSH/POP PSW for 8085 (SP was mis-encoded as
       PSW), and 8051 ANL/ORL C,bit forms
+6. [x] 8086 BCD/ASCII adjust (DAA/DAS/AAA/AAS/AAM/AAD), TF single-step trap
+      (INT 1), 8051 serial RX injection — 3 new tests (53 total, wasm smoke
+      test wtest18.mjs); caught and fixed 3 more real bugs:
+      - asm8086 reg-reg ADD/ADC/SUB/SBB/AND/OR/XOR/CMP/TEST emitted the
+        operands reversed (ADD AL,BL became ADD BL,AL)
+      - 8086 accumulator-immediate 8-bit ops (04/0C/14/1C/24/2C/34/3C)
+        operated on the whole AX instead of AL
+      - asm8051 LJMP/LCALL/DW emitted little-endian (8051 code memory is
+        big-endian; LJMP to 0x35 jumped to 0x3500)

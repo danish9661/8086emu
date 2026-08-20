@@ -57,6 +57,7 @@ pub struct FlagSet {
     pub overflow: bool,
     pub direction: bool,
     pub interrupt: bool,
+    pub trap: bool,
 }
 
 /// A single captured register for display.

@@ -326,10 +326,10 @@ fn encode_instr(
                     o.push(base + 2); o.extend(memcode!(m, *r));
                 }
                 (Some(Operand::Reg16(r)), Some(Operand::Reg16(sr))) => {
-                    o.push(base + 1); o.push(modrm_byte(3, *r, *sr));
+                    o.push(base + 1); o.push(modrm_byte(3, *sr, *r));
                 }
                 (Some(Operand::Reg8(r)), Some(Operand::Reg8(sr))) => {
-                    o.push(base); o.push(modrm_byte(3, *r, *sr));
+                    o.push(base); o.push(modrm_byte(3, *sr, *r));
                 }
                 (Some(m @ Operand::Mem { .. }), Some(Operand::Imm(v))) => {
                     let word = m.word();
@@ -362,9 +362,9 @@ fn encode_instr(
             } else if let (Some(Operand::Reg16(0)), Some(Operand::Imm(v))) = (d, s) {
                 o.push(0xA9); o.extend_from_slice(&(*v as u16).to_le_bytes());
             } else if let (Some(Operand::Reg8(r)), Some(Operand::Reg8(sr))) = (d, s) {
-                o.push(0x84); o.push(modrm_byte(3, *r, *sr));
+                o.push(0x84); o.push(modrm_byte(3, *sr, *r));
             } else if let (Some(Operand::Reg16(r)), Some(Operand::Reg16(sr))) = (d, s) {
-                o.push(0x85); o.push(modrm_byte(3, *r, *sr));
+                o.push(0x85); o.push(modrm_byte(3, *sr, *r));
             } else if let (Some(m @ Operand::Mem { .. }), Some(Operand::Reg8(r))) = (d, s) {
                 o.push(0x84); o.extend(memcode!(m, *r));
             } else if let (Some(m @ Operand::Mem { .. }), Some(Operand::Reg16(r))) = (d, s) {
@@ -597,6 +597,10 @@ fn encode_instr(
         "CLI" => o.push(0xFA), "STI" => o.push(0xFB),
         "CLD" => o.push(0xFC), "STD" => o.push(0xFD),
         "LAHF" => o.push(0x9F), "SAHF" => o.push(0x9E),
+        "DAA" => o.push(0x27), "DAS" => o.push(0x2F),
+        "AAA" => o.push(0x37), "AAS" => o.push(0x3F),
+        "AAM" => { o.push(0xD4); o.push(0x0A); }
+        "AAD" => { o.push(0xD5); o.push(0x0A); }
         "CBW" => o.push(0x98), "CWD" => o.push(0x99),
         "NOP" => o.push(0x90),
         "HLT" => o.push(0xF4),

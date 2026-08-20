@@ -219,6 +219,16 @@ export class Emulator {
         return ret >>> 0;
     }
     /**
+     * Inject a received serial byte into the 8051 (sets SBUF + RI).
+     * @param {number} ch
+     */
+    serial_rx(ch) {
+        const ret = wasm.emulator_serial_rx(this.__wbg_ptr, ch);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Set the program counter (entry point after load).
      * @param {number} addr
      */

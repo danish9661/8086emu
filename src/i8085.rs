@@ -486,6 +486,7 @@ impl Cpu for Cpu8085 {
         FlagSet {
             carry: self.cy, zero: self.z, sign: self.s, parity: self.p,
             aux: self.ac, overflow: false, direction: false, interrupt: self.int_enabled,
+            trap: false,
         }
     }
 

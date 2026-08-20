@@ -144,6 +144,12 @@ impl Cpu8051 {
     pub fn port_read(&self, port: u8) -> u8 {
         if port < 4 { self.read_direct(0x80 + port * 0x10) } else { 0 }
     }
+    /// Inject a received serial byte: writes SBUF and sets RI (receive
+    /// interrupt flag); the serial ISR must clear RI (as on the chip).
+    pub fn serial_rx(&mut self, ch: u8) {
+        self.sfr[S_SBUF] = ch;
+        self.sfr[S_SCON] |= 0x01;
+    }
 
     fn bit_location(bit: u8) -> (u8, u8) {
         if bit < 0x80 {
@@ -629,6 +635,7 @@ impl Cpu for Cpu8051 {
             overflow: self.ov(),
             direction: false,
             interrupt: false,
+            trap: false,
         }
     }
 

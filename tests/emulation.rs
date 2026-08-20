@@ -1172,3 +1172,104 @@ fn hw_intr_8086_nmi_over_intr_and_snapshot() {
     assert!(emu.is_halted());
     assert_eq!(reg(&emu.regs(), "CX"), 0x5678, "NMI ISR ran after restore");
 }
+
+#[test]
+fn bcd_adjust_8086() {
+    // DAA: 99h + 01h (BCD 99+1 = 100 -> AL=00, CF=1)
+    let src = "ORG 100h\nMOV AL, 99h\nADD AL, 01h\nDAA\nHLT\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert!(emu.is_halted());
+    assert_eq!(reg(&emu.regs(), "AX"), 0x0000, "DAA: 99+1 -> AL=00");
+    assert!(emu.flags().carry, "DAA: CF set for 100");
+
+    // DAA: 35h + 47h (BCD 35+47 = 82 -> no carry)
+    let src = "ORG 100h\nMOV AL, 35h\nMOV BL, 47h\nADD AL, BL\nDAA\nHLT\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "AX"), 0x0082, "DAA: 35+47 -> AL=82");
+    assert!(!emu.flags().carry);
+
+    // DAS: 82h - 47h (BCD 82-47 = 35, no borrow)
+    let src = "ORG 100h\nMOV AL, 82h\nMOV BL, 47h\nSUB AL, BL\nDAS\nHLT\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "AX"), 0x0035, "DAS: 82-47 -> AL=35");
+    assert!(!emu.flags().carry);
+
+    // AAA: '4'+'9' = 0x7D -> AL=03, AH=01, CF=1
+    let src = "ORG 100h\nMOV AH, 0\nMOV AL, 7Dh\nAAA\nHLT\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "AX"), 0x0103, "AAA: 7Dh -> AH=01 AL=03");
+    assert!(emu.flags().carry);
+
+    // AAS: '0'-'9' (0x30-0x39) -> AL=07, AH=FF (borrow)
+    let src = "ORG 100h\nMOV AH, 0\nMOV AL, 30h\nSUB AL, 39h\nAAS\nHLT\nEND";
+    // 0x30-0x39 = 0xF7 with AF borrow; AAS: AL=0xF7-6=0xF1 & 0x0F = 01, AH=FF
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "AX"), 0xFF01, "AAS: 30h-39h -> AH=FF AL=01");
+    assert!(emu.flags().carry);
+
+    // AAM: 53h / 0Ah = 8 rem 3 -> AH=08 AL=03
+    let src = "ORG 100h\nMOV AL, 53h\nAAM\nHLT\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "AX"), 0x0803, "AAM: 53h -> AH=08 AL=03");
+
+    // AAD: AH=07 AL=08 -> 7*10+8 = 4Eh, AH=0
+    let src = "ORG 100h\nMOV AX, 0708h\nAAD\nHLT\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "AX"), 0x004E, "AAD: 0708h -> AL=4E");
+}
+
+#[test]
+fn trap_flag_8086() {
+    // TF=1 traps every instruction into vector 1 (INT 1); IRET restores TF.
+    // SI counts the traps. 5 instructions run after POPF sets TF.
+    let src = "ORG 4\nDW isrTrap\nDW 0000h\nORG 100h\nMOV AX, 1111h\nMOV AX, 0100h\nPUSH AX\nPOPF\nMOV AX, 2222h\nMOV BX, 3333h\nMOV CX, 4444h\nMOV DX, 5555h\nMOV AH, 4Ch\nINT 21h\nisrTrap:\nINC SI\nIRET\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert!(emu.is_halted());
+    assert_eq!(reg(&emu.regs(), "SI"), 5, "one INT 1 per instruction with TF set");
+}
+
+#[test]
+fn serial_rx_8051() {
+    // Injecting a byte sets RI -> serial ISR (vector 23h) fires, reads SBUF.
+    let src = "ORG 0\nSJMP main\nORG 23h\nLJMP isr\nORG 30h\nmain:\nMOV IE, #90h\nstart:\nSJMP start\nisr:\nMOV R7, SBUF\nCLR RI\nRETI\nEND";
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.serial_rx(b'X').unwrap();
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "R7"), b'X' as u32, "serial ISR captured SBUF");
+    assert!(!emu.is_halted(), "program spins in main loop after RETI");
+}

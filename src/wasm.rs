@@ -141,6 +141,11 @@ impl Emulator {
         self.inner.port_write(port, val);
     }
 
+    /// Inject a received serial byte into the 8051 (sets SBUF + RI).
+    pub fn serial_rx(&mut self, ch: u8) -> Result<(), JsValue> {
+        to_js(self.inner.serial_rx(ch))
+    }
+
     pub fn push_key(&mut self, ch: u8) {
         self.inner.push_key(ch);
     }

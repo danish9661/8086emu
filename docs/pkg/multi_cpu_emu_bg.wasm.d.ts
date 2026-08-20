@@ -22,6 +22,7 @@ export const emulator_restore: (a: number, b: number, c: number) => void;
 export const emulator_run: (a: number, b: number) => number;
 export const emulator_run_bp: (a: number, b: number, c: number, d: number) => number;
 export const emulator_run_to: (a: number, b: number, c: number) => number;
+export const emulator_serial_rx: (a: number, b: number) => [number, number];
 export const emulator_set_pc: (a: number, b: number) => void;
 export const emulator_snapshot: (a: number) => [number, number];
 export const emulator_step: (a: number) => void;

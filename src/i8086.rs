@@ -303,6 +303,76 @@ impl Cpu8086 {
         self.set_flag(PF, self.parity(r as u8));
     }
 
+    // DAA: adjust packed BCD in AL after ADD/ADC
+    fn daa(&mut self) {
+        let old_cf = self.flag(CF);
+        let old_af = self.flag(AF);
+        if self.al() & 0x0F > 9 || old_af {
+            self.set_al(self.al().wrapping_add(6));
+            self.set_flag(AF, true);
+        } else {
+            self.set_flag(AF, false);
+        }
+        if self.al() > 0x9F || old_cf {
+            self.set_al(self.al().wrapping_add(0x60));
+            self.set_flag(CF, true);
+        } else {
+            self.set_flag(CF, false);
+        }
+        self.set_flag(ZF, self.al() == 0);
+        self.set_flag(SF, self.al() & 0x80 != 0);
+        self.set_flag(PF, self.parity(self.al()));
+    }
+
+    // DAS: adjust packed BCD in AL after SUB/SBB
+    fn das(&mut self) {
+        let old_cf = self.flag(CF);
+        let old_af = self.flag(AF);
+        if self.al() & 0x0F > 9 || old_af {
+            self.set_al(self.al().wrapping_sub(6));
+            self.set_flag(AF, true);
+        } else {
+            self.set_flag(AF, false);
+        }
+        if self.al() > 0x9F || old_cf {
+            self.set_al(self.al().wrapping_sub(0x60));
+            self.set_flag(CF, true);
+        } else {
+            self.set_flag(CF, false);
+        }
+        self.set_flag(ZF, self.al() == 0);
+        self.set_flag(SF, self.al() & 0x80 != 0);
+        self.set_flag(PF, self.parity(self.al()));
+    }
+
+    // AAA: ASCII adjust after ADD
+    fn aaa(&mut self) {
+        if self.al() & 0x0F > 9 || self.flag(AF) {
+            self.set_al(self.al().wrapping_add(6));
+            self.set_ah(self.ah().wrapping_add(1));
+            self.set_flag(AF, true);
+            self.set_flag(CF, true);
+        } else {
+            self.set_flag(AF, false);
+            self.set_flag(CF, false);
+        }
+        self.set_al(self.al() & 0x0F);
+    }
+
+    // AAS: ASCII adjust after SUB
+    fn aas(&mut self) {
+        if self.al() & 0x0F > 9 || self.flag(AF) {
+            self.set_al(self.al().wrapping_sub(6));
+            self.set_ah(self.ah().wrapping_sub(1));
+            self.set_flag(AF, true);
+            self.set_flag(CF, true);
+        } else {
+            self.set_flag(AF, false);
+            self.set_flag(CF, false);
+        }
+        self.set_al(self.al() & 0x0F);
+    }
+
     fn jcc_taken(&self, cond: u8) -> bool {
         match cond {
             0x0 => self.flag(OF),
@@ -441,13 +511,13 @@ impl Cpu8086 {
             0x1F => { self.ds = self.pop16(); }
             0x20..=0x25 => self.op_group1(op),
             0x26 | 0x2E | 0x36 | 0x3E | 0xF2 | 0xF3 => unreachable!(),
-            0x27 => self.set_flag(AF, false), // DAA: simplified (treated as no-op flag set)
+            0x27 => self.daa(),
             0x28..=0x2D => self.op_group1(op),
-            0x2F => self.set_flag(AF, false), // DAS: simplified
+            0x2F => self.das(),
             0x30..=0x35 => self.op_group1(op),
-            0x37 => self.set_flag(AF, false), // AAA
+            0x37 => self.aaa(),
             0x38..=0x3D => self.op_group1(op),
-            0x3F => self.set_flag(AF, false), // AAS
+            0x3F => self.aas(),
             0x40..=0x47 => { // INC r16
                 let i = op & 7;
                 let v = self.reg16(i).wrapping_add(1);
@@ -556,7 +626,7 @@ impl Cpu8086 {
             }
             0x9B => {} // WAIT/FWAIT: no FPU, no-op
             0x9C => self.push16(self.flags),
-            0x9D => { self.flags = (self.pop16() & !(TF | 0x2000 | 0x4000)) | 0x0002; }
+            0x9D => { self.flags = (self.pop16() & !(0x2000 | 0x4000)) | 0x0002; } // POPF: restores TF
             0x9E => { // SAHF
                 let v = self.ah();
                 self.set_flag(CF, v & 1 != 0); self.set_flag(PF, v & 4 != 0);
@@ -639,8 +709,23 @@ impl Cpu8086 {
                 let n = if op & 3 == 1 { 1 } else if op & 3 == 3 { self.cx as usize } else { 1 };
                 self.op_shift(m, r, rm, n);
             }
-            0xD4 => { self.set_al(0); self.set_ah(0); let _ = self.fetch8(); } // AAM simplified
-            0xD5 => { self.set_al(0); let _ = self.fetch8(); } // AAD simplified
+            0xD4 => { let base = self.fetch8(); // AAM: AL = AL % base, AH = AL / base
+                let v = self.al();
+                if base == 0 {
+                    self.fault = Some("8086: AAM divide by zero".into());
+                    self.halted = true;
+                    return false;
+                }
+                self.set_ah(v / base);
+                self.set_al(v % base);
+                self.flags_logic8(self.al());
+            }
+            0xD5 => { let base = self.fetch8(); // AAD: AL = AH*base + AL, AH = 0
+                let v = self.ah().wrapping_mul(base).wrapping_add(self.al());
+                self.set_ah(0);
+                self.set_al(v);
+                self.flags_logic8(self.al());
+            }
             0xD6 => {} // SALC
             0xD7 => { // XLAT
                 let off = self.bx.wrapping_add(self.al() as u16);
@@ -747,7 +832,22 @@ impl Cpu8086 {
         let wide = op & 1 == 1;
         let acc = op & 4 == 4; // immediate-to-accumulator form (04/05, 0C/0D, ...)
         if acc {
-            let imm = if wide { self.fetch16() } else { self.fetch8() as u16 };
+            if !wide {
+                let imm = self.fetch8();
+                let a = self.al();
+                match base {
+                    0x00 => { self.set_al(a.wrapping_add(imm)); self.flags_add8(a, imm, false); }
+                    0x08 => { self.set_al(a | imm); self.flags_logic8(self.al()); }
+                    0x10 => { self.set_al(a.wrapping_add(imm).wrapping_add(self.flag(CF) as u8)); self.flags_add8(a, imm, self.flag(CF)); }
+                    0x18 => { self.set_al(a.wrapping_sub(imm).wrapping_sub(self.flag(CF) as u8)); self.flags_sub8(a, imm, self.flag(CF)); }
+                    0x20 => { self.set_al(a & imm); self.flags_logic8(self.al()); }
+                    0x28 => { self.set_al(a.wrapping_sub(imm)); self.flags_sub8(a, imm, false); }
+                    0x30 => { self.set_al(a ^ imm); self.flags_logic8(self.al()); }
+                    _ => { let r = a.wrapping_sub(imm); self.flags_sub8(a, imm, false); let _ = r; }
+                }
+                return;
+            }
+            let imm = self.fetch16();
             let a = self.ax;
             match base {
                 0x00 => { self.ax = a.wrapping_add(imm); self.flags_add16(a, imm, false); }
@@ -1170,9 +1270,13 @@ impl Cpu for Cpu8086 {
     fn step(&mut self) -> bool {
         if self.halted { return false; }
         if self.input_pending { return true; } // blocked on INT 21h input
+        let trap = self.flag(TF);
         self.exec();
         if !self.halted {
             self.service_interrupts();
+            if trap && self.flag(TF) {
+                self.hardware_intr(1); // single-step trap: INT 1
+            }
         }
         !self.halted
     }
@@ -1214,6 +1318,7 @@ impl Cpu for Cpu8086 {
             overflow: self.flag(OF),
             direction: self.flag(DF),
             interrupt: self.flag(IF),
+            trap: self.flag(TF),
         }
     }
 

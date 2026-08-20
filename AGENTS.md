@@ -141,7 +141,9 @@ pub trait Cpu {
 - Instruction subset (mainline + lab programs): MOV (all forms incl.
   segment regs), PUSH/POP (reg, r/m, imm, seg), ADD/ADC/SUB/SBB/AND/OR/XOR/
   CMP (modrm + imm + accumulator forms), INC/DEC, NEG/NOT, MUL/IMUL/DIV/IDIV,
-  TEST, XCHG, LEA, shifts/rotates (D0–D3), CBW/CWD, MOVS/LODS/STOS/CMPS/SCAS
+  TEST, XCHG, LEA, shifts/rotates (D0–D3), CBW/CWD, BCD/ASCII adjust
+  (DAA/DAS/AAA/AAS/AAM/AAD; AAM with base 0 faults like divide-by-zero),
+  MOVS/LODS/STOS/CMPS/SCAS
   (byte+word, with REP prefixes), LAHF/SAHF, flag ops (CLC/STC/CMC/CLI/STI/
   CLD/STD), Jcc/JMP (short/near/far)/CALL/RET/RETF, LOOP/LOOPZ/LOOPNZ/JCXZ,
   INT n/INT3/INTO/IRET, NOP, HLT.
@@ -153,6 +155,10 @@ pub trait Cpu {
   Latched, serviced at the end of `step()` (never while halted), priority
   NMI > INTR; service pushes FLAGS/CS/IP, clears IF+TF, jumps through the
   IVT (vector n at address 4n). Snapshot/restore covers the pending state.
+  TF is a real flag: POPF restores it and, while set, every executed
+  instruction traps into vector 1 (INT 1, single-step) — the trap fires
+  after each instruction as long as TF is still set (IRET restores it, so
+  a trapped program keeps single-stepping). `FlagSet.trap` exposes it.
 - I/O ports: IN/OUT (imm8 and DX forms) over a 256-byte port space;
   OUT to port 01h also prints AL to `Output` (8085-style convention).
 - Keyboard input: `Emulator::push_key(ch)` / wasm `push_key()` queue
@@ -192,7 +198,9 @@ pub trait Cpu {
 - SFRs: P0–P3, PSW, ACC, B, SP, DPL/DPH, TCON, TMOD, TH0/TL0/TH1/TL1, SCON,
   SBUF, IE, IP. Timer 0/1 count on each step while TRx=1 (no real-time
   calibration); writing SBUF emits a char to `Output` and sets TI
-  (transmit-complete).
+  (transmit-complete); `Emulator::serial_rx(ch)` / wasm `serial_rx(ch)`
+  injects a received byte (SBUF + RI) so the serial ISR (vector 23h) fires
+  when ES is enabled.
 - Port model: P0–P3 SFRs are the port latches; `Emulator::port_write(port,
   0-3, v)` injects external pin state and a port read returns `latch | pin`
   (quasi-bidirectional). Bit ops on port bits observe the same merged value.
@@ -251,6 +259,7 @@ snapshot() -> Vec<u8>
 restore(data: &[u8])
 port_read(port: u8) -> u8             // 8085/8086 port space; 8051 P0-P3 (latch|pin)
 port_write(port: u8, val: u8)        // 8085/8086 port space; 8051 pin injection
+serial_rx(ch: u8)                     // 8051: inject received byte (SBUF + RI)
 interrupt(kind: &str, data: u32)     // 8085: TRAP|RST75|RST65|RST55|INTR; 8051: INT0|INT1; 8086: NMI|INTR(data=vector)
 ```
 

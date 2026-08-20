@@ -153,6 +153,14 @@ impl Emulator {
         }
     }
 
+    /// Inject a received serial byte into the 8051 (sets SBUF + RI).
+    pub fn serial_rx(&mut self, ch: u8) -> Result<(), String> {
+        match self {
+            Emulator::Mcs51(c) => { c.serial_rx(ch); Ok(()) }
+            _ => Err("serial_rx: 8051 only".into()),
+        }
+    }
+
     /// Read the SFR / internal-RAM byte at the given address (8051 only).
     pub fn sfr(&self, addr: u8) -> u8 {
         match self {

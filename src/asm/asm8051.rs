@@ -247,7 +247,7 @@ fn enc(
             else { return Err("JMP needs @A+DPTR".into()); }
         }
         "SJMP" => { o.push(0x80); rel_patches.push(o.len() as u8); o.push(rel(&ops[0])?); }
-        "LJMP" => { o.push(0x02); o.extend_from_slice(&addr16(&ops[0])?.to_le_bytes()); }
+        "LJMP" => { o.push(0x02); o.extend_from_slice(&addr16(&ops[0])?.to_be_bytes()); }
         "AJMP" => {
             let t = addr16(&ops[0])?;
             let a11 = t & 0x7FF;
@@ -288,7 +288,7 @@ fn enc(
             o.push(0x11 | (((a11 >> 8) & 7) as u8) << 5);
             o.push(a11 as u8);
         }
-        "LCALL" => { o.push(0x12); o.extend_from_slice(&addr16(&ops[0])?.to_le_bytes()); }
+        "LCALL" => { o.push(0x12); o.extend_from_slice(&addr16(&ops[0])?.to_be_bytes()); }
         "RET" => o.push(0x22), "RETI" => o.push(0x32),
         "NOP" => o.push(0x00),
         _ => return Err(format!("unknown mnemonic '{mnemonic}'")),
@@ -387,7 +387,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                 let start = addr;
                 for it in items {
                     match parse_expr(it, &syms2, addr, origin) {
-                        Ok(v) => { code.extend_from_slice(&(v as u16).to_le_bytes()); addr += 2; }
+                        Ok(v) => { code.extend_from_slice(&(v as u16).to_be_bytes()); addr += 2; }
                         Err(e) => errs.push(AsmErr::new(*ln, e)),
                     }
                 }

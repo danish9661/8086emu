@@ -62,6 +62,10 @@ export class Emulator {
      */
     run_to(target_pc: number, max_steps: number): number;
     /**
+     * Inject a received serial byte into the 8051 (sets SBUF + RI).
+     */
+    serial_rx(ch: number): void;
+    /**
      * Set the program counter (entry point after load).
      */
     set_pc(addr: number): void;
@@ -101,6 +105,7 @@ export interface InitOutput {
     readonly emulator_run: (a: number, b: number) => number;
     readonly emulator_run_bp: (a: number, b: number, c: number, d: number) => number;
     readonly emulator_run_to: (a: number, b: number, c: number) => number;
+    readonly emulator_serial_rx: (a: number, b: number) => [number, number];
     readonly emulator_set_pc: (a: number, b: number) => void;
     readonly emulator_snapshot: (a: number) => [number, number];
     readonly emulator_step: (a: number) => void;
