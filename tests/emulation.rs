@@ -452,7 +452,8 @@ fn keyboard_flush_8086() {
 #[test]
 fn assemble_info_lines() {
     // Per-line info: address + bytes for each emitting line, all three ISAs.
-    let cases: [(&str, &str, Vec<(u32, u32, &[u8])>); 3] = [
+    type Case = (&'static str, &'static str, Vec<(u32, u32, &'static [u8])>);
+    let cases: [Case; 3] = [
         (
             "8086",
             "ORG 100h\nMOV AX, 5\nMOV BX, 3\nMUL BX\nADD AX, 2\nMOV AH, 4Ch\nINT 21h\nEND",
@@ -488,7 +489,7 @@ fn assemble_info_lines() {
         ),
     ];
     for (isa, src, expected) in cases {
-        let mut emu = make_emulator(isa).unwrap();
+        let emu = make_emulator(isa).unwrap();
         let (code, info) = emu.assemble_info(src).unwrap();
         let end = info.iter().map(|i| i.addr + i.bytes.len() as u32).max().unwrap_or(0) as usize;
         assert_eq!(code.len(), end, "{isa}: padded image must end at the last emitted byte");
