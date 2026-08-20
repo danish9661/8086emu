@@ -219,6 +219,11 @@ fn enc(
             else { o.push(0x72); o.push(bit(&d)?); }
         }
         // ----- branches -----
+        "JMP" => {
+            let s = ops.join(",").to_ascii_uppercase();
+            if s == "@A+DPTR" { o.push(0x73); }
+            else { return Err("JMP needs @A+DPTR".into()); }
+        }
         "SJMP" => { o.push(0x80); rel_patches.push(o.len() as u8); o.push(rel(&ops[0])?); }
         "LJMP" => { o.push(0x02); o.extend_from_slice(&addr16(&ops[0])?.to_le_bytes()); }
         "AJMP" => {

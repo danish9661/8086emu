@@ -419,6 +419,7 @@ impl Cpu8051 {
             0xA2 => { let b = self.fetch8(); let v = self.read_bit(b); self.set_cy(v); }
             0x92 => { let b = self.fetch8(); let c = self.cy(); self.write_bit(b, c); }
             // ----- branches -----
+            0x73 => { let a = self.acc() as u16; self.pc = a + self.dptr(); } // JMP @A+DPTR
             0x80 => { let t = self.rel_addr(); self.pc = t; }
             0x02 => { let a = self.fetch16(); self.pc = a; }
             0x01 | 0x21 | 0x41 | 0x61 | 0x81 | 0xA1 | 0xC1 | 0xE1 => { // AJMP

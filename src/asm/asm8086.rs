@@ -180,6 +180,14 @@ fn encode_instr(
     origin: u32,
 ) -> Result<Vec<u8>, String> {
     let mut o = Vec::new();
+    if matches!(mnemonic, "REP" | "REPE" | "REPZ" | "REPNE" | "REPNZ") {
+        if ops.is_empty() { return Err("REP needs an instruction".into()); }
+        let p = match mnemonic { "REP" | "REPE" | "REPZ" => 0xF3, _ => 0xF2 };
+        o.push(p);
+        let inner = encode_instr(&ops[0], &ops[1..], syms, cur + 1, origin)?;
+        o.extend(inner);
+        return Ok(o);
+    }
     let parsed: Vec<Operand> = ops
         .iter()
         .map(|p| parse_operand(p, syms, cur, origin))
@@ -547,18 +555,25 @@ fn encode_instr(
         }
         // ---------------- string ops ----------------
         "MOVSB" | "MOVSW" | "CMPSB" | "CMPSW" | "STOSB" | "STOSW" | "LODSB" | "LODSW"
-        | "SCASB" | "SCASW" => {
+        | "SCASB" | "SCASW" | "INSB" | "INSW" | "OUTSB" | "OUTSW" => {
             o.push(match mnemonic {
                 "MOVSB" => 0xA4, "MOVSW" => 0xA5, "CMPSB" => 0xA6, "CMPSW" => 0xA7,
                 "STOSB" => 0xAA, "STOSW" => 0xAB, "LODSB" => 0xAC, "LODSW" => 0xAD,
-                "SCASB" => 0xAE, _ => 0xAF,
+                "SCASB" => 0xAE, "SCASW" => 0xAF,
+                "INSB" => 0x6C, "INSW" => 0x6D, "OUTSB" => 0x6E, _ => 0x6F,
             });
         }
+        "BOUND" => {
+            match (a, b) {
+                (Some(Operand::Reg16(r)), Some(m @ Operand::Mem { .. })) => {
+                    o.push(0x62);
+                    o.extend(memcode!(m, *r));
+                }
+                _ => return Err("BOUND needs r16, m16".into()),
+            }
+        }
         "REP" | "REPE" | "REPZ" | "REPNE" | "REPNZ" => {
-            let p = match mnemonic { "REP" | "REPE" | "REPZ" => 0xF3, _ => 0xF2 };
-            o.push(p);
-            let inner = encode_instr(&ops[0], &ops[1..], syms, cur + 1, origin)?;
-            o.extend(inner);
+            unreachable!("REP handled before operand parsing")
         }
         // ---------------- flag ops / misc ----------------
         "CLC" => o.push(0xF8), "STC" => o.push(0xF9), "CMC" => o.push(0xF5),
@@ -569,6 +584,7 @@ fn encode_instr(
         "NOP" => o.push(0x90),
         "HLT" => o.push(0xF4),
         "XLAT" => o.push(0xD7),
+        "WAIT" => o.push(0x9B),
         _ => return Err(format!("unknown mnemonic '{mnemonic}'")),
     }
     Ok(o)

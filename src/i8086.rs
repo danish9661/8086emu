@@ -370,6 +370,18 @@ impl Cpu8086 {
             0x50..=0x57 => self.push16(self.reg16(op & 7)),
             0x58..=0x5F => { let v = self.pop16(); self.set_reg16(op & 7, v); }
             0x60 | 0x61 => {} // PUSHA/POPA: unsupported no-op
+            0x62 => { // BOUND r16, m16
+                let (m, r, rm) = self.modrm();
+                let (seg, off) = self.ea(m, rm, self.ds);
+                let v = self.reg16(r);
+                if m != 3 {
+                    let low = self.mem.read16(self.phys(seg, off));
+                    let high = self.mem.read16(self.phys(seg, off.wrapping_add(2)));
+                    if (v as i16) < (low as i16) || (v as i16) > (high as i16) {
+                        self.int_vec(5);
+                    }
+                }
+            }
             0x68 => { let v = self.fetch16(); self.push16(v); }
             0x69 => { // IMUL r16,r/m16,imm16
                 let (m, _, rm) = self.modrm();
@@ -380,6 +392,7 @@ impl Cpu8086 {
                 self.set_reg16(m & 7, r);
             }
             0x6A => { let v = self.fetch8() as i8 as u16; self.push16(v); }
+            0x6C..=0x6F => self.op_io_string(op),
             0x6B => { // IMUL r16,r/m16,imm8
                 let (m, _, rm) = self.modrm();
                 let (seg, off) = self.ea(m, rm, self.ds);
@@ -438,6 +451,7 @@ impl Cpu8086 {
                 self.cs = seg;
                 self.ip = off;
             }
+            0x9B => {} // WAIT/FWAIT: no FPU, no-op
             0x9C => self.push16(self.flags),
             0x9D => { self.flags = (self.pop16() & !(TF | 0x2000 | 0x4000)) | 0x0002; }
             0x9E => { // SAHF
@@ -994,6 +1008,33 @@ impl Cpu8086 {
                     let zf = self.flag(ZF);
                     if (repe && !zf) || (!repe && zf) { self.rep = None; break; }
                 }
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn op_io_string(&mut self, op: u8) {
+        let word = op & 1 == 1;
+        loop {
+            let inc = if self.flag(DF) { -1i16 } else { 1 };
+            match op {
+                0x6C | 0x6D => { // INS: ES:[DI] = port(DX); no port model -> 0
+                    let v = 0u16;
+                    self.mem.write(self.phys(self.es, self.di), v as u8);
+                    if word {
+                        self.mem.write(self.phys(self.es, self.di.wrapping_add(1)), (v >> 8) as u8);
+                    }
+                    self.di = self.di.wrapping_add_signed(if word { inc * 2 } else { inc });
+                }
+                _ => { // OUTS: port(DX) = DS:[SI]; no port model -> no-op
+                    self.si = self.si.wrapping_add_signed(if word { inc * 2 } else { inc });
+                }
+            }
+            if self.rep.is_some() {
+                if self.cx == 0 { self.rep = None; break; }
+                self.cx -= 1;
+                if self.cx == 0 { self.rep = None; break; }
             } else {
                 break;
             }

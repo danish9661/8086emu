@@ -43,6 +43,9 @@ Legend:
 - [x] LAHF/SAHF, flag ops CLC/STC/CMC/CLI/STI/CLD/STD
 - [x] Jcc/JMP short/near/far, CALL/RET/RETF, LOOP/LOOPZ/LOOPNZ/JCXZ
 - [x] INT n, INT3, INTO, IRET, NOP, HLT
+- [x] BOUND r16, m16 (traps via INT 5 on range violation)
+- [x] INS/OUTS (byte/word, REP, DF, port model returns 0 / no-op)
+- [x] WAIT/FWAIT (no-op), LOCK prefix (no-op)
 - [x] DOS/BIOS subset: INT 21h (AH=01, 07, 02, 06, 09, 0C, 4Ch),
       INT 10h (AH=0Eh, 0Fh)
 
@@ -54,8 +57,12 @@ Legend:
 
 ### Left / known gaps
 
+- [x] Full 8086 opcode coverage: only 386+-only instructions remain
+      unimplemented (BOUND/INS/OUTS/WAIT now done; 0x60/0x61 PUSHA/POPA and
+      0x64-0x67 prefixes are no-ops)
 - [ ] INT 21h input services return a placeholder (no keyboard) — AH=01/07
       set AL=0 instead of reading a key
+- [ ] PUSHA/POPA, 386+ instructions (ARPL, 0x64-0x67 prefixes) — no-ops
 - [ ] No hardware-interrupt/timer simulation (8259/8253/PIT not modeled)
 - [ ] FPU, 386+ extensions, DOS file/date services — out of scope
 - [ ] Flags: TF (trap) tracked internally but not exposed in `FlagSet`
@@ -110,11 +117,13 @@ Legend:
       RAM and SFR bits (P0–P3, TCON, PSW, ACC, B)
 - [x] Branches: SJMP/AJMP/LJMP, JZ/JNZ/JC/JNC/JB/JNB/JBC, CJNE, DJNZ,
       ACALL/LCALL/RET/RETI
+- [x] JMP @A+DPTR (table jump)
 - [x] SFRs: P0–P3, PSW, ACC, B, SP, DPL/DPH, TCON, TMOD, TH0/TL0/TH1/TL1,
       SCON, SBUF, IE, IP
 - [x] Timer 0/1 (mode 0/1/2) count while TRx=1; TFx set on overflow;
       mode-2 auto-reload
 - [x] Writing SBUF emits a char to the output buffer
+- [x] Full opcode coverage: only reserved 0xA5 remains unassigned
 
 ### Assembler (src/asm/asm8051.rs)
 
