@@ -11,8 +11,8 @@ export class Emulator {
     flags(): string[];
     halted(): boolean;
     /**
-     * 8085 hardware interrupt: kind = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR",
-     * data = vector for INTR (ignored otherwise). Throws on unknown kind.
+     * Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
+     * "INTR" (data = vector); 8051 = "INT0" | "INT1". Throws on unknown kind.
      */
     interrupt(kind: string, data: number): void;
     /**

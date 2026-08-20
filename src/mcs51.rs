@@ -19,7 +19,10 @@ const S_TL0: usize = 0x0A;
 const S_TL1: usize = 0x0B;
 const S_TH0: usize = 0x0C;
 const S_TH1: usize = 0x0D;
+const S_SCON: usize = 0x18;
 const S_SBUF: usize = 0x19;
+const S_IP: usize = 0x38;
+const S_IE: usize = 0x28;
 const S_PSW: usize = 0x50;
 const S_ACC: usize = 0x60;
 const S_B: usize = 0x70;
@@ -33,6 +36,8 @@ pub struct Cpu8051 {
     pub out: Output,
     pub halted: bool,
     pub fault: Option<String>,
+    in_svc_low: bool,
+    in_svc_high: bool,
 }
 
 impl Default for Cpu8051 {
@@ -50,6 +55,8 @@ impl Cpu8051 {
             out: Output::default(),
             halted: false,
             fault: None,
+            in_svc_low: false,
+            in_svc_high: false,
         };
         c.reset();
         c
@@ -64,6 +71,8 @@ impl Cpu8051 {
         self.pc = 0;
         self.halted = false;
         self.fault = None;
+        self.in_svc_low = false;
+        self.in_svc_high = false;
     }
 
     // ----- helpers -----
@@ -106,7 +115,7 @@ impl Cpu8051 {
         } else {
             let idx = addr as usize - 0x80;
             match idx {
-                S_SBUF => { self.out.put_char(v as char); self.sfr[idx] = v; }
+                S_SBUF => { self.out.put_char(v as char); self.sfr[idx] = v; self.sfr[S_SCON] |= 0x02; } // TI on transmit complete
                 S_ACC => self.set_acc(v),
                 S_PSW => self.set_psw(v),
                 _ => self.sfr[idx] = v,
@@ -456,13 +465,16 @@ impl Cpu8051 {
                 let a11 = (((op as u16) & 0xE0) << 3) | target;
                 let pch = self.pc >> 8;
                 let pcl = self.pc as u8;
-                self.push(pch as u8);
                 self.push(pcl);
+                self.push(pch as u8);
                 self.pc = (self.pc & 0xF800) | a11;
             }
-            0x12 => { let a = self.fetch16(); let pch = self.pc >> 8; let pcl = self.pc as u8; self.push(pch as u8); self.push(pcl); self.pc = a; }
-            0x22 => { let lo = self.pop() as u16; let hi = self.pop() as u16; self.pc = hi << 8 | lo; }
-            0x32 => { let lo = self.pop() as u16; let hi = self.pop() as u16; self.pc = hi << 8 | lo; }
+            0x12 => { let a = self.fetch16(); let pch = self.pc >> 8; let pcl = self.pc as u8; self.push(pcl); self.push(pch as u8); self.pc = a; }
+            0x22 => { let hi = self.pop() as u16; let lo = self.pop() as u16; self.pc = hi << 8 | lo; }
+            0x32 => { // RETI: return and clear the in-service priority latch
+                let hi = self.pop() as u16; let lo = self.pop() as u16; self.pc = hi << 8 | lo;
+                if self.in_svc_high { self.in_svc_high = false; } else { self.in_svc_low = false; }
+            }
             0x00 => {}
             _ => self.unimplemented(op),
         }
@@ -471,6 +483,63 @@ impl Cpu8051 {
     fn cjne(&mut self, v: u8, target: u16, cmp_a: u8) {
         self.set_cy(cmp_a < v);
         if cmp_a != v { self.pc = target; }
+    }
+
+    /// Raise an external interrupt: "INT0" or "INT1" (sets the IE0/IE1 latch
+    /// in TCON, edge or level triggered per IT0/IT1 — level is treated like
+    /// edge, the latch is cleared on service; document this simplification).
+    pub fn request_interrupt(&mut self, kind: &str) -> Result<(), String> {
+        match kind.to_ascii_uppercase().as_str() {
+            "INT0" => { self.sfr[S_TCON] |= 0x02; Ok(()) }
+            "INT1" => { self.sfr[S_TCON] |= 0x08; Ok(()) }
+            _ => Err(format!("unknown 8051 interrupt '{kind}' (use INT0 or INT1)")),
+        }
+    }
+
+    /// Read a byte from the SFR space (address 0x80-0xFF) or internal RAM
+    /// (address 0x00-0x7F) — used by the debugger UI and tests.
+    pub fn sfr_byte(&self, addr: u8) -> u8 {
+        if addr < 0x80 { self.iram[addr as usize] } else { self.sfr[addr as usize - 0x80] }
+    }
+
+    /// Check pending interrupt sources in natural priority order
+    /// (INT0 > TF0 > INT1 > TF1 > serial) and vector if enabled and
+    /// not blocked by an equal-or-higher in-service priority latch.
+    fn service_interrupts(&mut self) {
+        let ie = self.sfr[S_IE];
+        if ie & 0x80 == 0 { return; } // EA
+        let tcon = self.sfr[S_TCON];
+        let scon = self.sfr[S_SCON];
+        let ip = self.sfr[S_IP];
+        let sources: [(bool, u16, u8, bool); 5] = [
+            (tcon & 0x02 != 0, 0x03, ie & 0x01, ip & 0x01 != 0), // INT0
+            (tcon & 0x20 != 0, 0x0B, ie & 0x02, ip & 0x02 != 0), // TF0
+            (tcon & 0x08 != 0, 0x13, ie & 0x04, ip & 0x04 != 0), // INT1
+            (tcon & 0x80 != 0, 0x1B, ie & 0x08, ip & 0x08 != 0), // TF1
+            (scon & 0x03 != 0, 0x23, ie & 0x10, ip & 0x10 != 0), // RI|TI
+        ];
+        for (flag, vector, en, high) in sources {
+            if !flag || en == 0 { continue; }
+            if high {
+                if self.in_svc_high { continue; }
+            } else if self.in_svc_low || self.in_svc_high {
+                continue;
+            }
+            match vector {
+                0x03 => self.sfr[S_TCON] &= !0x02, // IE0 cleared by hardware
+                0x0B => self.sfr[S_TCON] &= !0x20, // TF0
+                0x13 => self.sfr[S_TCON] &= !0x08, // IE1
+                0x1B => self.sfr[S_TCON] &= !0x80, // TF1
+                _ => {} // serial RI/TI are cleared by the ISR in software
+            }
+            let pcl = self.pc as u8;
+            let pch = (self.pc >> 8) as u8;
+            self.push(pcl);
+            self.push(pch);
+            if high { self.in_svc_high = true; } else { self.in_svc_low = true; }
+            self.pc = vector;
+            return;
+        }
     }
 }
 
@@ -486,6 +555,9 @@ impl Cpu for Cpu8051 {
         if self.halted { return false; }
         self.tick_timers();
         self.exec();
+        if !self.halted {
+            self.service_interrupts();
+        }
         !self.halted
     }
 
@@ -538,11 +610,13 @@ impl Cpu for Cpu8051 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(3 + 128 + 128 + XDATA_SIZE + CODE_SIZE);
-        v.push(1);
-        v.push((self.halted) as u8);
+        let mut v = Vec::with_capacity(5 + 128 + 128 + XDATA_SIZE + CODE_SIZE);
+        v.push(2);
+        v.push(self.halted as u8);
         v.push((self.pc >> 8) as u8);
         v.push(self.pc as u8);
+        v.push(self.in_svc_low as u8);
+        v.push(self.in_svc_high as u8);
         v.extend_from_slice(&self.iram);
         v.extend_from_slice(&self.sfr);
         v.extend_from_slice(&self.xdata.data);
@@ -554,7 +628,9 @@ impl Cpu for Cpu8051 {
         if data.len() < 3 { return; }
         self.halted = data[1] != 0;
         self.pc = ((data[2] as u16) << 8) | data[3] as u16;
-        let mut off = 4;
+        self.in_svc_low = data.get(4).is_some_and(|b| *b != 0);
+        self.in_svc_high = data.get(5).is_some_and(|b| *b != 0);
+        let mut off = if data[0] >= 2 { 6 } else { 4 };
         let mut take = |n: usize, dst: &mut [u8]| {
             let n = n.min(dst.len()).min(data.len().saturating_sub(off));
             dst[..n].copy_from_slice(&data[off..off + n]);

@@ -174,7 +174,20 @@ pub trait Cpu {
   JNZ/JC/JNC/JB/JNB/JBC/CJNE/DJNZ/ACALL/LCALL/RET/RETI), NOP.
 - SFRs: P0–P3, PSW, ACC, B, SP, DPL/DPH, TCON, TMOD, TH0/TL0/TH1/TL1, SCON,
   SBUF, IE, IP. Timer 0/1 count on each step while TRx=1 (no real-time
-  calibration); writing SBUF emits a char to `Output`.
+  calibration); writing SBUF emits a char to `Output` and sets TI
+  (transmit-complete).
+- Interrupts (checked at the end of `step()`, never while halted):
+  INT0/INT1 (external, raised via `Emulator::request_interrupt("INT0|INT1")`
+  / wasm `interrupt()`), TF0/TF1 (timers), serial (RI|TI). Vectors
+  03h/0Bh/13h/1Bh/23h, scanned in natural priority order; per-source
+  priority from IP (PX0/PT0/PX1/PT1/PS). A source vectors only if EA + its
+  IE bit are set and no equal-or-higher priority ISR is in service (two
+  in-service latches, low/high). The ISR gets PCL then PCH pushed (real
+  8051 stack layout); hardware clears IE0/IE1/TF0/TF1, serial RI/TI are
+  software-cleared (a serial ISR that forgets `CLR TI` re-fires). `RETI`
+  clears the in-service latch; RET/ACALL/LCALL push/pop PCL-first/PCH-first.
+  INT0/INT1 level-triggered mode (ITx=0) is treated like edge (latch cleared
+  on service — documented simplification).
 
 ## Assembler design (src/asm)
 
@@ -210,7 +223,7 @@ halted() -> bool
 reset()
 snapshot() -> Vec<u8>
 restore(data: &[u8])
-interrupt(kind: &str, data: u32)         // 8085 only: TRAP|RST75|RST65|RST55|INTR
+interrupt(kind: &str, data: u32)         // 8085: TRAP|RST75|RST65|RST55|INTR; 8051: INT0|INT1
 ```
 
 ## Conventions

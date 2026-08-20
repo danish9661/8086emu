@@ -20,7 +20,7 @@ Legend:
       assemble / load / step / run / pc / regs / flags / mem / out / halted /
       reset / snapshot / restore / interrupt (8085)
 - [x] Native CLI runner (examples/run.rs)
-- [x] 15 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
+- [x] 20 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
       warning-free
 - [x] `ORG` emits a complete memory image: forward `ORG` pads with zeros
       (place code at hardware vectors), backward `ORG` is an error; load code
@@ -133,8 +133,19 @@ Legend:
       SCON, SBUF, IE, IP
 - [x] Timer 0/1 (mode 0/1/2) count while TRx=1; TFx set on overflow;
       mode-2 auto-reload
+- [x] Interrupts: INT0/INT1 (external, IE0/IE1 latches), TF0/TF1 (timers),
+      serial (RI|TI) — vectors 03h/0Bh/13h/1Bh/23h in natural priority order;
+      IE enables (EA/EX0/ET0/EX1/ET1/ES), IP priorities (PX0/PT0/PX1/PT1/PS);
+      ISR pushes PCL then PCH, hardware clears IE0/IE1/TF0/TF1, serial RI/TI
+      are software-cleared; two in-service priority latches (low/high) block
+      equal-or-lower sources until RETI; RETI clears the latch
+- [x] SBUF write sets TI (transmit-complete); serial ISR must clear TI itself
+- [x] `Emulator::request_interrupt` + wasm `interrupt()` for INT0/INT1; native
+      `sfr()` accessor; web demo INT0/INT1 buttons + interactive example
 - [x] Writing SBUF emits a char to the output buffer
 - [x] Full opcode coverage: only reserved 0xA5 remains unassigned
+- [x] ACALL/LCALL/RET/RETI stack convention fixed to the real 8051 layout
+      (PCL pushed first, PCH popped first)
 
 ### Assembler (src/asm/asm8051.rs)
 
@@ -145,10 +156,10 @@ Legend:
 
 ### Left / known gaps
 
-- [ ] No interrupt handling — IE/IP/TCON interrupt-enable bits are storage
-      only; no vector dispatch, no RETI semantics beyond return
-- [ ] Serial port (SCON/SBUF) transmit only; no receive, no baud-rate
-      generation (timer-based baud not modeled)
+- [ ] INT0/INT1 level-triggered (ITx=0) treated like edge — latch cleared on
+      service, no level re-assertion without a new request (documented)
+- [ ] Serial port (SCON/SBUF) transmit only; no receive (RI never set), no
+      baud-rate generation (timer-based baud not modeled)
 - [ ] External interrupts (INT0/INT1), INTO/INT1 pins — not simulated
 - [ ] Timer counting is per-emulator-step (no real-time calibration /
       machine-cycle accuracy)
@@ -157,11 +168,12 @@ Legend:
 
 ## Web IDE / deployment
 
-- [x] docs/ demo: ISA selector, 13 sample programs (incl. 8085 interrupts),
-      line-numbered editor with error line highlighting,
-      Assemble/Step/Run/Stop/Reset, IRQ buttons (8085), keyboard shortcuts,
-      live registers/flags, pageable memory dump with PC marker, output
-      console, localStorage persistence, Ctrl+S save
+- [x] docs/ demo: ISA selector, 14 sample programs (incl. 8085 + 8051
+      interrupt demos), line-numbered editor with error line highlighting,
+      Assemble/Step/Run/Stop/Reset, IRQ buttons (8085 TRAP/RSTs/INTR,
+      8051 INT0/INT1), keyboard shortcuts, live registers/flags, pageable
+      memory dump with PC marker, output console, localStorage persistence,
+      Ctrl+S save
 - [x] GitHub Pages workflow (.github/workflows/pages.yml) — builds wasm pkg,
       runs tests, deploys docs/
 - [x] Live at https://danish9661.github.io/8086emu/ (verified 200 on
@@ -172,7 +184,8 @@ Legend:
 ## Suggested next steps (priority order)
 
 1. [x] 8085: RST 5.5/6.5/7.5 + INTR interrupt simulation (done, tested)
-2. 8051: interrupt vector dispatch for timers/serial/external
+2. [x] 8051: interrupt vector dispatch for timers/serial/external (done,
+      tested)
 3. 8086: real keyboard input for INT 21h AH=01/07 via the web UI
 4. Web IDE: syntax highlighting, per-line machine-code column, step-back
    (time-travel via snapshot/restore)

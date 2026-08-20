@@ -46,6 +46,22 @@ fn bit_addr(s: &str, syms: &HashMap<String, u32>, cur: u32, origin: u32) -> Resu
         "TF0" => return Ok(0x8D),
         "TR1" => return Ok(0x8E),
         "TF1" => return Ok(0x8F),
+        // SCON bits (SFR 0x98): RI TI
+        "RI" => return Ok(0x98),
+        "TI" => return Ok(0x99),
+        // IE bits (SFR 0xA8): EX0 ET0 EX1 ET1 ES EA
+        "EX0" => return Ok(0xA8),
+        "ET0" => return Ok(0xA9),
+        "EX1" => return Ok(0xAA),
+        "ET1" => return Ok(0xAB),
+        "ES" => return Ok(0xAC),
+        "EA" => return Ok(0xAF),
+        // IP bits (SFR 0xB8): PX0 PT0 PX1 PT1 PS
+        "PX0" => return Ok(0xB8),
+        "PT0" => return Ok(0xB9),
+        "PX1" => return Ok(0xBA),
+        "PT1" => return Ok(0xBB),
+        "PS" => return Ok(0xBC),
         _ => {}
     }
     let v = parse_expr(s, syms, cur, origin)?;

@@ -1,0 +1,14 @@
+import { writeFileSync } from 'node:fs';
+const js = await (await fetch('http://127.0.0.1:8124/pkg/multi_cpu_emu.js')).text();
+writeFileSync('/tmp/opencode/pkgmod5.mjs', js);
+const mod = await import('file:///tmp/opencode/pkgmod5.mjs?x=' + Date.now());
+const wasmBytes = new Uint8Array(await (await fetch('http://127.0.0.1:8124/pkg/multi_cpu_emu_bg.wasm')).arrayBuffer());
+await mod.default(wasmBytes);
+const { Emulator } = mod;
+const e = new Emulator("8051");
+const src = "ORG 0\nSJMP main\nORG 03h\nMOV SBUF, #'0'\nRETI\nORG 30h\nmain:\nMOV IE, #81h\nSETB IT0\nloop:\nSJMP loop\nEND";
+const code = e.assemble(src);
+e.load(code, 0);
+e.interrupt("INT0", 0);
+e.run(1000);
+console.log("INT0 out:", JSON.stringify(e.out()), "| pc:", e.pc().toString(16), "| sp:", JSON.stringify(e.regs().find(r => r.startsWith('SP='))));

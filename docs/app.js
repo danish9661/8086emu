@@ -208,6 +208,30 @@ END
 `,
     },
     {
+      name: 'Interrupts (INT0/INT1)',
+      src: `; Press the INT0 / INT1 IRQ buttons above while running.
+; INT0 handler prints '0', INT1 handler prints '1'.
+; Vectors live at the bottom of code space, so the main
+; program sits at ORG 30h (canonical 8051 layout).
+ORG 0
+SJMP main
+ORG 03h       ; INT0 vector
+MOV SBUF, #'0'
+RETI
+ORG 13h       ; INT1 vector
+MOV SBUF, #'1'
+RETI
+ORG 30h
+main:
+MOV IE, #85h  ; EA + EX0 + EX1
+SETB IT0      ; edge-triggered
+SETB IT1
+loop:
+SJMP loop
+END
+`,
+    },
+    {
       name: 'Bit operations',
       src: `; Flip a port bit pattern: P1.0..P1.3
 SETB P1.0
@@ -500,7 +524,8 @@ $('isa').onchange = () => {
   loadSource();
   $('memaddr').value = '0';
   memBase = 0;
-  $('intrBar').style.display = isa === '8085' ? '' : 'none';
+  $('intrBar85').style.display = isa === '8085' ? '' : 'none';
+  $('intrBar51').style.display = isa === '8051' ? '' : 'none';
   refresh();
 };
 
@@ -509,6 +534,8 @@ $('irq75').onclick = () => { emu.interrupt('RST75', 0); refresh(); };
 $('irq65').onclick = () => { emu.interrupt('RST65', 0); refresh(); };
 $('irq55').onclick = () => { emu.interrupt('RST55', 0); refresh(); };
 $('irqIntr').onclick = () => { emu.interrupt('INTR', 0x08); refresh(); };
+$('irqInt0').onclick = () => { emu.interrupt('INT0', 0); refresh(); };
+$('irqInt1').onclick = () => { emu.interrupt('INT1', 0); refresh(); };
 
 // ---------- keys ----------
 document.addEventListener('keydown', (e) => {
@@ -529,5 +556,6 @@ document.addEventListener('keydown', (e) => {
 
 newEmulator();
 loadSource();
-$('intrBar').style.display = 'none';
+$('intrBar85').style.display = 'none';
+  $('intrBar51').style.display = 'none';
 refresh();

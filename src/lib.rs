@@ -95,8 +95,8 @@ impl Emulator {
         self.output_mut().take()
     }
 
-    /// Raise a hardware interrupt. Only the 8085 core supports this:
-    /// kind = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR" (data = vector).
+    /// Raise a hardware interrupt. 8085: kind = "TRAP" | "RST75" | "RST65" |
+    /// "RST55" | "INTR" (data = vector). 8051: kind = "INT0" | "INT1".
     pub fn request_interrupt(&mut self, kind: &str, data: u32) -> Result<(), String> {
         match self {
             Emulator::I8085(c) => {
@@ -107,7 +107,16 @@ impl Emulator {
                     c.request_interrupt(kind)
                 }
             }
-            _ => Err(format!("interrupts are only supported on the 8085 core (got '{kind}')")),
+            Emulator::Mcs51(c) => c.request_interrupt(kind),
+            _ => Err(format!("interrupts are only supported on the 8085/8051 cores (got '{kind}')")),
+        }
+    }
+
+    /// Read the SFR / internal-RAM byte at the given address (8051 only).
+    pub fn sfr(&self, addr: u8) -> u8 {
+        match self {
+            Emulator::Mcs51(c) => c.sfr_byte(addr),
+            _ => 0,
         }
     }
 

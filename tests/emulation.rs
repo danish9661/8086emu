@@ -289,3 +289,89 @@ fn interrupt_isr_8085() {
     emu.run(1000);
     assert_eq!(emu.take_output(), "7", "RST 7.5 handler must print '7'");
 }
+
+#[test]
+fn interrupts_8051_external() {
+    // INT0 -> vector 03h; PCL pushed first; IE0 cleared by hardware; EA gates
+    let mut emu = make_emulator("8051").unwrap();
+    let src = "ORG 0\nSJMP main\nORG 03h\nMOV SBUF, #'0'\nRETI\nORG 30h\nmain:\nSETB IT0\nMOV IE, #81h\nstart:\nSJMP start\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.request_interrupt("INT0", 0).unwrap();
+    emu.run(100);
+    assert_eq!(emu.take_output(), "0", "INT0 handler must print '0'");
+    assert_eq!(emu.sfr(0x88) & 0x02, 0, "IE0 latch must be cleared on service");
+    assert_eq!(emu.mem_read(0x09, 1)[0], 0, "SP must be back to 0x07");
+
+    // EA=0: pending INT0 must not vector
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble("ORG 0\nSJMP main\nORG 30h\nmain:\nSETB IT0\nMOV IE, #01h\nstart:\nSJMP start\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.request_interrupt("INT0", 0).unwrap();
+    emu.run(20);
+    assert_eq!(emu.pc(), 0x35, "with EA=0 the CPU must stay in the loop");
+}
+
+#[test]
+fn interrupts_8051_stack_layout() {
+    // PCL must sit at SP+1 (real 8051 pushes low byte first)
+    let mut emu = make_emulator("8051").unwrap();
+    let src = "ORG 0\nSJMP main\nORG 03h\nRETI\nORG 30h\nmain:\nMOV IE, #81h\nstart:\nSJMP start\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.request_interrupt("INT0", 0).unwrap();
+    emu.run(2); // dispatch: PC = 03h, SP pushed 2 bytes
+    assert_eq!(reg(&emu.regs(), "SP"), 9, "dispatch must push two bytes");
+    assert_eq!(emu.pc(), 0x03);
+    emu.run(1); // RETI
+    assert_eq!(emu.pc(), 0x33, "RETI must return to the address after MOV IE (PCL pushed first)");
+    assert_eq!(reg(&emu.regs(), "SP"), 7, "stack must be balanced after RETI");
+}
+
+#[test]
+fn interrupts_8051_timer() {
+    let mut emu = make_emulator("8051").unwrap();
+    let src = "ORG 0\nSJMP main\nORG 0Bh\nMOV SBUF, #'T'\nRETI\nORG 30h\nmain:\nMOV TMOD, #01h\nMOV TH0, #0FFh\nMOV TL0, #0FFh\nSETB TR0\nMOV IE, #82h\nstart:\nSJMP start\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(emu.take_output(), "T", "TF0 overflow must vector to 0Bh");
+    assert_eq!(emu.sfr(0x88) & 0x20, 0, "TF0 must be cleared by hardware");
+}
+
+#[test]
+fn interrupts_8051_priority() {
+    // TF0 (PT0=1) blocks low-priority INT0 while its ISR runs; after RETI
+    // the still-pending INT0 fires.
+    let mut emu = make_emulator("8051").unwrap();
+    let src = "ORG 0\nSJMP main\nORG 03h\nMOV SBUF, #'0'\nRETI\nORG 0Bh\nPUSH ACC\nNOP\nNOP\nPOP ACC\nRETI\nORG 30h\nmain:\nMOV TMOD, #01h\nMOV TH0, #0FFh\nMOV TL0, #0FFh\nSETB TR0\nMOV IP, #02h\nMOV IE, #83h\nstart:\nSJMP start\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(9); // inside the TF0 ISR (after NOP at 0x0E); no INT0 requested yet
+    assert_eq!(emu.pc(), 0x0E, "TF0 (higher natural priority, no INT0 pending) must be in service");
+    emu.request_interrupt("INT0", 0).unwrap();
+    emu.run(2); // NOP, POP ACC -> INT0 must NOT preempt the high-priority TF0 ISR
+    assert_eq!(emu.pc(), 0x11, "INT0 must stay blocked while the TF0 ISR is in service, pc={:X}", emu.pc());
+    assert_eq!(emu.sfr(0x88) & 0x02, 0x02, "IE0 must remain pending (not serviced)");
+    emu.run(10); // RETI -> INT0 fires
+    assert_eq!(emu.take_output(), "0", "INT0 must fire after the TF0 ISR returns");
+}
+
+#[test]
+fn interrupts_8051_serial() {
+    // SBUF write sets TI; the serial ISR must clear TI itself or it re-fires
+    let mut emu = make_emulator("8051").unwrap();
+    let src = "ORG 0\nSJMP main\nORG 23h\nCLR TI\nMOV SBUF, #'B'\nRETI\nORG 30h\nmain:\nMOV IE, #90h\nMOV SBUF, #'A'\nstart:\nSJMP start\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(20);
+    let out = emu.take_output();
+    assert_eq!(out, "ABBBBBB", "TI re-fires each cycle until RETI, out={out}");
+    assert_eq!(emu.pc(), 0x28, "the 3-step ISR cycle is CLR TI / MOV SBUF / RETI");
+}
