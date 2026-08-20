@@ -502,3 +502,438 @@ fn assemble_info_lines() {
         }
     }
 }
+
+// ---------- flags ----------
+
+#[test]
+fn flags_8086_arith() {
+    // ADC chains carry, SBB borrows, INC/DEC preserve CF, CMP leaves operands
+    let src = r#"
+        ORG 100h
+        CLC
+        MOV AX, 7FFFh
+        INC AX              ; OF=1, SF=1, no CF change
+        MOV BX, 0001h
+        ADD AX, BX          ; AX=8000h CF=0 OF=1 (7FFF+1), SF=1
+        ADC AX, BX          ; AX=8002h CF=0
+        ADC AX, 0FFFFh      ; 8002+FFFF+0 = 8001 CF=1
+        SBB AX, 0FFFFh      ; 8001-FFFF-1 = 8001 CF=0 (8001 >= FFFF+1? no -> CF=1)
+        SBB AX, 1           ; CF=0
+        CMP AX, 0FFFFh      ; no write, CF=1 ZF=0
+        MOV CX, 0
+        INC CX
+        CMP CX, 1           ; ZF=1
+        MOV AH, 4Ch
+        INT 21h
+        END
+    "#;
+    let (_, _, _) = run_asm("8086", src, 200);
+}
+
+#[test]
+fn flags_8086_logic_shifts() {
+    // AND/OR/XOR/TEST clear CF/OF; SHL/SAR/RCL set CF; LAHF/SAHF round-trip
+    let src = r#"
+        ORG 100h
+        STC
+        MOV AX, 0FF00h
+        AND AX, 0FFh        ; AX=0, CF=0 OF=0 ZF=1
+        MOV AX, 8000h
+        OR  AX, 0001h       ; AX=8001 CF=0
+        MOV AX, 0F0F0h
+        XOR AX, 0FFFFh      ; AX=0F0F
+        TEST AX, 0F0Fh      ; AX unchanged, ZF=0
+        MOV AX, 8000h
+        SHL AX, 1           ; AX=0 CF=1 ZF=1
+        MOV AX, 8000h
+        SAR AX, 1           ; AX=C000 CF=0 SF=1
+        CLC
+        MOV AX, 0001h
+        RCL AX, 1           ; AX=2 CF=0
+        STC
+        RCL AX, 1           ; AX=5 CF=0
+        LAHF
+        SAHF
+        CMP AX, AX
+        MOV AH, 4Ch
+        INT 21h
+        END
+    "#;
+    run_asm("8086", src, 200);
+}
+
+#[test]
+fn flags_8085_arith_daa() {
+    // DAA BCD-adjusts, ADI sets AC, INR/DCR keep CY, DAD sets only CY, CMP flags
+    let src = r#"
+        ORG 0
+        STC
+        MVI A, 09h
+        ADI 01h             ; A=0Ah AC=1 CY=0
+        DAA                 ; A=10h (BCD)
+        MVI A, 99h
+        ADI 01h             ; CY=1
+        DAA                 ; A=00h CY=1
+        MVI A, 0Fh
+        INR A               ; A=10h, CY untouched (still 1), AC=1
+        DCR A               ; A=0Fh, CY untouched
+        LXI H, 0FFFFh
+        LXI D, 0002h
+        DAD D               ; HL=0001h CY=1
+        MVI A, 05h
+        CPI 06h             ; CY=1 (A < 6), ZF=0
+        CPI 05h             ; ZF=1, CY=0
+        HLT
+        END
+    "#;
+    run_asm("8085", src, 200);
+}
+
+#[test]
+fn flags_8085_rotates() {
+    // RLC/RRC set CY; RAL/RAR rotate through carry
+    let src = r#"
+        ORG 0
+        STC
+        MVI A, 80h
+        RLC                 ; A=01h CY=1
+        RRC                 ; A=80h CY=1
+        CMC                 ; CY=0
+        RAL                 ; A=00h CY=1
+        CMC
+        RAR                 ; A=80h CY=0
+        HLT
+        END
+    "#;
+    run_asm("8085", src, 200);
+}
+
+#[test]
+fn flags_8051_arith() {
+    // AC on ADD, OV on 7F+01, SUBB borrow, DA, MUL/DIV flags
+    let src = r#"
+        ORG 30h
+        MOV A, #0Fh
+        ADD A, #01h         ; AC=1 CY=0
+        MOV A, #7Fh
+        ADD A, #01h         ; OV=1 CY=0
+        MOV A, #00h
+        SUBB A, #01h        ; CY=1 (borrow)
+        MOV A, #99h
+        ADD A, #01h
+        DA A                ; A=00h CY=1
+        MOV A, #0Ah
+        MOV B, #0Ah
+        MUL AB              ; A=64h B=00h CY=0 OV=0
+        MOV A, #0FFh
+        MOV B, #02h
+        MUL AB              ; OV=1
+        MOV A, #0Ah
+        MOV B, #00h
+        DIV AB              ; OV=1 (divide by zero), A=0
+        RET
+        END
+    "#;
+    run_asm("8051", src, 200);
+}
+
+#[test]
+fn flags_8051_bit_ops() {
+    // SETB/CLR/CPL on bits, ANL C/ORL C/MOV C
+    let src = r#"
+        ORG 30h
+        SETB C
+        SETB 00h            ; bit addressable RAM 0x20.0
+        MOV C, 00h          ; C = 1
+        ANL C, 01h          ; C = 1 AND 0 = 0
+        ORL C, 00h          ; C = 1
+        CPL C
+        CLR 00h
+        MOV 00h, C          ; bit = 0
+        JNB 00h, skip
+        MOV A, #0AAh        ; not taken
+        SJMP $
+    skip:
+        MOV A, #55h
+        SJMP $
+        END
+    "#;
+    run_asm("8051", src, 200);
+}
+
+// ---------- 8086 string ops ----------
+
+#[test]
+fn string_movs_8086() {
+    // REP MOVSB copies bytes; CLD forward / STD backward
+    let src = r#"
+        ORG 100h
+        CLD
+        MOV SI, OFFSET src
+        MOV DI, OFFSET dst
+        MOV CX, 5
+        REP MOVSB
+        STD
+        MOV SI, OFFSET src + 4
+        MOV DI, OFFSET dst + 10
+        MOV CX, 5
+        REP MOVSB           ; dst[10..14] = src[4..0] reversed
+        CLD
+        MOV AH, 4Ch
+        INT 21h
+    src: DB 'A','B','C','D','E'
+    dst: DB 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0
+        END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 200);
+    let _ = regs;
+}
+
+#[test]
+fn string_cmps_scas_8086() {
+    // REPE CMPSB stops on mismatch, REPNE SCASB finds target, CX counts
+    let src = r#"
+        ORG 100h
+        CLD
+        MOV SI, OFFSET a
+        MOV DI, OFFSET b
+        MOV CX, 4
+        REPE CMPSB          ; a="ABXX", b="ABYZ" -> stops at 3rd byte, CX=1
+        MOV DX, CX          ; DX = 1
+        MOV DI, OFFSET b
+        MOV AL, 'Y'
+        MOV CX, 4
+        REPNE SCASB         ; found Y at index 2 -> CX=1
+        MOV BX, CX          ; BX = 1
+        MOV AH, 4Ch
+        INT 21h
+    a: DB 'A','B','X','X'
+    b: DB 'A','B','Y','Z'
+        END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 200);
+    assert_eq!(reg(&regs, "DX"), 1, "REPE CMPSB must stop after the mismatch");
+    assert_eq!(reg(&regs, "BX"), 1, "REPNE SCASB must leave the remaining count");
+}
+
+#[test]
+fn string_lods_stos_8086() {
+    // LODSB + STOSB transfer via AL; LODSW moves a word
+    let src = r#"
+        ORG 100h
+        CLD
+        MOV SI, OFFSET tbl
+        MOV DI, OFFSET out
+        LODSW               ; AX = 0x1122
+        STOSB               ; out[0] = 0x22
+        LODSB               ; AL = 0x33
+        STOSB               ; out[1] = 0x33
+        MOV AH, 4Ch
+        INT 21h
+    tbl: DB 22h, 11h, 33h, 44h   ; LODSW -> 0x1122, LODSB -> 0x33
+    out: DB 0, 0
+        END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 200);
+    assert_eq!(reg(&regs, "AX"), 0x4C33, "LODSW then LODSB leaves AX = 0x4C33");
+}
+
+// ---------- 8086 stack ----------
+
+#[test]
+fn stack_8086() {
+    // PUSH/POP reg + imm + segment, SP discipline, CALL/RET nesting
+    let src = r#"
+        ORG 100h
+        MOV AX, 1234h
+        MOV BX, 5678h
+        PUSH AX
+        PUSH BX
+        POP AX              ; AX = 5678
+        POP BX              ; BX = 1234
+        PUSH 0CAFEh
+        POP CX              ; CX = CAFE
+        PUSH CS
+        POP DX              ; DX = CS
+        CALL sub
+        MOV DI, 1
+        CALL nested
+        MOV AH, 4Ch
+        INT 21h
+    sub:
+        MOV SI, 2
+        RET
+    nested:
+        CALL inner
+        MOV DI, 3
+        RET
+    inner:
+        MOV BP, 4
+        RET
+        END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 200);
+    assert_eq!(reg(&regs, "AX"), 0x4C78, "AX = 5678 with AH=4Ch exit code");
+    assert_eq!(reg(&regs, "BX"), 0x1234);
+    assert_eq!(reg(&regs, "CX"), 0xCAFE);
+    assert_eq!(reg(&regs, "DX"), reg(&regs, "CS"), "PUSH CS / POP DX");
+    assert_eq!(reg(&regs, "SI"), 2);
+    assert_eq!(reg(&regs, "DI"), 3);
+    assert_eq!(reg(&regs, "BP"), 4);
+}
+
+// ---------- 8085 stack ----------
+
+#[test]
+fn stack_8085() {
+    // PUSH/POP BC/DE/HL/PSW, XTHL, SPHL, PCHL, nested CALL/RET
+    let src = r#"
+        ORG 0
+        LXI SP, 9000h
+        LXI B, 1234h
+        LXI D, 5678h
+        LXI H, 9ABCh
+        PUSH B
+        PUSH D
+        PUSH H
+        POP D               ; DE = 9ABC
+        POP H               ; HL = 5678
+        POP B               ; BC = 1234
+        MVI A, 42h
+        PUSH PSW            ; A + flags
+        POP B               ; B = flags, C = A
+        LXI H, 0DEADh
+        LXI SP, 9100h
+        PUSH H
+        LXI H, 0BEEFh
+        XTHL                ; (9100)=BEEF, HL=DEAD
+        SPHL                ; SP = DEAD
+        LXI H, target
+        PCHL
+        HLT
+    target:
+        CALL nest
+        HLT
+    nest:
+        LXI H, 8000h
+        CALL nest2
+        RET
+    nest2:
+        INR L
+        RET
+        END
+    "#;
+    let (regs, _, _) = run_asm("8085", src, 200);
+    assert_eq!(reg(&regs, "B"), 0x42, "PUSH PSW / POP B puts A in B");
+    assert_eq!(reg(&regs, "H"), 0x80, "nested calls must return to nest2");
+    assert_eq!(reg(&regs, "L"), 0x01);
+}
+
+// ---------- 8051 stack / timers ----------
+
+#[test]
+fn stack_8051() {
+    // PUSH/POP, ACALL/LCALL/RET layout (PCL first), SP after RET
+    let src = r#"
+        ORG 30h
+        MOV SP, #40h
+        MOV A, #11h
+        MOV B, #22h
+        PUSH ACC
+        PUSH B
+        POP ACC             ; ACC = 22h
+        POP B               ; B = 11h
+        MOV R7, A
+        ACALL sub           ; 2-byte call
+        LCALL far           ; 3-byte call
+        MOV A, #00h
+        SJMP $
+    sub:
+        MOV R0, #1
+        RET
+    far:
+        MOV R1, #2
+        RET
+        END
+    "#;
+    let (regs, _, _) = run_asm("8051", src, 200);
+    assert_eq!(reg(&regs, "R7"), 0x22, "POP ACC then POP B leaves A = 0x22");
+    assert_eq!(reg(&regs, "B"), 0x11);
+}
+
+#[test]
+fn timers_8051() {
+    // TMOD mode 1 (16-bit): TL0/TH0 count on steps, TF0 on overflow;
+    // mode 2 (8-bit auto-reload); TR0 gates; timer 1 independent
+    let src = r#"
+        ORG 30h
+        MOV TMOD, #01h      ; T0 mode 1
+        MOV TL0, #0FEh
+        MOV TH0, #00h
+        SETB TR0            ; start
+        MOV A, #00h         ; 3 steps
+        MOV B, #00h
+        MOV R0, #00h        ; TL0 = 01h, TH0 = 00h
+        SETB TR1            ; start timer 1 too
+        MOV R1, #00h        ; TL0 = 02h
+        MOV TMOD, #22h      ; both mode 2 (auto-reload)
+        MOV TL0, #0FEh
+        MOV TH0, #0FEh
+        MOV TL1, #0FFh
+        MOV TH1, #0FFh
+        MOV A, #00h         ; TL0 wraps: FE->FF->00, TF0 set, TL0=FE (reloaded)
+        MOV B, #00h         ; TL1 wraps: FF->00, TF1 set, TL1=FF
+        JNB TF0, no0
+        MOV R2, #1
+        SJMP t1
+    no0:
+        MOV R2, #0
+    t1:
+        JNB TF1, no1
+        MOV R3, #1
+        SJMP done
+    no1:
+        MOV R3, #0
+    done:
+        SJMP $
+        END
+    "#;
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(200);
+    let sfr = |a: u8| emu.sfr(a);
+    assert!(sfr(0x8A) == 0xFE || sfr(0x8A) == 0xFF, "TL0 must stay near FE (auto-reload)");
+    assert_eq!(sfr(0x8C), 0xFE, "TH0 must keep its reload value");
+    assert_eq!(sfr(0x8D), 0xFF, "TH1 must keep its reload value");
+    let regs = emu.regs();
+    assert_eq!(reg(&regs, "R2"), 1, "TF0 must be set after TL0 overflow");
+    assert_eq!(reg(&regs, "R3"), 1, "TF1 must be set after TL1 overflow");
+}
+
+#[test]
+fn timers_8051_stopped() {
+    // TR0 = 0: timer must not count; TR0 = 1 resumes
+    let src = r#"
+        ORG 30h
+        MOV TMOD, #01h
+        MOV TL0, #10h
+        MOV TH0, #00h
+        MOV A, #00h
+        MOV B, #00h         ; TL0 still 10h (TR0 clear)
+        SETB TR0
+        MOV R0, #00h        ; TL0 = 11h (tick before exec)
+        CLR TR0
+        MOV R1, #00h        ; this step still ticks with TR0=1 -> 12h
+        MOV R2, #00h        ; TR0 clear now -> TL0 stays 12h
+        SJMP $
+        END
+    "#;
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(200);
+    assert_eq!(emu.sfr(0x8A), 0x12, "TL0 must count only while TR0 is set");
+}

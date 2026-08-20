@@ -988,6 +988,8 @@ impl Cpu8086 {
 
     fn op_string(&mut self, op: u8) {
         let word = op & 1 == 1;
+        // REP with CX = 0 executes zero times (8086 semantics)
+        if self.rep.is_some() && self.cx == 0 { self.rep = None; return; }
         // execute once, then repeat while rep active
         loop {
             let inc = if self.flag(DF) { -1i16 } else { 1 };
@@ -1060,6 +1062,7 @@ impl Cpu8086 {
 
     fn op_io_string(&mut self, op: u8) {
         let word = op & 1 == 1;
+        if self.rep.is_some() && self.cx == 0 { self.rep = None; return; }
         loop {
             let inc = if self.flag(DF) { -1i16 } else { 1 };
             match op {

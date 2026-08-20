@@ -60,13 +60,19 @@ impl Cpu8085 {
     #[inline] fn parity(&self, x: u8) -> bool { (x.count_ones() & 1) == 0 }
 
     fn rp(&self, rp: u8) -> u16 {
-        match rp { 0 => (self.b as u16) << 8 | self.c as u16, 1 => (self.d as u16) << 8 | self.e as u16, _ => (self.h as u16) << 8 | self.l as u16 }
+        match rp {
+            0 => (self.b as u16) << 8 | self.c as u16,
+            1 => (self.d as u16) << 8 | self.e as u16,
+            2 => (self.h as u16) << 8 | self.l as u16,
+            _ => self.sp,
+        }
     }
     fn set_rp(&mut self, rp: u8, v: u16) {
         match rp {
             0 => { self.b = (v >> 8) as u8; self.c = v as u8; }
             1 => { self.d = (v >> 8) as u8; self.e = v as u8; }
-            _ => { self.h = (v >> 8) as u8; self.l = v as u8; }
+            2 => { self.h = (v >> 8) as u8; self.l = v as u8; }
+            _ => { self.sp = v; }
         }
     }
 
@@ -291,8 +297,8 @@ impl Cpu8085 {
             0x05 | 0x0D | 0x15 | 0x1D | 0x25 | 0x2D | 0x3D => self.dcr((op >> 3) & 7),
             0x35 => { let old = self.m(); let nv = old.wrapping_sub(1); self.ac = (old & 0xF) == 0; self.set_m(nv); self.set_flags_arith(nv); }
             // rotates / misc
-            0x07 => self.a = self.a.rotate_left(1),   // RLC (CY = MSB)
-            0x0F => self.a = self.a.rotate_right(1),  // RRC
+            0x07 => { self.cy = self.a & 0x80 != 0; self.a = self.a.rotate_left(1); } // RLC (CY = MSB)
+            0x0F => { self.cy = self.a & 1 != 0; self.a = self.a.rotate_right(1); }   // RRC (CY = LSB)
             0x17 => { let c = self.a >> 7; self.a = (self.a << 1) | self.cy as u8; self.cy = c != 0; } // RAL
             0x1F => { let c = self.a & 1; self.a = (self.a >> 1) | ((self.cy as u8) << 7); self.cy = c != 0; } // RAR
             0x27 => self.daa(),

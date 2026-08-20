@@ -122,12 +122,14 @@ fn enc(mnemonic: &str, ops: &[String], syms: &HashMap<String, u32>, cur: u32, or
         "RET" => o.push(0xC9), "RC" => o.push(0xD8), "RNC" => o.push(0xD0),
         "RZ" => o.push(0xC8), "RNZ" => o.push(0xC0), "RP" => o.push(0xF0),
         "RM" => o.push(0xF8), "RPE" => o.push(0xE8), "RPO" => o.push(0xE0),
-        // stack
-        "PUSH" => match rp_index(&ops[0]).ok_or_else(|| format!("bad pair '{}'", ops[0]))? {
-            0 => o.push(0xC5), 1 => o.push(0xD5), 2 => o.push(0xE5), _ => o.push(0xF5),
+        // stack (PUSH/POP accept B/D/H/PSW; SP has no push/pop on the 8085)
+        "PUSH" => match ops[0].as_str() {
+            "B" => o.push(0xC5), "D" => o.push(0xD5), "H" => o.push(0xE5), "PSW" => o.push(0xF5),
+            _ => return Err(format!("bad pair '{}'", ops[0])),
         },
-        "POP" => match rp_index(&ops[0]).ok_or_else(|| format!("bad pair '{}'", ops[0]))? {
-            0 => o.push(0xC1), 1 => o.push(0xD1), 2 => o.push(0xE1), _ => o.push(0xF1),
+        "POP" => match ops[0].as_str() {
+            "B" => o.push(0xC1), "D" => o.push(0xD1), "H" => o.push(0xE1), "PSW" => o.push(0xF1),
+            _ => return Err(format!("bad pair '{}'", ops[0])),
         },
         "PUSHPSW" => o.push(0xF5),
         "POPPSW" => o.push(0xF1),

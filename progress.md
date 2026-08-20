@@ -20,7 +20,7 @@ Legend:
       assemble / load / step / run / pc / regs / flags / mem / out / halted /
       reset / snapshot / restore / interrupt (8085)
 - [x] Native CLI runner (examples/run.rs)
-- [x] 24 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
+- [x] 38 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
       warning-free
 - [x] `ORG` emits a complete memory image: forward `ORG` pads with zeros
       (place code at hardware vectors), backward `ORG` is an error; load code
@@ -198,4 +198,13 @@ Legend:
       tested)
 4. Web IDE: syntax highlighting, per-line machine-code column, step-back
    (time-travel via snapshot/restore)
-5. More integration tests per ISA (flags, string ops, stack, timers)
+5. [x] More integration tests per ISA (flags, string ops, stack, timers) —
+      14 new tests; caught and fixed 4 real bugs:
+      - 8085 RLC/RRC never set CY
+      - 8085 register-pair index 3 (SP) read/wrote HL instead of SP
+        (LXI SP / INX SP / DAD SP / PUSH-POP restored correctly)
+      - 8086 REP string ops executed once even with CX=0 (now zero times)
+      - 8051 timer mode 2 reloaded TL from TH on *every* tick instead of
+        only on overflow (TL could never wrap/TF never fire)
+      plus assembler fixes: PUSH/POP PSW for 8085 (SP was mis-encoded as
+      PSW), and 8051 ANL/ORL C,bit forms

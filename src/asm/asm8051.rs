@@ -210,6 +210,12 @@ fn enc(
             else if su == "A" { if let Some(v) = du.strip_prefix('#') { o.push(base + 0x02); o.push(direct(v)?); } else { o.push(base + 0x02); o.push(direct(d)?); } }
             else if let Some(v) = su.strip_prefix('#') { o.push(base + 0x03); o.push(direct(d)?); o.push(imm(v)?); }
             else if du == "A" { o.push(base + 0x05); o.push(direct(s)?); }
+            else if du == "C" {
+                // ANL C,bit / ORL C,bit (XRL has no C form on the 8051)
+                if mnemonic == "XRL" { return Err("XRL C,bit does not exist on the 8051".into()); }
+                o.push(if mnemonic == "ANL" { 0x82 } else { 0x72 });
+                o.push(bit_addr(s, syms, cur, origin)?);
+            }
             else { return Err(format!("{mnemonic}: unsupported form")); }
         }
         "CLR" => {

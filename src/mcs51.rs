@@ -182,7 +182,13 @@ impl Cpu8051 {
                 self.sfr[S_TCON] |= 0x20; // TF0
             }
             if reload {
-                self.sfr[S_TL0] = self.sfr[S_TH0]; // auto-reload keeps TH
+                // mode 2 (8-bit auto-reload): reload TH into TL only on overflow,
+                // otherwise just count in TL
+                if overflow {
+                    self.sfr[S_TL0] = self.sfr[S_TH0];
+                } else {
+                    self.sfr[S_TL0] = nv as u8;
+                }
             } else {
                 self.sfr[S_TH0] = (nv >> 8) as u8;
                 self.sfr[S_TL0] = nv as u8;
@@ -202,7 +208,13 @@ impl Cpu8051 {
                 self.sfr[S_TCON] |= 0x80; // TF1
             }
             if reload {
-                self.sfr[S_TL1] = self.sfr[S_TH1];
+                // mode 2 (8-bit auto-reload): reload TH into TL only on overflow,
+                // otherwise just count in TL
+                if overflow {
+                    self.sfr[S_TL1] = self.sfr[S_TH1];
+                } else {
+                    self.sfr[S_TL1] = nv as u8;
+                }
             } else {
                 self.sfr[S_TH1] = (nv >> 8) as u8;
                 self.sfr[S_TL1] = nv as u8;
