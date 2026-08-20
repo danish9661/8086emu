@@ -36,6 +36,18 @@ fn bit_addr(s: &str, syms: &HashMap<String, u32>, cur: u32, origin: u32) -> Resu
     if up == "OV" { return Ok(0xD2); }
     if up == "AC" { return Ok(0xD6); }
     if up == "P" { return Ok(0xD0); }
+    // TCON bits (SFR 0x88): IT0 IE0 IT1 IE1 TR0 TF0 TR1 TF1
+    match up.as_str() {
+        "IT0" => return Ok(0x88),
+        "IE0" => return Ok(0x89),
+        "IT1" => return Ok(0x8A),
+        "IE1" => return Ok(0x8B),
+        "TR0" => return Ok(0x8C),
+        "TF0" => return Ok(0x8D),
+        "TR1" => return Ok(0x8E),
+        "TF1" => return Ok(0x8F),
+        _ => {}
+    }
     let v = parse_expr(s, syms, cur, origin)?;
     if v > 0xFF { return Err(format!("bit address {v} out of range")); }
     Ok(v as u8)
@@ -366,8 +378,8 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
 fn rel_target_op(rel_off: u8, mnemonic: &str) -> usize {
     let _ = rel_off;
     match mnemonic {
-        "JB" | "JNB" | "JBC" | "CJNE" => 2,
-        "DJNZ" => 1,
+        "JB" | "JNB" | "JBC" | "DJNZ" => 1,
+        "CJNE" => 2,
         _ => 0,
     }
 }

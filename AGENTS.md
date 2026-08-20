@@ -11,7 +11,7 @@ A single Rust crate (`multi-cpu-emu`) that emulates three classic microprocessor
 - **Intel 8051 (MCS-51)** — 8-bit, SFRs, bit-addressable RAM, timers
 
 The crate compiles to **one WASM module** (via `wasm-bindgen`) plus native
-`rlib`/`cdylib`. A thin web demo (`web/`) consumes the WASM build. There is
+`rlib`/`cdylib`. A full web IDE (`docs/`) consumes the WASM build. There is
 also a small native CLI example (`examples/run.rs`) for headless testing.
 
 Design reference (do NOT copy code; it is only a reference for architecture,
@@ -64,10 +64,10 @@ Useful takeaways to mirror (in our own implementation):
 │   │   └── asm8051.rs  # 8051 mnemonics -> machine code
 │   └── wasm.rs         # wasm-bindgen surface (feature = "wasm")
 ├── examples/run.rs     # native CLI runner: assemble + run a file, print regs
-├── tests/              # integration tests (hello world, arithmetic, flags)
-├── web/                # minimal HTML/JS demo over the wasm pkg
-└── AGENTS.md
-```
+ ├── tests/              # integration tests (hello world, arithmetic, flags)
+ ├── docs/               # GitHub Pages demo (index.html + app.js + style.css + pkg/)
+ └── AGENTS.md
+ ```
 
 ## Build & test commands
 
@@ -78,7 +78,7 @@ cargo test
 # wasm build
 rustup target add wasm32-unknown-unknown
 cargo install wasm-pack            # once
-wasm-pack build --target web --out-dir web/pkg --release --features wasm
+wasm-pack build --target web --out-dir docs/pkg --release --features wasm
 
 # run a program headlessly (native)
 cargo run --example run -- examples/hello.asm        # 8086
@@ -86,8 +86,21 @@ cargo run --example run -- --isa 8085 examples/hello85.asm
 cargo run --example run -- --isa 8051 examples/hello51.asm
 
 # serve the web demo
-python3 -m http.server -d web 8000   # then open http://localhost:8000
+python3 -m http.server -d docs 8000   # then open http://localhost:8000
 ```
+
+## GitHub Pages deployment
+
+The demo lives in `docs/` (all asset paths are relative), so it deploys
+with zero config:
+
+1. GitHub → repo **Settings → Pages → Source: "Deploy from a branch"**,
+   select branch `main` and folder `/docs`, save.
+2. The site appears at `https://<user>.github.io/8086emu/`.
+3. After any Rust change, rebuild the pkg and commit it:
+   `wasm-pack build --target web --out-dir docs/pkg --release --features wasm`
+   (the prebuilt `docs/pkg/` is committed so Pages needs no build step).
+4. Root `index.html` redirects to `docs/` for local convenience.
 
 ## Core design (src/cpu.rs)
 

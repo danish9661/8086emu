@@ -117,9 +117,9 @@ impl Cpu8051 {
     // bit address -> (byte addr, bit index)
     fn bit_location(bit: u8) -> (u8, u8) {
         if bit < 0x80 {
-            (0x20 + (bit >> 3), bit & 7)
+            (0x20 + ((bit >> 3).saturating_sub(4)), bit & 7)
         } else {
-            (bit, bit & 7)
+            (bit & 0xF8, bit & 7)
         }
     }
     fn read_bit(&self, bit: u8) -> bool {

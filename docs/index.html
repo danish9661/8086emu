@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>multi-cpu-emu — 8086 / 8085 / 8051 simulator</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <span class="logo">multi-cpu-emu <small>8086 · 8085 · 8051</small></span>
+    <label>ISA
+      <select id="isa">
+        <option value="8086" selected>Intel 8086</option>
+        <option value="8085">Intel 8085</option>
+        <option value="8051">Intel 8051</option>
+      </select>
+    </label>
+    <button id="exampleBtn" title="Load a sample program">Example</button>
+    <span class="spacer"></span>
+    <button id="asmBtn" class="primary" title="Assemble and load (F7)">Assemble</button>
+    <button id="stepBtn" title="Step one instruction (F8)" disabled>Step</button>
+    <button id="runBtn" title="Run until halt or Stop (F5)" disabled>Run</button>
+    <button id="stopBtn" title="Stop running" disabled>Stop</button>
+    <button id="resetBtn" title="Reset CPU">Reset</button>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Source code</h2>
+      <div id="edwrap">
+        <div id="gutter"></div>
+        <textarea id="editor" spellcheck="false" wrap="off"
+          placeholder="Write 8086/8085/8051 assembly here, then press Assemble."></textarea>
+      </div>
+      <div id="errors"></div>
+    </section>
+
+    <section class="right">
+      <div class="panel">
+        <h2>Registers</h2>
+        <div id="regs" class="rgrid"></div>
+      </div>
+      <div class="panel">
+        <h2>Flags</h2>
+        <div id="flags"></div>
+      </div>
+      <div class="panel">
+        <h2>Memory</h2>
+        <div id="memtools">
+          <button id="mempgUp" title="Previous 256 bytes">&#9664;</button>
+          <input id="memaddr" value="0" spellcheck="false" title="Base address (hex)">
+          <button id="mempgDn" title="Next 256 bytes">&#9654;</button>
+          <span class="info" id="meminfo"></span>
+        </div>
+        <div id="memview"></div>
+      </div>
+      <div class="panel">
+        <h2>Program output <span class="hint"><button id="clearOutBtn">Clear</button></span></h2>
+        <div id="output"></div>
+      </div>
+      <div id="helps">Keys: <kbd>F7</kbd> assemble · <kbd>F8</kbd> step · <kbd>F5</kbd> run · <kbd>Esc</kbd> stop · <kbd>Ctrl+S</kbd> save · output conventions: 8086 <b>INT 21h</b>, 8085 <b>OUT 01h</b>, 8051 <b>SBUF</b></div>
+    </section>
+  </main>
+
+  <div id="errpop"></div>
+
+  <footer id="statusbar">
+    <span>PC <b id="sbPc">—</b></span>
+    <span>Steps <b id="sbSteps">0</b></span>
+    <span>State <b id="sbState">idle</b></span>
+    <span>Code <b id="sbCode">—</b></span>
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
