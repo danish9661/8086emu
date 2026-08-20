@@ -26,7 +26,12 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        uses: jcbhmr/action-setup-wasm-pack@v1.5.0
+        run: |
+          url=$(curl -sSL https://api.github.com/repos/rustwasm/wasm-pack/releases/latest | grep -o 'https://[^"]*x86_64-unknown-linux-musl.tar.gz' | head -1)
+          curl -sSL "$url" -o /tmp/wasm-pack.tar.gz
+          tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
+          sudo mv /tmp/wasm-pack-*/wasm-pack /usr/local/bin/
+          wasm-pack --version
 
       - name: Build wasm pkg
         run: wasm-pack build --target web --out-dir docs/pkg --release --features wasm
