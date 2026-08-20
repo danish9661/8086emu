@@ -23,6 +23,14 @@
     <button id="runBtn" title="Run until halt or Stop (F5)" disabled>Run</button>
     <button id="stopBtn" title="Stop running" disabled>Stop</button>
     <button id="resetBtn" title="Reset CPU">Reset</button>
+    <span id="intrBar" style="display:none">
+      <span style="color:var(--muted);font-size:11px">IRQ:</span>
+      <button id="irqTrap" title="Non-maskable, works with DI">TRAP</button>
+      <button id="irq75" title="RST 7.5 (edge-latched)">7.5</button>
+      <button id="irq65" title="RST 6.5">6.5</button>
+      <button id="irq55" title="RST 5.5">5.5</button>
+      <button id="irqIntr" title="INTR with vector 08h">INTR</button>
+    </span>
   </header>
 
   <main>

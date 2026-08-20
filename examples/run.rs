@@ -35,9 +35,9 @@ fn main() {
         Err(e) => { eprintln!("assembly error: {e}"); std::process::exit(1); }
     };
 
-    let origin = if isa == "8086" { 0x100 } else { 0 };
-    emu.mem_write(origin, &code);
-    emu.set_pc(origin);
+    let entry = if isa == "8086" { 0x100 } else { 0 };
+    emu.mem_write(0, &code);
+    emu.set_pc(entry);
 
     let r = emu.run(max_steps);
     println!("--- ran {} steps (halted: {}) ---", r.steps, r.halted);

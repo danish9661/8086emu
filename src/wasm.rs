@@ -87,6 +87,12 @@ impl Emulator {
         self.inner.reset();
     }
 
+    /// 8085 hardware interrupt: kind = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR",
+    /// data = vector for INTR (ignored otherwise). Throws on unknown kind.
+    pub fn interrupt(&mut self, kind: &str, data: u32) -> Result<(), JsValue> {
+        to_js(self.inner.request_interrupt(kind, data))
+    }
+
     pub fn snapshot(&self) -> Vec<u8> {
         self.inner.snapshot()
     }

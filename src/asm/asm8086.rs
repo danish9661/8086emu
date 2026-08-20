@@ -615,7 +615,16 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
         let mut line_err = false;
         for (ln, stmt) in &stmts {
             match stmt {
-                Stmt::Org(a) => { addr = *a; }
+                Stmt::Org(a) => {
+                    if *a < addr {
+                        if _pass == 0 {
+                            errs.push(AsmErr::new(*ln, format!("ORG {a} goes backwards (current address {addr})")));
+                        }
+                    } else {
+                        cur_code.resize(*a as usize, 0);
+                        addr = *a;
+                    }
+                }
                 Stmt::Equ(name, expr) => {
                     if let Ok(v) = parse_expr(expr, &labels, addr, origin) {
                         labels.insert(name.clone(), v);

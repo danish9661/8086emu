@@ -18,10 +18,14 @@ Legend:
       per-line error reporting with line numbers
 - [x] WASM surface (`src/wasm.rs`, feature `wasm`): `Emulator` class with
       assemble / load / step / run / pc / regs / flags / mem / out / halted /
-      reset / snapshot / restore
+      reset / snapshot / restore / interrupt (8085)
 - [x] Native CLI runner (examples/run.rs)
-- [x] 8 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
+- [x] 15 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
       warning-free
+- [x] `ORG` emits a complete memory image: forward `ORG` pads with zeros
+      (place code at hardware vectors), backward `ORG` is an error; load code
+      at 0 and start the 8086 at entry 0x100 (run.rs / tests / web demo all
+      updated)
 - [x] Web IDE for students in `docs/` (editor, registers, flags, memory dump,
       output, per-ISA examples) deployed on GitHub Pages
 - [x] GitHub Actions workflow (build wasm pkg + run tests + deploy Pages)
@@ -84,6 +88,16 @@ Legend:
 - [x] Branches: JMP/Jcc, CALL/Ccc/RET/Rcc/RST
 - [x] Stack: PUSH/POP (regs + PSW), XTHL, SPHL, PCHL
 - [x] IN/OUT (OUT 01h prints char in A), EI/DI, SIM/RIM, NOP, HLT
+- [x] Hardware interrupts: TRAP (non-maskable, keeps IE), RST 7.5 (edge
+      latched, cleared on service), RST 6.5, RST 5.5, INTR (external vector);
+      priority TRAP > 7.5 > 6.5 > 5.5 > INTR; ISR pushes PSW + PC, clears IE
+      (except TRAP), vectors through 0x24/0x2C/0x34/0x3C
+- [x] SIM masks RST 5.5/6.5/7.5 (MSE), resets the RST 7.5 latch (R7.5), sets
+      SOD; RIM reports SID, pending 7.5/6.5/5.5, IE, masks — A register layout
+      matches the real chip
+- [x] `Emulator::request_interrupt(kind, data)` + wasm `interrupt()`; web demo
+      IRQ buttons (TRAP/7.5/6.5/5.5/INTR@08h) with an interactive 8085
+      interrupt example
 - [x] Full 8-bit ISA — no known missing opcodes
 
 ### Assembler (src/asm/asm8085.rs)
@@ -93,10 +107,7 @@ Legend:
 
 ### Left / known gaps
 
-- [ ] SIM/RIM: only simulated (read/write SID/SOD bits are stubbed) — no real
-      serial I/O
-- [ ] Interrupt pins (TRAP/RST 5.5/6.5/7.5/INTR) not simulated — only
-      software RST n
+- [ ] SID/SOD pins are emulator-side state (no real serial I/O attached)
 - [ ] I/O ports beyond 01h are no-ops (no peripheral model)
 - [ ] Timing/clock cycles not modeled (step = 1 instruction)
 
@@ -146,10 +157,11 @@ Legend:
 
 ## Web IDE / deployment
 
-- [x] docs/ demo: ISA selector, 12 sample programs, line-numbered editor with
-      error line highlighting, Assemble/Step/Run/Stop/Reset, keyboard
-      shortcuts, live registers/flags, pageable memory dump with PC marker,
-      output console, localStorage persistence, Ctrl+S save
+- [x] docs/ demo: ISA selector, 13 sample programs (incl. 8085 interrupts),
+      line-numbered editor with error line highlighting,
+      Assemble/Step/Run/Stop/Reset, IRQ buttons (8085), keyboard shortcuts,
+      live registers/flags, pageable memory dump with PC marker, output
+      console, localStorage persistence, Ctrl+S save
 - [x] GitHub Pages workflow (.github/workflows/pages.yml) — builds wasm pkg,
       runs tests, deploys docs/
 - [x] Live at https://danish9661.github.io/8086emu/ (verified 200 on
@@ -159,7 +171,7 @@ Legend:
 
 ## Suggested next steps (priority order)
 
-1. 8085: RST 5.5/6.5/7.5 + INTR interrupt simulation (cheap, no SFR model)
+1. [x] 8085: RST 5.5/6.5/7.5 + INTR interrupt simulation (done, tested)
 2. 8051: interrupt vector dispatch for timers/serial/external
 3. 8086: real keyboard input for INT 21h AH=01/07 via the web UI
 4. Web IDE: syntax highlighting, per-line machine-code column, step-back

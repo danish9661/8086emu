@@ -130,6 +130,36 @@ dst: DB 0, 0, 0, 0
 END
 `,
     },
+    {
+      name: 'Interrupts (TRAP/RST)',
+      src: `; Press the IRQ buttons above while running.
+; TRAP prints 'T', RST 7.5 prints '7', RST 6.5 prints '6',
+; RST 5.5 prints '5'. Handlers live at the hardware vectors.
+EI
+main:
+JMP main
+ORG 24h       ; TRAP vector (non-maskable)
+MVI A, 'T'
+OUT 01h
+RET
+ORG 2Ch       ; RST 5.5 vector
+MVI A, '5'
+OUT 01h
+EI
+RET
+ORG 34h       ; RST 6.5 vector
+MVI A, '6'
+OUT 01h
+EI
+RET
+ORG 3Ch       ; RST 7.5 vector
+MVI A, '7'
+OUT 01h
+EI
+RET
+END
+`,
+    },
   ],
   '8051': [
     {
@@ -197,12 +227,12 @@ const ISA_DEFAULTS = {
 };
 
 const ISA_INFO = {
-  '8086': { origin: 0x100, pcLabel: (pc, regs) => {
+  '8086': { origin: 0, entry: 0x100, pcLabel: (pc, regs) => {
     const cs = val(regs, 'CS'), ip = val(regs, 'IP');
     return `${cs.toString(16).toUpperCase().padStart(4, '0')}:${ip.toString(16).toUpperCase().padStart(4, '0')} (${(cs * 16 + ip).toString(16).toUpperCase()})`;
   }, memBase: (pc) => pc },
-  '8085': { origin: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
-  '8051': { origin: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
+  '8085': { origin: 0, entry: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
+  '8051': { origin: 0, entry: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
 };
 
 const FLAG_MAP = {
@@ -235,7 +265,7 @@ function newEmulator() {
   steps = 0; accumOut = '';
 }
 
-function origin() { return ISA_INFO[isa].origin; }
+function entry() { return ISA_INFO[isa].entry; }
 
 function fmt(v, w = 4) { return v.toString(16).toUpperCase().padStart(w, '0'); }
 
@@ -392,14 +422,15 @@ function assemble() {
     const src = editor.value;
     const code = emu.assemble(src);
     newEmulator();
-    emu.load(emu.assemble(src), origin());
+    emu.load(emu.assemble(src), 0);
+    emu.set_pc(entry());
     errorsBox.style.display = 'none';
     errorsBox.innerHTML = '';
     errLine = -1;
     buildGutter();
     const hex = Array.from(code).slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join(' ');
     $('sbCode').textContent = `${code.length} bytes${code.length > 12 ? '…' : ''} (${hex}${code.length > 12 ? '…' : ''})`;
-    toast(`Assembled ${code.length} bytes at ${fmt(origin(), 4)}`);
+    toast(`Assembled ${code.length} bytes, entry ${fmt(entry(), 4)}`);
   } catch (e) {
     showErrors(String(e));
     $('sbCode').textContent = '—';
@@ -469,8 +500,15 @@ $('isa').onchange = () => {
   loadSource();
   $('memaddr').value = '0';
   memBase = 0;
+  $('intrBar').style.display = isa === '8085' ? '' : 'none';
   refresh();
 };
+
+$('irqTrap').onclick = () => { emu.interrupt('TRAP', 0); refresh(); };
+$('irq75').onclick = () => { emu.interrupt('RST75', 0); refresh(); };
+$('irq65').onclick = () => { emu.interrupt('RST65', 0); refresh(); };
+$('irq55').onclick = () => { emu.interrupt('RST55', 0); refresh(); };
+$('irqIntr').onclick = () => { emu.interrupt('INTR', 0x08); refresh(); };
 
 // ---------- keys ----------
 document.addEventListener('keydown', (e) => {
@@ -491,4 +529,5 @@ document.addEventListener('keydown', (e) => {
 
 newEmulator();
 loadSource();
+$('intrBar').style.display = 'none';
 refresh();

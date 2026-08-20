@@ -152,6 +152,17 @@ pub trait Cpu {
   INX/DCX/DAD, RLC/RRC/RAL/RAR/CMA/CMC/STC/DAA, JMP/Jcc/CALL/Ccc/RET/Rcc/RST,
   PUSH/POP (regs + PSW), XTHL/SPHL/PCHL, IN/OUT, EI/DI, SIM/RIM, NOP, HLT.
 - OUT to port 01h prints the char in A to `Output` (documented convention).
+- Hardware interrupts (raised via `Cpu8085::request_interrupt(kind)` /
+  `Emulator::request_interrupt(kind, data)` / wasm `interrupt()`): TRAP
+  (vector 0x24, non-maskable, keeps IE), RST 7.5/6.5/5.5 (0x3C/0x34/0x2C,
+  maskable via SIM, clear IE), INTR (external vector, clear IE). Priority:
+  TRAP > 7.5 > 6.5 > 5.5 > INTR. An ISR pushes PSW then PC; 5.5/6.5 pending
+  flags are latched and cleared on service (simplification). SIM (A: D0-D2
+  masks 5.5/6.5/7.5, D3=MSE, D4=reset RST 7.5 latch, D7=SOD) and RIM
+  (A: D7=SID, D6-D4 pending 7.5/6.5/5.5, D3=IE, D2-D0 masks) match the chip.
+  Interrupts are serviced at the end of `step()` (so they take effect right
+  after EI) and never while halted. Snapshot/restore covers all interrupt
+  state.
 
 ### 8051 (`mcs51.rs`)
 - Registers: A, B, R0–R7 (4 register banks), DPTR, PC, PSW, SP.
@@ -171,6 +182,10 @@ pub trait Cpu {
   expr`), directives: `ORG`, `DB`, `DW`, `EQU`, `END`.
 - Numbers: decimal, `0x` hex, `h`/`H` hex suffix, `b`/`B` binary, `q`/`Q` octal,
   `'char'`. Simple label arithmetic (+/-) between labels is supported.
+- `ORG` emits a complete memory image: forward `ORG` pads with zeros (use it
+  to place ISRs at hardware vectors, e.g. `ORG 24h`), backward `ORG` is an
+  error. Load the assembled image at address 0 (`load(code, 0)`); the entry
+  point is 0 for 8085/8051 and 0x100 for 8086 (matching `ORG 100h`).
 - Per-ISA parser produces `(Vec<u8>, Vec<AsmError{line, msg}>)`. For the 8086
   a two-pass approach resolves forward label references.
 - Mnemonic coverage mirrors the CPU cores above (assembling what the core can
@@ -195,6 +210,7 @@ halted() -> bool
 reset()
 snapshot() -> Vec<u8>
 restore(data: &[u8])
+interrupt(kind: &str, data: u32)         // 8085 only: TRAP|RST75|RST65|RST55|INTR
 ```
 
 ## Conventions

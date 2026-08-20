@@ -11,6 +11,11 @@ export class Emulator {
     flags(): string[];
     halted(): boolean;
     /**
+     * 8085 hardware interrupt: kind = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR",
+     * data = vector for INTR (ignored otherwise). Throws on unknown kind.
+     */
+    interrupt(kind: string, data: number): void;
+    /**
      * Load raw machine code at `origin` and set PC there.
      */
     load(code: Uint8Array, origin: number): void;
@@ -43,6 +48,7 @@ export interface InitOutput {
     readonly emulator_assemble: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_flags: (a: number) => [number, number];
     readonly emulator_halted: (a: number) => number;
+    readonly emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];
     readonly emulator_load: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_mem: (a: number, b: number, c: number) => [number, number];
     readonly emulator_new: (a: number, b: number) => [number, number, number];

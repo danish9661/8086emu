@@ -292,7 +292,13 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
     let mut addr = origin;
     for (ln, stmt) in &stmts {
         match stmt {
-            Stmt::Org(a) => addr = *a,
+            Stmt::Org(a) => {
+                if *a < addr {
+                    errs.push(AsmErr::new(*ln, format!("ORG {a} goes backwards (current address {addr})")));
+                } else {
+                    addr = *a;
+                }
+            }
             Stmt::Equ(name, expr) => {
                 if let Ok(v) = parse_expr(expr, &syms, addr, origin) {
                     syms.insert(name.clone(), v);
@@ -325,7 +331,14 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>) {
     let mut syms2 = syms.clone();
     for (ln, stmt) in &stmts {
         match stmt {
-            Stmt::Org(a) => addr = *a,
+            Stmt::Org(a) => {
+                if *a < addr {
+                    errs.push(AsmErr::new(*ln, format!("ORG {a} goes backwards (current address {addr})")));
+                } else {
+                    code.resize(*a as usize, 0);
+                    addr = *a;
+                }
+            }
             Stmt::Equ(name, expr) => {
                 if let Ok(v) = parse_expr(expr, &syms2, addr, origin) {
                     syms2.insert(name.clone(), v);

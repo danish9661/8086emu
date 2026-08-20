@@ -18,6 +18,16 @@ pub struct Cpu8085 {
     pub halted: bool,
     pub int_enabled: bool,
     pub fault: Option<String>,
+    pub mask_rst55: bool,
+    pub mask_rst65: bool,
+    pub mask_rst75: bool,
+    pub pending_rst55: bool,
+    pub pending_rst65: bool,
+    pub pending_rst75: bool,
+    pub pending_trap: bool,
+    pub intr_vector: Option<u8>,
+    pub sid: bool,
+    pub sod: bool,
 }
 
 impl Default for Cpu8085 {
@@ -35,6 +45,11 @@ impl Cpu8085 {
             halted: false,
             int_enabled: false,
             fault: None,
+            mask_rst55: false, mask_rst65: false, mask_rst75: false,
+            pending_rst55: false, pending_rst65: false, pending_rst75: false,
+            pending_trap: false,
+            intr_vector: None,
+            sid: false, sod: false,
         };
         c.reset();
         c
@@ -284,8 +299,25 @@ impl Cpu8085 {
             0x2F => self.a = !self.a, // CMA
             0x37 => self.cy = true,   // STC
             0x3F => self.cy = !self.cy, // CMC
-            0x20 => self.a = 0,       // RIM (simplified)
-            0x30 => { /* SIM */ }
+            0x20 => { // RIM: SID | I7.5 | I6.5 | I5.5 | IE | M7.5 | M6.5 | M5.5
+                self.a = (self.sid as u8) << 7
+                    | (self.pending_rst75 as u8) << 6
+                    | (self.pending_rst65 as u8) << 5
+                    | (self.pending_rst55 as u8) << 4
+                    | (self.int_enabled as u8) << 3
+                    | (self.mask_rst75 as u8) << 2
+                    | (self.mask_rst65 as u8) << 1
+                    | self.mask_rst55 as u8;
+            }
+            0x30 => { // SIM: SOD | S1 | S0 | R7.5 | MSE | M7.5 | M6.5 | M5.5
+                if self.a & 0x08 != 0 { // MSE
+                    self.mask_rst55 = self.a & 0x01 != 0;
+                    self.mask_rst65 = self.a & 0x02 != 0;
+                    self.mask_rst75 = self.a & 0x04 != 0;
+                }
+                if self.a & 0x10 != 0 { self.pending_rst75 = false; } // R7.5
+                self.sod = self.a & 0x80 != 0;
+            }
             0x00 => {} // NOP
             // Jumps
             0xC3 | 0xCA | 0xC2 | 0xDA | 0xD2 | 0xFA | 0xF2 | 0xEA | 0xE2 => {
@@ -348,6 +380,53 @@ impl Cpu8085 {
             _ => self.unimplemented(op),
         }
     }
+
+    pub fn request_interrupt(&mut self, kind: &str) -> Result<(), String> {
+        match kind.to_ascii_uppercase().as_str() {
+            "TRAP" => { self.pending_trap = true; Ok(()) }
+            "RST75" | "7.5" => { self.pending_rst75 = true; Ok(()) }
+            "RST65" | "6.5" => { self.pending_rst65 = true; Ok(()) }
+            "RST55" | "5.5" => { self.pending_rst55 = true; Ok(()) }
+            _ => Err(format!("unknown 8085 interrupt '{kind}' (use TRAP, RST75, RST65, RST55)")),
+        }
+    }
+
+    /// INTR is externally vectored: the device supplies the vector (RST n or CALL).
+    pub fn request_intr(&mut self, vector: u8) {
+        self.intr_vector = Some(vector);
+    }
+
+    fn service_interrupts(&mut self) {
+        if self.pending_trap {
+            self.pending_trap = false;
+            self.take_interrupt(0x24, false); // TRAP: non-maskable, keeps IE
+            return;
+        }
+        if !self.int_enabled { return; }
+        if self.pending_rst75 && !self.mask_rst75 {
+            self.pending_rst75 = false;
+            self.take_interrupt(0x3C, true);
+        } else if self.pending_rst65 && !self.mask_rst65 {
+            self.pending_rst65 = false;
+            self.take_interrupt(0x34, true);
+        } else if self.pending_rst55 && !self.mask_rst55 {
+            self.pending_rst55 = false;
+            self.take_interrupt(0x2C, true);
+        } else if let Some(v) = self.intr_vector {
+            self.intr_vector = None;
+            self.take_interrupt(v as u16, true);
+        }
+    }
+
+    fn take_interrupt(&mut self, vector: u16, clear_iff: bool) {
+        let psw = (self.a as u16) << 8
+            | (self.s as u16) << 7 | (self.z as u16) << 6 | (self.ac as u16) << 4
+            | (self.p as u16) << 2 | self.cy as u16;
+        self.push16(psw);
+        self.push16(self.pc);
+        if clear_iff { self.int_enabled = false; }
+        self.pc = vector;
+    }
 }
 
 impl Cpu for Cpu8085 {
@@ -359,11 +438,19 @@ impl Cpu for Cpu8085 {
         self.halted = false;
         self.int_enabled = false;
         self.fault = None;
+        self.mask_rst55 = false; self.mask_rst65 = false; self.mask_rst75 = false;
+        self.pending_rst55 = false; self.pending_rst65 = false; self.pending_rst75 = false;
+        self.pending_trap = false;
+        self.intr_vector = None;
+        self.sid = false; self.sod = false;
     }
 
     fn step(&mut self) -> bool {
         if self.halted { return false; }
         self.exec();
+        if !self.halted {
+            self.service_interrupts();
+        }
         !self.halted
     }
 
@@ -413,6 +500,16 @@ impl Cpu for Cpu8085 {
         v.push(f);
         v.push(self.halted as u8);
         v.push(self.int_enabled as u8);
+        v.push(self.mask_rst55 as u8);
+        v.push(self.mask_rst65 as u8);
+        v.push(self.mask_rst75 as u8);
+        v.push(self.pending_rst55 as u8);
+        v.push(self.pending_rst65 as u8);
+        v.push(self.pending_rst75 as u8);
+        v.push(self.pending_trap as u8);
+        v.push(self.intr_vector.map_or(0xFF, |v| v));
+        v.push(self.sid as u8);
+        v.push(self.sod as u8);
         v.extend_from_slice(&self.mem.data);
         v
     }
@@ -428,7 +525,17 @@ impl Cpu for Cpu8085 {
         self.p = f & 0x04 != 0; self.cy = f & 0x01 != 0;
         self.halted = data[13] != 0;
         self.int_enabled = data.get(14).is_some_and(|b| *b != 0);
-        let body = &data[15..];
+        self.mask_rst55 = data.get(15).is_some_and(|b| *b != 0);
+        self.mask_rst65 = data.get(16).is_some_and(|b| *b != 0);
+        self.mask_rst75 = data.get(17).is_some_and(|b| *b != 0);
+        self.pending_rst55 = data.get(18).is_some_and(|b| *b != 0);
+        self.pending_rst65 = data.get(19).is_some_and(|b| *b != 0);
+        self.pending_rst75 = data.get(20).is_some_and(|b| *b != 0);
+        self.pending_trap = data.get(21).is_some_and(|b| *b != 0);
+        self.intr_vector = data.get(22).and_then(|b| (*b != 0xFF).then_some(*b));
+        self.sid = data.get(23).is_some_and(|b| *b != 0);
+        self.sod = data.get(24).is_some_and(|b| *b != 0);
+        let body = &data[25..];
         let n = body.len().min(MEM_SIZE);
         self.mem.data[..n].copy_from_slice(&body[..n]);
     }

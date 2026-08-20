@@ -44,6 +44,20 @@ export class Emulator {
         return ret !== 0;
     }
     /**
+     * 8085 hardware interrupt: kind = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR",
+     * data = vector for INTR (ignored otherwise). Throws on unknown kind.
+     * @param {string} kind
+     * @param {number} data
+     */
+    interrupt(kind, data) {
+        const ptr0 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.emulator_interrupt(this.__wbg_ptr, ptr0, len0, data);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Load raw machine code at `origin` and set PC there.
      * @param {Uint8Array} code
      * @param {number} origin

@@ -95,6 +95,22 @@ impl Emulator {
         self.output_mut().take()
     }
 
+    /// Raise a hardware interrupt. Only the 8085 core supports this:
+    /// kind = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR" (data = vector).
+    pub fn request_interrupt(&mut self, kind: &str, data: u32) -> Result<(), String> {
+        match self {
+            Emulator::I8085(c) => {
+                if kind.eq_ignore_ascii_case("INTR") {
+                    c.request_intr(data as u8);
+                    Ok(())
+                } else {
+                    c.request_interrupt(kind)
+                }
+            }
+            _ => Err(format!("interrupts are only supported on the 8085 core (got '{kind}')")),
+        }
+    }
+
     fn cpu(&mut self) -> &mut dyn Cpu {
         match self {
             Emulator::I8086(c) => c.as_mut(),
