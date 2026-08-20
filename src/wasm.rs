@@ -93,6 +93,16 @@ impl Emulator {
         to_js(self.inner.request_interrupt(kind, data))
     }
 
+    /// Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
+    pub fn push_key(&mut self, ch: u8) {
+        self.inner.push_key(ch);
+    }
+
+    /// True while the 8086 is blocked on an INT 21h read with an empty buffer.
+    pub fn waiting_input(&self) -> bool {
+        self.inner.waiting_input()
+    }
+
     pub fn snapshot(&self) -> Vec<u8> {
         self.inner.snapshot()
     }

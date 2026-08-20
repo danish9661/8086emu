@@ -20,7 +20,7 @@ Legend:
       assemble / load / step / run / pc / regs / flags / mem / out / halted /
       reset / snapshot / restore / interrupt (8085)
 - [x] Native CLI runner (examples/run.rs)
-- [x] 20 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
+- [x] 23 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
       warning-free
 - [x] `ORG` emits a complete memory image: forward `ORG` pads with zeros
       (place code at hardware vectors), backward `ORG` is an error; load code
@@ -50,8 +50,13 @@ Legend:
 - [x] BOUND r16, m16 (traps via INT 5 on range violation)
 - [x] INS/OUTS (byte/word, REP, DF, port model returns 0 / no-op)
 - [x] WAIT/FWAIT (no-op), LOCK prefix (no-op)
-- [x] DOS/BIOS subset: INT 21h (AH=01, 07, 02, 06, 09, 0C, 4Ch),
+- [x] DOS/BIOS subset: INT 21h (AH=01, 07, 08, 02, 06, 09, 0C, 4Ch),
       INT 10h (AH=0Eh, 0Fh)
+- [x] Keyboard input: `Emulator::push_key` / wasm `push_key()` queue
+      type-ahead; INT 21h AH=01/06/07/08/0C pop chars (AH=01 echoes);
+      an empty buffer blocks the CPU (`waiting_input()`), IP re-points at the
+      INT 21h so it re-executes once a key arrives; `run()` stops blocked;
+      snapshot/restore covers the buffer; web demo shows an input dialog
 
 ### Assembler (src/asm/asm8086.rs)
 
@@ -64,8 +69,8 @@ Legend:
 - [x] Full 8086 opcode coverage: only 386+-only instructions remain
       unimplemented (BOUND/INS/OUTS/WAIT now done; 0x60/0x61 PUSHA/POPA and
       0x64-0x67 prefixes are no-ops)
-- [ ] INT 21h input services return a placeholder (no keyboard) — AH=01/07
-      set AL=0 instead of reading a key
+- [x] INT 21h keyboard input (done, see above) — no ANSI/console escape
+      sequences (F-keys etc.)
 - [ ] PUSHA/POPA, 386+ instructions (ARPL, 0x64-0x67 prefixes) — no-ops
 - [ ] No hardware-interrupt/timer simulation (8259/8253/PIT not modeled)
 - [ ] FPU, 386+ extensions, DOS file/date services — out of scope
@@ -168,12 +173,12 @@ Legend:
 
 ## Web IDE / deployment
 
-- [x] docs/ demo: ISA selector, 14 sample programs (incl. 8085 + 8051
-      interrupt demos), line-numbered editor with error line highlighting,
-      Assemble/Step/Run/Stop/Reset, IRQ buttons (8085 TRAP/RSTs/INTR,
-      8051 INT0/INT1), keyboard shortcuts, live registers/flags, pageable
-      memory dump with PC marker, output console, localStorage persistence,
-      Ctrl+S save
+- [x] docs/ demo: ISA selector, 16 sample programs (incl. 8085 + 8051
+      interrupt demos and 8086 keyboard input), line-numbered editor with
+      error line highlighting, Assemble/Step/Run/Stop/Reset, IRQ buttons
+      (8085 TRAP/RSTs/INTR, 8051 INT0/INT1), keyboard-input dialog (8086),
+      keyboard shortcuts, live registers/flags, pageable memory dump with PC
+      marker, output console, localStorage persistence, Ctrl+S save
 - [x] GitHub Pages workflow (.github/workflows/pages.yml) — builds wasm pkg,
       runs tests, deploys docs/
 - [x] Live at https://danish9661.github.io/8086emu/ (verified 200 on
@@ -186,7 +191,8 @@ Legend:
 1. [x] 8085: RST 5.5/6.5/7.5 + INTR interrupt simulation (done, tested)
 2. [x] 8051: interrupt vector dispatch for timers/serial/external (done,
       tested)
-3. 8086: real keyboard input for INT 21h AH=01/07 via the web UI
+3. [x] 8086: real keyboard input for INT 21h AH=01/07 via the web UI (done,
+      tested)
 4. Web IDE: syntax highlighting, per-line machine-code column, step-back
    (time-travel via snapshot/restore)
 5. More integration tests per ISA (flags, string ops, stack, timers)

@@ -142,8 +142,13 @@ pub trait Cpu {
   (byte+word, with REP prefixes), LAHF/SAHF, flag ops (CLC/STC/CMC/CLI/STI/
   CLD/STD), Jcc/JMP (short/near/far)/CALL/RET/RETF, LOOP/LOOPZ/LOOPNZ/JCXZ,
   INT n/INT3/INTO/IRET, NOP, HLT.
-- DOS/BIOS service subset: INT 21h (AH=01, 02, 09, 4Ch), INT 10h (AH=0Eh).
-  Output goes to the `Output` buffer.
+- DOS/BIOS service subset: INT 21h (AH=01, 02, 06, 07, 08, 09, 0C, 4Ch),
+  INT 10h (AH=0Eh). Output goes to the `Output` buffer.
+- Keyboard input: `Emulator::push_key(ch)` / wasm `push_key()` queue
+  type-ahead characters; INT 21h AH=01 (echo)/06/07/08/0C pop the next char.
+  With an empty buffer the CPU blocks: `waiting_input()` is true, IP is
+  re-pointed at the INT 21h instruction, and `run()` stops early so the
+  caller can push a key and resume. Snapshot/restore covers the buffer.
 
 ### 8085 (`i8085.rs`)
 - Registers: A, B, C, D, E, H, L, SP, PC; flags S/Z/AC/P/CY.
@@ -220,6 +225,8 @@ flags() -> Vec<String>                   // e.g. "ZF"
 mem(addr: u32, len: u32) -> Vec<u8>      // linear read
 out() -> String                          // take program output
 halted() -> bool
+waiting_input() -> bool                  // 8086 blocked on INT 21h read
+push_key(ch: u8)                         // 8086 keyboard input (type-ahead)
 reset()
 snapshot() -> Vec<u8>
 restore(data: &[u8])

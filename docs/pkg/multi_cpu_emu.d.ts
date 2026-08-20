@@ -26,6 +26,10 @@ export class Emulator {
      */
     out(): string;
     pc(): number;
+    /**
+     * Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
+     */
+    push_key(ch: number): void;
     regs(): string[];
     reset(): void;
     restore(data: Uint8Array): void;
@@ -38,6 +42,10 @@ export class Emulator {
      * Execute one instruction.
      */
     step(): void;
+    /**
+     * True while the 8086 is blocked on an INT 21h read with an empty buffer.
+     */
+    waiting_input(): boolean;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -54,12 +62,14 @@ export interface InitOutput {
     readonly emulator_new: (a: number, b: number) => [number, number, number];
     readonly emulator_out: (a: number) => [number, number];
     readonly emulator_pc: (a: number) => number;
+    readonly emulator_push_key: (a: number, b: number) => void;
     readonly emulator_regs: (a: number) => [number, number];
     readonly emulator_reset: (a: number) => void;
     readonly emulator_restore: (a: number, b: number, c: number) => void;
     readonly emulator_run: (a: number, b: number) => number;
     readonly emulator_snapshot: (a: number) => [number, number];
     readonly emulator_step: (a: number) => void;
+    readonly emulator_waiting_input: (a: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

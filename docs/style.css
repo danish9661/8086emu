@@ -99,3 +99,14 @@ main {
 }
 kbd { background: #21262d; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 11px; }
 #helps { padding: 6px 12px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--border); }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex;
+         align-items: center; justify-content: center; z-index: 50; }
+.modal-box { background: var(--panel, #141a24); border: 1px solid var(--line, #2a3242);
+             border-radius: 8px; padding: 18px 22px; width: min(420px, 90vw); }
+.modal-box h3 { margin: 0 0 8px; font-size: 15px; }
+.modal-box p { margin: 0 0 12px; color: var(--muted, #8b95a8); font-size: 13px; }
+.modal-box input { width: 100%; box-sizing: border-box; padding: 8px; margin-bottom: 12px;
+                   background: var(--bg, #0c1017); color: var(--fg, #d7dee9);
+                   border: 1px solid var(--line, #2a3242); border-radius: 4px; font-size: 14px; }
+.modal-buttons { display: flex; gap: 8px; }
+.modal-buttons button { flex: 1; }

@@ -116,6 +116,13 @@ export class Emulator {
         return ret >>> 0;
     }
     /**
+     * Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
+     * @param {number} ch
+     */
+    push_key(ch) {
+        wasm.emulator_push_key(this.__wbg_ptr, ch);
+    }
+    /**
      * @returns {string[]}
      */
     regs() {
@@ -158,6 +165,14 @@ export class Emulator {
      */
     step() {
         wasm.emulator_step(this.__wbg_ptr);
+    }
+    /**
+     * True while the 8086 is blocked on an INT 21h read with an empty buffer.
+     * @returns {boolean}
+     */
+    waiting_input() {
+        const ret = wasm.emulator_waiting_input(this.__wbg_ptr);
+        return ret !== 0;
     }
 }
 if (Symbol.dispose) Emulator.prototype[Symbol.dispose] = Emulator.prototype.free;

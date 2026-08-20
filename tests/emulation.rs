@@ -375,3 +375,76 @@ fn interrupts_8051_serial() {
     assert_eq!(out, "ABBBBBB", "TI re-fires each cycle until RETI, out={out}");
     assert_eq!(emu.pc(), 0x28, "the 3-step ISR cycle is CLR TI / MOV SBUF / RETI");
 }
+
+#[test]
+fn keyboard_8086() {
+    // AH=01 echo read: key popped, echoed
+    let src = "ORG 100h\nMOV AH, 01h\nINT 21h\nMOV CL, AL\nMOV AH, 02h\nMOV DL, AL\nINT 21h\nMOV AH, 4Ch\nINT 21h\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.push_key(b'A');
+    emu.run(100);
+    assert_eq!(emu.take_output(), "AA", "AH=01 must echo the key, AH=02 prints it again");
+    assert_eq!(reg(&emu.regs(), "CX"), b'A' as u32, "the key must land in AL (via CL)");
+
+    // AH=07 no echo
+    let src = "ORG 100h\nMOV AH, 07h\nINT 21h\nMOV AH, 4Ch\nINT 21h\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.push_key(b'X');
+    emu.run(100);
+    assert_eq!(emu.take_output(), "", "AH=07 must not echo");
+    assert_eq!(reg(&emu.regs(), "AX") & 0xFF, b'X' as u32);
+}
+
+#[test]
+fn keyboard_pending_8086() {
+    // Empty buffer: run() must stop, waiting_input() true, IP re-pointed at INT 21h
+    let src = "ORG 100h\nMOV AH, 01h\nINT 21h\nMOV AH, 4Ch\nINT 21h\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert!(emu.waiting_input(), "run must stop blocked on input");
+    assert_eq!(emu.pc(), 0x102, "IP must point back at the INT 21h to re-execute");
+
+    // Push a key -> the blocked INT re-executes and consumes it
+    emu.push_key(b'K');
+    assert!(!emu.waiting_input());
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "AX") & 0xFF, b'K' as u32);
+    assert!(emu.is_halted(), "program must finish after the key");
+
+    // step() must not advance while blocked
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble("ORG 100h\nMOV AH, 01h\nINT 21h\nHLT\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.step();
+    emu.step(); // INT 21h with empty buffer
+    let pc = emu.pc();
+    emu.step();
+    assert_eq!(emu.pc(), pc, "step must not execute while input is pending");
+}
+
+#[test]
+fn keyboard_flush_8086() {
+    // AH=0C AL=00 flushes queued keys; a later AH=01 blocks until a new key
+    let src = "ORG 100h\nMOV AH, 0Ch\nMOV AL, 00h\nINT 21h\nMOV AH, 01h\nINT 21h\nMOV AH, 4Ch\nINT 21h\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.push_key(b'a');
+    emu.push_key(b'b');
+    emu.run(100);
+    assert!(emu.waiting_input(), "flushed keys must not satisfy the AH=01 read");
+    emu.push_key(b'z');
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "AX") & 0xFF, b'z' as u32, "only the post-flush key must be read");
+}

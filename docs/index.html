@@ -78,6 +78,19 @@
 
   <div id="errpop"></div>
 
+  <div id="inputModal" class="modal" style="display:none">
+    <div class="modal-box">
+      <h3>Program needs keyboard input</h3>
+      <p>The 8086 is waiting for INT&nbsp;21h input (AH=01). Type something
+         (all characters are queued as type-ahead):</p>
+      <input id="inputField" type="text" autocomplete="off" spellcheck="false">
+      <div class="modal-buttons">
+        <button id="inputOk">Send input</button>
+        <button id="inputCancel">Skip (send nothing)</button>
+      </div>
+    </div>
+  </div>
+
   <footer id="statusbar">
     <span>PC <b id="sbPc">—</b></span>
     <span>Steps <b id="sbSteps">0</b></span>

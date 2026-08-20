@@ -11,12 +11,14 @@ export const emulator_mem: (a: number, b: number, c: number) => [number, number]
 export const emulator_new: (a: number, b: number) => [number, number, number];
 export const emulator_out: (a: number) => [number, number];
 export const emulator_pc: (a: number) => number;
+export const emulator_push_key: (a: number, b: number) => void;
 export const emulator_regs: (a: number) => [number, number];
 export const emulator_reset: (a: number) => void;
 export const emulator_restore: (a: number, b: number, c: number) => void;
 export const emulator_run: (a: number, b: number) => number;
 export const emulator_snapshot: (a: number) => [number, number];
 export const emulator_step: (a: number) => void;
+export const emulator_waiting_input: (a: number) => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

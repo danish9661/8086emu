@@ -4,6 +4,8 @@
 //! service subset so classic lab programs (INT 21h AH=09 string print,
 //! AH=02 char print, AH=4C exit, INT 10h AH=0Eh) run headlessly.
 
+use std::collections::VecDeque;
+
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg, RunResult};
 
 const MEM_SIZE: usize = 1 << 20; // 1 MiB
@@ -31,6 +33,9 @@ pub struct Cpu8086 {
     // pending string-op repeat prefix state
     rep: Option<bool>, // None=no prefix, Some(repe)=F3/F2
     seg_ov: Option<u16>, // segment override for next instruction
+    // keyboard input: INT 21h AH=01/06/07/08/0C pop from here
+    keybuf: VecDeque<u8>,
+    input_pending: bool, // INT 21h read with empty buffer: IP re-pointed, CPU blocked
 }
 
 impl Default for Cpu8086 {
@@ -50,6 +55,8 @@ impl Cpu8086 {
             fault: None,
             rep: None,
             seg_ov: None,
+            keybuf: VecDeque::new(),
+            input_pending: false,
         };
         c.reset();
         c
@@ -278,11 +285,41 @@ impl Cpu8086 {
     }
 
     // ----- DOS/BIOS services -----
+    /// Queue a key for INT 21h AH=01/06/07/08/0C reads. Clears the
+    /// input-pending state so a blocked INT 21h can re-execute.
+    pub fn push_key(&mut self, ch: u8) {
+        self.keybuf.push_back(ch);
+        self.input_pending = false;
+    }
+
+    pub fn waiting_input(&self) -> bool { self.input_pending }
+
+    fn key_read(&mut self) -> Option<u8> { self.keybuf.pop_front() }
+
+    /// INT 21h input read. With an empty buffer the IP is re-pointed at the
+    /// INT 21h instruction and the CPU blocks until push_key() is called.
+    fn int_read(&mut self, echo: bool) {
+        match self.key_read() {
+            Some(k) => {
+                self.set_al(k);
+                if echo { self.out.put_char(k as char); }
+            }
+            None => {
+                self.input_pending = true;
+                self.ip = self.ip.wrapping_sub(2); // re-execute INT 21h
+            }
+        }
+    }
+
     fn int_service(&mut self, n: u8) {
         match (n, self.ah()) {
-            (0x21, 0x01) | (0x21, 0x07) => { self.set_al(0x00); } // no keyboard: EOF-ish
+            (0x21, 0x01) => self.int_read(true),                 // read char, echo
+            (0x21, 0x07) | (0x21, 0x08) => self.int_read(false), // read, no echo
             (0x21, 0x02) => { self.out.put_char(self.dl() as char); }
-            (0x21, 0x06) => { self.out.put_char(self.dl() as char); }
+            (0x21, 0x06) => {
+                if self.dl() == 0xFF { self.int_read(false); }   // direct read
+                else { self.out.put_char(self.dl() as char); }   // direct write
+            }
             (0x21, 0x09) => {
                 let mut a = self.phys(self.ds, self.dx);
                 loop {
@@ -292,7 +329,14 @@ impl Cpu8086 {
                     self.out.put_char(c as char);
                 }
             }
-            (0x21, 0x0C) => { self.set_al(0x00); }
+            (0x21, 0x0C) => { // flush buffer, then optionally read (AL=01/06/07/08)
+                self.keybuf.clear();
+                match self.al() {
+                    0x01 => self.int_read(true),
+                    0x06..=0x08 => self.int_read(false),
+                    _ => {}
+                }
+            }
             (0x21, 0x4C) => { self.halted = true; }
             (0x10, 0x0E) => { self.out.put_char(self.al() as char); }
             (0x10, 0x0F) => { self.set_ah(0x03); self.set_al(0x00); } // video mode
@@ -1053,10 +1097,13 @@ impl Cpu for Cpu8086 {
         self.fault = None;
         self.rep = None;
         self.seg_ov = None;
+        self.keybuf.clear();
+        self.input_pending = false;
     }
 
     fn step(&mut self) -> bool {
         if self.halted { return false; }
+        if self.input_pending { return true; } // blocked on INT 21h input
         self.exec();
         !self.halted
     }
@@ -1112,14 +1159,17 @@ impl Cpu for Cpu8086 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(32 + MEM_SIZE);
+        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len());
         v.push(1); // version
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
         }
         v.push(self.halted as u8);
+        v.push(self.input_pending as u8);
         v.extend_from_slice(&self.mem.data);
+        v.extend_from_slice(&(self.keybuf.len() as u16).to_le_bytes());
+        v.extend_from_slice(&self.keybuf.iter().copied().collect::<Vec<_>>());
         v
     }
 
@@ -1136,14 +1186,24 @@ impl Cpu for Cpu8086 {
         self.cs = rd(); self.ds = rd(); self.es = rd(); self.ss = rd();
         self.ip = rd(); self.flags = rd();
         self.halted = data.get(29).is_some_and(|b| *b != 0);
-        let body = &data[30..];
+        self.input_pending = data.get(30).is_some_and(|b| *b != 0);
+        let body = &data[31..];
         let n = body.len().min(MEM_SIZE);
         self.mem.data[..n].copy_from_slice(&body[..n]);
+        self.keybuf.clear();
+        if body.len() > MEM_SIZE + 2 {
+            let klen = (body[MEM_SIZE] as usize) | ((body[MEM_SIZE + 1] as usize) << 8);
+            for &b in body[MEM_SIZE + 2..].iter().take(klen) {
+                self.keybuf.push_back(b);
+            }
+        }
         self.rep = None;
         self.seg_ov = None;
     }
 
     fn is_halted(&self) -> bool { self.halted }
+
+    fn waiting_input(&self) -> bool { self.input_pending }
 }
 
 impl RunResult {

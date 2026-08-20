@@ -3,6 +3,49 @@ import init, { Emulator } from './pkg/multi_cpu_emu.js';
 const EXAMPLES = {
   '8086': [
     {
+      name: 'Keyboard input (AH=01)',
+      src: `; Reads a key with INT 21h AH=01. While running, a
+; dialog pops up and any text you type is queued as
+; type-ahead (each INT 21h pops the next character).
+ORG 100h
+MOV AH, 01h
+INT 21h         ; read char, echo it
+MOV BL, AL
+MOV AH, 09h
+MOV DX, OFFSET msg
+INT 21h         ; "You pressed: $"
+MOV AH, 02h
+MOV DL, BL
+INT 21h
+MOV AH, 4Ch
+INT 21h
+msg: DB 'You pressed: $'
+END
+`,
+    },
+    {
+      name: 'Keyboard echo loop (AH=07)',
+      src: `; Reads 5 characters with AH=07 (no echo) and prints
+; them back with AH=02. Type 5 chars in the dialog and
+; watch them appear when the program runs.
+ORG 100h
+MOV CX, 5
+again:
+MOV AH, 07h
+INT 21h         ; read without echo
+MOV DL, AL
+MOV AH, 02h
+INT 21h         ; print it
+MOV AH, 02h
+MOV DL, 20h     ; space
+INT 21h
+LOOP again
+MOV AH, 4Ch
+INT 21h
+END
+`,
+    },
+    {
       name: 'Hello (INT 21h)',
       src: `; Print a message with DOS service INT 21h, AH=09
 ; then exit with AH=4Ch
@@ -287,7 +330,33 @@ const editor = $('editor'), gutter = $('gutter'), errorsBox = $('errors'),
 function newEmulator() {
   emu = new Emulator(isa);
   steps = 0; accumOut = '';
+  closeInput();
 }
+
+// ---------- keyboard input (8086 INT 21h AH=01/06/07/08/0C) ----------
+let inputOpen = false;
+function maybePromptInput() {
+  if (inputOpen || !emu.waiting_input() || emu.halted()) return;
+  inputOpen = true;
+  const m = $('inputModal'), f = $('inputField');
+  m.style.display = 'flex';
+  f.value = '';
+  f.focus();
+}
+function submitInput() {
+  const text = $('inputField').value;
+  for (const ch of text) emu.push_key(ch.charCodeAt(0) & 0xFF);
+  closeInput();
+  refresh();
+  if (emu.waiting_input()) maybePromptInput(); // program asked again immediately
+}
+function closeInput() {
+  inputOpen = false;
+  $('inputModal').style.display = 'none';
+}
+$('inputOk').onclick = submitInput;
+$('inputCancel').onclick = () => { closeInput(); refresh(); };
+$('inputField').onkeydown = (e) => { if (e.key === 'Enter') submitInput(); };
 
 function entry() { return ISA_INFO[isa].entry; }
 
@@ -347,7 +416,7 @@ function refresh() {
   // --- status ---
   $('sbPc').textContent = ISA_INFO[isa].pcLabel(pc, regs);
   $('sbSteps').textContent = steps;
-  $('sbState').textContent = emu.halted() ? 'halted' : (runTimer ? 'running…' : 'ready');
+  $('sbState').textContent = emu.halted() ? 'halted' : (emu.waiting_input() ? 'waiting for input' : (runTimer ? 'running…' : 'ready'));
   $('stepBtn').disabled = runTimer || emu.halted();
   $('runBtn').disabled = runTimer || emu.halted();
   $('stopBtn').disabled = !runTimer;
@@ -468,6 +537,7 @@ function stepOnce() {
   emu.step();
   steps++;
   refresh();
+  maybePromptInput();
 }
 
 function startRun() {
@@ -477,6 +547,7 @@ function startRun() {
     const n = emu.run(30000);
     steps += n;
     refresh();
+    if (emu.waiting_input()) { stopRun(); maybePromptInput(); }
     if (emu.halted() || stopRequested) stopRun();
   }, 16);
   $('stopBtn').disabled = false;

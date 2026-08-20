@@ -120,6 +120,21 @@ impl Emulator {
         }
     }
 
+    /// Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
+    pub fn push_key(&mut self, ch: u8) {
+        if let Emulator::I8086(c) = self {
+            c.push_key(ch);
+        }
+    }
+
+    /// True while the 8086 is blocked on an INT 21h read with an empty buffer.
+    pub fn waiting_input(&self) -> bool {
+        match self {
+            Emulator::I8086(c) => c.waiting_input(),
+            _ => false,
+        }
+    }
+
     fn cpu(&mut self) -> &mut dyn Cpu {
         match self {
             Emulator::I8086(c) => c.as_mut(),

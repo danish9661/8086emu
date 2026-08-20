@@ -112,10 +112,16 @@ pub trait Cpu {
     fn snapshot(&self) -> Vec<u8>;
     fn restore(&mut self, data: &[u8]);
     fn is_halted(&self) -> bool;
+    /// True while the CPU is blocked waiting for keyboard input
+    /// (8086 INT 21h AH=01/06/07/08/0C with an empty input buffer).
+    fn waiting_input(&self) -> bool { false }
 
     fn run(&mut self, max_steps: u32) -> RunResult {
         let mut r = RunResult::default();
         while r.steps < max_steps && !self.is_halted() {
+            if self.waiting_input() {
+                break; // blocked on input: caller should push a key and resume
+            }
             if !self.step() {
                 r.halted = true;
                 break;
