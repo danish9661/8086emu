@@ -115,6 +115,15 @@ impl Emulator {
     }
 
     /// Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
+    pub fn port_read(&self, port: u8) -> u8 {
+        self.inner.port_read(port)
+    }
+
+    /// Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins).
+    pub fn port_write(&mut self, port: u8, val: u8) {
+        self.inner.port_write(port, val);
+    }
+
     pub fn push_key(&mut self, ch: u8) {
         self.inner.push_key(ch);
     }

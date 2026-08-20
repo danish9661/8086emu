@@ -134,6 +134,22 @@ export class Emulator {
     }
     /**
      * Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
+     * @param {number} port
+     * @returns {number}
+     */
+    port_read(port) {
+        const ret = wasm.emulator_port_read(this.__wbg_ptr, port);
+        return ret;
+    }
+    /**
+     * Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins).
+     * @param {number} port
+     * @param {number} val
+     */
+    port_write(port, val) {
+        wasm.emulator_port_write(this.__wbg_ptr, port, val);
+    }
+    /**
      * @param {number} ch
      */
     push_key(ch) {

@@ -405,6 +405,21 @@ fn encode_instr(
                 return Err("LEA: needs reg16, mem".into());
             }
         }
+        // ---------------- IN / OUT ----------------
+        "IN" => match (a, b) {
+            (Some(Operand::Reg8(0)), Some(Operand::Imm(v))) => { o.push(0xE4); o.push(*v as u8); }
+            (Some(Operand::Reg16(0)), Some(Operand::Imm(v))) => { o.push(0xE5); o.push(*v as u8); }
+            (Some(Operand::Reg8(0)), Some(Operand::Reg16(2))) => o.push(0xEC),
+            (Some(Operand::Reg16(0)), Some(Operand::Reg16(2))) => o.push(0xED),
+            _ => return Err("IN: needs AL/AX, port (imm8 or DX)".into()),
+        },
+        "OUT" => match (a, b) {
+            (Some(Operand::Imm(v)), Some(Operand::Reg8(0))) => { o.push(0xE6); o.push(*v as u8); }
+            (Some(Operand::Imm(v)), Some(Operand::Reg16(0))) => { o.push(0xE7); o.push(*v as u8); }
+            (Some(Operand::Reg16(2)), Some(Operand::Reg8(0))) => o.push(0xEE),
+            (Some(Operand::Reg16(2)), Some(Operand::Reg16(0))) => o.push(0xEF),
+            _ => return Err("OUT: needs port (imm8 or DX), AL/AX".into()),
+        },
         // ---------------- INC / DEC / NEG / NOT / MUL / IMUL / DIV / IDIV ----------------
         "INC" => match a {
             Some(Operand::Reg16(r)) => o.push(0x40 + *r),

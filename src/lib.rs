@@ -16,14 +16,14 @@ use cpu::{Cpu, FlagSet, Output, Reg, RunResult};
 /// Facade over the three cores. The WASM surface and CLI both use this.
 pub enum Emulator {
     I8086(Box<i8086::Cpu8086>),
-    I8085(i8085::Cpu8085),
+    I8085(Box<i8085::Cpu8085>),
     Mcs51(Box<mcs51::Cpu8051>),
 }
 
 pub fn make_emulator(isa: &str) -> Result<Emulator, String> {
     match isa.to_ascii_uppercase().as_str() {
         "8086" | "X86" => Ok(Emulator::I8086(Box::<i8086::Cpu8086>::default())),
-        "8085" => Ok(Emulator::I8085(i8085::Cpu8085::new())),
+        "8085" => Ok(Emulator::I8085(Box::default())),
         "8051" | "MCS51" | "MCS-51" => Ok(Emulator::Mcs51(Box::<mcs51::Cpu8051>::default())),
         other => Err(format!("unknown ISA '{other}'; expected 8086, 8085 or 8051")),
     }
@@ -129,6 +129,26 @@ impl Emulator {
         }
     }
 
+    /// Read an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins
+    /// merged with the latch, quasi-bidirectional).
+    pub fn port_read(&self, port: u8) -> u8 {
+        match self {
+            Self::I8085(c) => c.ports[port as usize],
+            Self::I8086(c) => c.ports[port as usize],
+            Self::Mcs51(c) => c.port_read(port),
+        }
+    }
+
+    /// Write an I/O port byte (8085/8086: port space; 8051: P0-P3 external
+    /// pin state that port reads observe). No print side effects here.
+    pub fn port_write(&mut self, port: u8, v: u8) {
+        match self {
+            Self::I8085(c) => c.ports[port as usize] = v,
+            Self::I8086(c) => c.ports[port as usize] = v,
+            Self::Mcs51(c) => c.port_write(port, v),
+        }
+    }
+
     /// Read the SFR / internal-RAM byte at the given address (8051 only).
     pub fn sfr(&self, addr: u8) -> u8 {
         match self {
@@ -155,7 +175,7 @@ impl Emulator {
     fn cpu(&mut self) -> &mut dyn Cpu {
         match self {
             Emulator::I8086(c) => c.as_mut(),
-            Emulator::I8085(c) => c,
+            Emulator::I8085(c) => c.as_mut(),
             Emulator::Mcs51(c) => c.as_mut(),
         }
     }
@@ -163,7 +183,7 @@ impl Emulator {
     fn cpu_ref(&self) -> &dyn Cpu {
         match self {
             Emulator::I8086(c) => c.as_ref(),
-            Emulator::I8085(c) => c,
+            Emulator::I8085(c) => c.as_ref(),
             Emulator::Mcs51(c) => c.as_ref(),
         }
     }
@@ -171,7 +191,7 @@ impl Emulator {
     fn output_mut(&mut self) -> &mut Output {
         match self {
             Emulator::I8086(c) => &mut c.as_mut().out,
-            Emulator::I8085(c) => &mut c.out,
+            Emulator::I8085(c) => &mut c.as_mut().out,
             Emulator::Mcs51(c) => &mut c.as_mut().out,
         }
     }

@@ -36,6 +36,8 @@ pub struct Cpu8086 {
     // keyboard input: INT 21h AH=01/06/07/08/0C pop from here
     keybuf: VecDeque<u8>,
     input_pending: bool, // INT 21h read with empty buffer: IP re-pointed, CPU blocked
+    /// I/O port space (256 ports); OUT to port 01h also prints AL.
+    pub ports: [u8; 256],
 }
 
 impl Default for Cpu8086 {
@@ -56,6 +58,7 @@ impl Cpu8086 {
             rep: None,
             seg_ov: None,
             keybuf: VecDeque::new(),
+            ports: [0; 256],
             input_pending: false,
         };
         c.reset();
@@ -295,6 +298,20 @@ impl Cpu8086 {
     pub fn waiting_input(&self) -> bool { self.input_pending }
 
     fn key_read(&mut self) -> Option<u8> { self.keybuf.pop_front() }
+
+    fn port_in16(&self, p: usize) -> u16 {
+        self.ports[p] as u16 | (self.ports[(p + 1) & 0xFF] as u16) << 8
+    }
+    fn port_out8(&mut self, p: usize, v: u8) {
+        self.ports[p] = v;
+        if p == 0x01 {
+            self.out.put_char(v as char);
+        }
+    }
+    fn port_out16(&mut self, p: usize, v: u16) {
+        self.port_out8(p, v as u8);
+        self.ports[(p + 1) & 0xFF] = (v >> 8) as u8;
+    }
 
     /// INT 21h input read. With an empty buffer the IP is re-pointed at the
     /// INT 21h instruction and the CPU blocks until push_key() is called.
@@ -599,10 +616,10 @@ impl Cpu8086 {
                     _ => { if cx == 0 { self.ip = self.ip.wrapping_add_signed(d); } }
                 }
             }
-            0xE4 => { self.set_al(0); let _ = self.fetch8(); } // IN AL,imm8
-            0xE5 => { self.ax = 0; let _ = self.fetch8(); }
-            0xE6 => { let _ = self.fetch8(); } // OUT imm8,AL
-            0xE7 => { let _ = self.fetch8(); }
+            0xE4 => { let p = self.fetch8() as usize; self.set_al(self.ports[p]); } // IN AL,imm8
+            0xE5 => { let p = self.fetch8() as usize; self.ax = self.port_in16(p); }
+            0xE6 => { let p = self.fetch8() as usize; self.port_out8(p, self.al()); } // OUT imm8,AL
+            0xE7 => { let p = self.fetch8() as usize; self.port_out16(p, self.ax); }
             0xE8 => { // CALL rel16
                 let d = self.fetch16() as i16;
                 self.push16(self.ip);
@@ -611,9 +628,10 @@ impl Cpu8086 {
             0xE9 => { let d = self.fetch16() as i16; self.ip = self.ip.wrapping_add_signed(d); }
             0xEA => { let off = self.fetch16(); let seg = self.fetch16(); self.cs = seg; self.ip = off; }
             0xEB => { let d = self.fetch8() as i8 as i16; self.ip = self.ip.wrapping_add_signed(d); }
-            0xEC => { self.set_al(0); } // IN AL,DX
-            0xED => { self.ax = 0; }
-            0xEE | 0xEF => {} // OUT DX,AL/AX
+            0xEC => { let p = self.dx as usize & 0xFF; self.set_al(self.ports[p]); } // IN AL,DX
+            0xED => { let p = self.dx as usize & 0xFF; self.ax = self.port_in16(p); }
+            0xEE => { let p = self.dx as usize & 0xFF; self.port_out8(p, self.al()); } // OUT DX,AL
+            0xEF => { let p = self.dx as usize & 0xFF; self.port_out16(p, self.ax); }
             0xF0 => {} // LOCK
             0xF4 => { self.halted = true; }
             0xF5 => { self.flags ^= CF; }
@@ -1162,8 +1180,8 @@ impl Cpu for Cpu8086 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len());
-        v.push(1); // version
+        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256);
+        v.push(2); // version
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -1173,10 +1191,13 @@ impl Cpu for Cpu8086 {
         v.extend_from_slice(&self.mem.data);
         v.extend_from_slice(&(self.keybuf.len() as u16).to_le_bytes());
         v.extend_from_slice(&self.keybuf.iter().copied().collect::<Vec<_>>());
+        v.extend_from_slice(&self.ports);
         v
     }
 
     fn restore(&mut self, data: &[u8]) {
+        if data.is_empty() { return; }
+        let ver = data[0];
         if data.len() < 30 { return; }
         let mut it = data.iter().copied().skip(1);
         let mut rd = || -> u16 {
@@ -1194,10 +1215,16 @@ impl Cpu for Cpu8086 {
         let n = body.len().min(MEM_SIZE);
         self.mem.data[..n].copy_from_slice(&body[..n]);
         self.keybuf.clear();
+        self.ports = [0; 256];
         if body.len() > MEM_SIZE + 2 {
             let klen = (body[MEM_SIZE] as usize) | ((body[MEM_SIZE + 1] as usize) << 8);
             for &b in body[MEM_SIZE + 2..].iter().take(klen) {
                 self.keybuf.push_back(b);
+            }
+            if ver >= 2 {
+                let start = MEM_SIZE + 2 + klen;
+                let n = body.len().saturating_sub(start).min(256);
+                self.ports[..n].copy_from_slice(&body[start..start + n]);
             }
         }
         self.rep = None;

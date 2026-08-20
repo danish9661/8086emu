@@ -147,6 +147,8 @@ pub trait Cpu {
   INT n/INT3/INTO/IRET, NOP, HLT.
 - DOS/BIOS service subset: INT 21h (AH=01, 02, 06, 07, 08, 09, 0C, 4Ch),
   INT 10h (AH=0Eh). Output goes to the `Output` buffer.
+- I/O ports: IN/OUT (imm8 and DX forms) over a 256-byte port space;
+  OUT to port 01h also prints AL to `Output` (8085-style convention).
 - Keyboard input: `Emulator::push_key(ch)` / wasm `push_key()` queue
   type-ahead characters; INT 21h AH=01 (echo)/06/07/08/0C pop the next char.
   With an empty buffer the CPU blocks: `waiting_input()` is true, IP is
@@ -159,7 +161,8 @@ pub trait Cpu {
   SBB/ANA/XRA/ORA/CMP (+immediate ADI/ACI/SUI/SBI/ANI/XRI/ORI/CPI), INR/DCR/
   INX/DCX/DAD, RLC/RRC/RAL/RAR/CMA/CMC/STC/DAA, JMP/Jcc/CALL/Ccc/RET/Rcc/RST,
   PUSH/POP (regs + PSW), XTHL/SPHL/PCHL, IN/OUT, EI/DI, SIM/RIM, NOP, HLT.
-- OUT to port 01h prints the char in A to `Output` (documented convention).
+- OUT to port 01h prints the char in A to `Output` (documented convention);
+  IN/OUT read/write a 256-byte port space (`Cpu8085::ports`).
 - Hardware interrupts (raised via `Cpu8085::request_interrupt(kind)` /
   `Emulator::request_interrupt(kind, data)` / wasm `interrupt()`): TRAP
   (vector 0x24, non-maskable, keeps IE), RST 7.5/6.5/5.5 (0x3C/0x34/0x2C,
@@ -184,6 +187,9 @@ pub trait Cpu {
   SBUF, IE, IP. Timer 0/1 count on each step while TRx=1 (no real-time
   calibration); writing SBUF emits a char to `Output` and sets TI
   (transmit-complete).
+- Port model: P0–P3 SFRs are the port latches; `Emulator::port_write(port,
+  0-3, v)` injects external pin state and a port read returns `latch | pin`
+  (quasi-bidirectional). Bit ops on port bits observe the same merged value.
 - Interrupts (checked at the end of `step()`, never while halted):
   INT0/INT1 (external, raised via `Emulator::request_interrupt("INT0|INT1")`
   / wasm `interrupt()`), TF0/TF1 (timers), serial (RI|TI). Vectors
@@ -237,7 +243,9 @@ push_key(ch: u8)                         // 8086 keyboard input (type-ahead)
 reset()
 snapshot() -> Vec<u8>
 restore(data: &[u8])
-interrupt(kind: &str, data: u32)         // 8085: TRAP|RST75|RST65|RST55|INTR; 8051: INT0|INT1
+port_read(port: u8) -> u8             // 8085/8086 port space; 8051 P0-P3 (latch|pin)
+port_write(port: u8, val: u8)        // 8085/8086 port space; 8051 pin injection
+interrupt(kind: &str, data: u32)     // 8085: TRAP|RST75|RST65|RST55|INTR; 8051: INT0|INT1
 ```
 
 ## Conventions

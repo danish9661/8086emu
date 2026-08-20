@@ -967,3 +967,94 @@ fn run_to_step_over_call() {
     assert_eq!(reg(&emu.regs(), "BX"), 0x5678, "callee ran");
     assert_eq!(reg(&emu.regs(), "AX"), 0, "caller code after the call must not run");
 }
+
+#[test]
+fn ports_8086_in_out() {
+    // fixed-port and DX forms of IN/OUT round-trip; OUT 01h prints AL
+    let src = r#"
+        ORG 100h
+        MOV AL, 42h
+        OUT 03h, AL          ; port 3 = 0x42
+        MOV AL, 00h
+        IN AL, 03h           ; AL = 0x42
+        MOV DX, 0004h
+        MOV AX, 1234h
+        OUT DX, AX           ; ports 4-5 = 34 12
+        MOV AX, 0000h
+        IN AX, DX            ; AX = 0x1234
+        MOV BX, AX           ; save it
+        MOV AL, 55h
+        OUT DX, AL           ; port 4 = 0x55 (port 5 unchanged)
+        MOV AL, 'Q'
+        OUT 01h, AL          ; prints 'Q'
+        MOV AH, 4Ch
+        INT 21h
+        END
+    "#;
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(1000);
+    assert_eq!(reg(&emu.regs(), "BX"), 0x1234, "IN AX,DX after OUT DX,AX");
+    assert_eq!(emu.take_output(), "Q", "OUT 01h prints");
+    assert_eq!(emu.port_read(3), 0x42);
+    assert_eq!(emu.port_read(4), 0x55);
+    assert_eq!(emu.port_read(5), 0x12);
+}
+
+#[test]
+fn ports_8085_in_out() {
+    let src = r#"
+        ORG 0
+        MVI A, 07h
+        OUT 05h
+        MVI A, 00h
+        IN 05h
+        MOV B, A
+        MVI A, 'K'
+        OUT 01h              ; prints 'K'
+        HLT
+        END
+    "#;
+    let (regs, out, _) = run_asm("8085", src, 100);
+    assert_eq!(reg(&regs, "B"), 0x07, "IN reads back the OUT value");
+    assert_eq!(out, "K");
+}
+
+#[test]
+fn ports_8051_pin_input() {
+    // injected pins are visible on port reads (latch | pin)
+    let src = r#"
+        MOV P1, #00h
+        MOV A, P1            ; A = latch(0) | pin(0x55)
+        MOV R0, A
+        MOV B, P2            ; no injection: 0
+        SJMP $
+        END
+    "#;
+    let mut emu = make_emulator("8051").unwrap();
+    emu.port_write(1, 0x55);
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "A"), 0x55, "pin state observed on P1 read");
+    assert_eq!(reg(&emu.regs(), "R0"), 0x55);
+    assert_eq!(reg(&emu.regs(), "B"), 0x00, "P2 has no injection");
+}
+
+#[test]
+fn ports_8051_latch_without_pins() {
+    // MOV Pn,#v writes the latch; reads return it when no pins are driven
+    let src = r#"
+        MOV P1, #0Fh
+        MOV A, P1
+        MOV P2, #0AAh
+        MOV R1, P2
+        SJMP $
+        END
+    "#;
+    let (regs, _, _) = run_asm("8051", src, 100);
+    assert_eq!(reg(&regs, "A"), 0x0F);
+    assert_eq!(reg(&regs, "R1"), 0xAA);
+}

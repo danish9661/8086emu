@@ -28,6 +28,8 @@ pub struct Cpu8085 {
     pub intr_vector: Option<u8>,
     pub sid: bool,
     pub sod: bool,
+    /// I/O port space (256 ports); OUT to port 01h also prints A.
+    pub ports: [u8; 256],
 }
 
 impl Default for Cpu8085 {
@@ -50,6 +52,7 @@ impl Cpu8085 {
             pending_trap: false,
             intr_vector: None,
             sid: false, sod: false,
+            ports: [0; 256],
         };
         c.reset();
         c
@@ -375,12 +378,13 @@ impl Cpu8085 {
                 self.pc = (op & 0x38) as u16;
             }
             0xD3 => { // OUT port
-                let port = self.fetch8();
+                let port = self.fetch8() as usize;
+                self.ports[port] = self.a;
                 if port == 0x01 {
                     self.out.put_char(self.a as char);
                 }
             }
-            0xDB => { let _ = self.fetch8(); self.a = 0x00; } // IN
+            0xDB => { let port = self.fetch8() as usize; self.a = self.ports[port]; } // IN
             0xFB => self.int_enabled = true,
             0xF3 => self.int_enabled = false,
             _ => self.unimplemented(op),
@@ -496,8 +500,8 @@ impl Cpu for Cpu8085 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(16 + MEM_SIZE);
-        v.push(1);
+        let mut v = Vec::with_capacity(16 + MEM_SIZE + 256);
+        v.push(2);
         v.extend_from_slice(&[self.a, self.b, self.c, self.d, self.e, self.h, self.l]);
         v.extend_from_slice(&self.sp.to_le_bytes());
         v.extend_from_slice(&self.pc.to_le_bytes());
@@ -517,10 +521,13 @@ impl Cpu for Cpu8085 {
         v.push(self.sid as u8);
         v.push(self.sod as u8);
         v.extend_from_slice(&self.mem.data);
+        v.extend_from_slice(&self.ports);
         v
     }
 
     fn restore(&mut self, data: &[u8]) {
+        if data.is_empty() { return; }
+        let ver = data[0];
         if data.len() < 14 { return; }
         self.a = data[1]; self.b = data[2]; self.c = data[3]; self.d = data[4];
         self.e = data[5]; self.h = data[6]; self.l = data[7];
@@ -544,6 +551,12 @@ impl Cpu for Cpu8085 {
         let body = &data[25..];
         let n = body.len().min(MEM_SIZE);
         self.mem.data[..n].copy_from_slice(&body[..n]);
+        self.ports = [0; 256];
+        if ver >= 2 && body.len() > MEM_SIZE {
+            let start = MEM_SIZE;
+            let n2 = body.len().saturating_sub(start).min(256);
+            self.ports[..n2].copy_from_slice(&body[start..start + n2]);
+        }
     }
 
     fn is_halted(&self) -> bool { self.halted }

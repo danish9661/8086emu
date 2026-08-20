@@ -31,6 +31,9 @@ pub struct Cpu8051 {
     pub iram: [u8; 128],
     pub sfr: [u8; 128],
     pub xdata: Mem,
+    /// External pin state for P0-P3; reads of a port return `latch | pin`
+    /// (quasi-bidirectional model). Set via `Emulator::port_write`.
+    pub port_pins: [u8; 4],
     pub code: Mem,
     pub pc: u16,
     pub out: Output,
@@ -50,6 +53,7 @@ impl Cpu8051 {
             iram: [0; 128],
             sfr: [0; 128],
             xdata: Mem::new(XDATA_SIZE),
+            port_pins: [0; 4],
             code: Mem::new(CODE_SIZE),
             pc: 0,
             out: Output::default(),
@@ -107,7 +111,15 @@ impl Cpu8051 {
     #[inline] fn ri(&self, i: u8) -> u8 { self.iram[(self.bank() * 8 + i as usize) & 0xFF] }
 
     fn read_direct(&self, addr: u8) -> u8 {
-        if addr < 0x80 { self.iram[addr as usize] } else { self.sfr[addr as usize - 0x80] }
+        if addr < 0x80 {
+            self.iram[addr as usize]
+        } else {
+            let idx = addr as usize - 0x80;
+            match addr {
+                0x80 | 0x90 | 0xA0 | 0xB0 => self.sfr[idx] | self.port_pins[((addr - 0x80) / 0x10) as usize],
+                _ => self.sfr[idx],
+            }
+        }
     }
     fn write_direct(&mut self, addr: u8, v: u8) {
         if addr < 0x80 {
@@ -124,6 +136,15 @@ impl Cpu8051 {
     }
 
     // bit address -> (byte addr, bit index)
+    /// Inject external pin state for P0-P3 (quasi-bidirectional: a port read
+    /// returns `latch | pin`).
+    pub fn port_write(&mut self, port: u8, v: u8) {
+        if port < 4 { self.port_pins[port as usize] = v; }
+    }
+    pub fn port_read(&self, port: u8) -> u8 {
+        if port < 4 { self.read_direct(0x80 + port * 0x10) } else { 0 }
+    }
+
     fn bit_location(bit: u8) -> (u8, u8) {
         if bit < 0x80 {
             (0x20 + ((bit >> 3).saturating_sub(4)), bit & 7)
@@ -622,8 +643,8 @@ impl Cpu for Cpu8051 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(5 + 128 + 128 + XDATA_SIZE + CODE_SIZE);
-        v.push(2);
+        let mut v = Vec::with_capacity(5 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4);
+        v.push(3);
         v.push(self.halted as u8);
         v.push((self.pc >> 8) as u8);
         v.push(self.pc as u8);
@@ -633,6 +654,7 @@ impl Cpu for Cpu8051 {
         v.extend_from_slice(&self.sfr);
         v.extend_from_slice(&self.xdata.data);
         v.extend_from_slice(&self.code.data);
+        v.extend_from_slice(&self.port_pins);
         v
     }
 
@@ -652,6 +674,10 @@ impl Cpu for Cpu8051 {
         take(128, &mut self.sfr);
         take(XDATA_SIZE, &mut self.xdata.data);
         take(CODE_SIZE, &mut self.code.data);
+        self.port_pins = [0; 4];
+        if data[0] >= 3 {
+            take(4, &mut self.port_pins);
+        }
     }
 
     fn is_halted(&self) -> bool { self.halted }

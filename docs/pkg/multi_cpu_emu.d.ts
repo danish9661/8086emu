@@ -34,6 +34,11 @@ export class Emulator {
     /**
      * Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
      */
+    port_read(port: number): number;
+    /**
+     * Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins).
+     */
+    port_write(port: number, val: number): void;
     push_key(ch: number): void;
     regs(): string[];
     reset(): void;
@@ -73,6 +78,8 @@ export interface InitOutput {
     readonly emulator_new: (a: number, b: number) => [number, number, number];
     readonly emulator_out: (a: number) => [number, number];
     readonly emulator_pc: (a: number) => number;
+    readonly emulator_port_read: (a: number, b: number) => number;
+    readonly emulator_port_write: (a: number, b: number, c: number) => void;
     readonly emulator_push_key: (a: number, b: number) => void;
     readonly emulator_regs: (a: number) => [number, number];
     readonly emulator_reset: (a: number) => void;
