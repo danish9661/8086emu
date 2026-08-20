@@ -72,6 +72,10 @@ impl Emulator {
         self.cpu().run_to(max_steps, target)
     }
 
+    pub fn run_to_bp(&mut self, max_steps: u32, bps: &[u32]) -> RunResult {
+        self.cpu().run_to_bp(max_steps, bps)
+    }
+
     pub fn pc(&self) -> u32 {
         self.cpu_ref().pc()
     }

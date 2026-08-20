@@ -321,7 +321,8 @@ let runTimer = null;
 let stopRequested = false;
 let accumOut = '';
 let errLine = -1;
-let codeMap = [];   // per source line: "ADDR  BYTES" or ''
+let codeMap = [];
+let breakpoints = new Set();   // per source line: "ADDR  BYTES" or ''
 let history = [];   // snapshots for Step-Back
 
 const $ = (id) => document.getElementById(id);
@@ -331,6 +332,7 @@ const editor = $('editor'), gutter = $('gutter'), hl = $('hl'), errorsBox = $('e
 
 function newEmulator() {
   emu = new Emulator(isa);
+  breakpoints = new Set();
   steps = 0; accumOut = '';
   history = [];
   closeInput();
@@ -491,7 +493,8 @@ function renderMem(pcPhys) {
       const i = row + c;
       const b = bytes[i];
       const isPc = i === off;
-      html += isPc ? `<span class="hl">${fmt(b, 2)}</span> ` : `${fmt(b, 2)} `;
+      const cls = isPc ? 'hl' : 'mb';
+      html += `<span class="${cls}" data-addr="${memBase + i}" title="Click to edit [${fmt(memBase + i).padStart(6, '0')}]">${fmt(b, 2)}</span> `;
     }
     html += ' |';
     for (let c = 0; c < 16; c++) {
@@ -505,6 +508,17 @@ function renderMem(pcPhys) {
     ? `PC highlighted (${fmt(pcPhys)})` : `PC ${fmt(pcPhys)} outside view`;
 }
 
+$('memview').addEventListener('click', (e) => {
+  const el = e.target.closest('.mb');
+  if (!el) return;
+  const addr = parseInt(el.dataset.addr, 10);
+  const inp = prompt('Memory [' + fmt(addr).padStart(6, '0') + '] byte (hex, 00-FF)', el.textContent);
+  if (inp === null) return;
+  const v = parseInt(inp.trim(), 16);
+  if (Number.isNaN(v) || v < 0 || v > 0xFF) { toast('Bad byte: ' + inp); return; }
+  emu.mem_write(addr, new Uint8Array([v]));
+  renderMem(emu.pc());
+});
 $('mempgUp').onclick = () => { $('memaddr').value = fmt(Math.max(0, memBase - PAGE)); renderMem(emu.pc()); };
 $('mempgDn').onclick = () => { $('memaddr').value = fmt(memBase + PAGE); renderMem(emu.pc()); };
 $('memaddr').onchange = () => renderMem(emu.pc());
@@ -568,15 +582,25 @@ function buildGutter() {
   for (let i = 0; i < lines.length; i++) {
     const c = codeMap[i] || '';
     const addr = c ? parseInt(c, 16) : 0;
-    html += `<div class="${i + 1 === errLine ? 'err' : ''}" ${addr ? `data-addr="${addr.toString(16)}"` : ''}><span class="n">${i + 1}</span>` +
+    const bp = addr && breakpoints.has(addr) ? ' bp' : '';
+    html += `<div class="${i + 1 === errLine ? 'err' : ''}${bp}" ${addr ? `data-addr="${addr.toString(16)}"` : ''}><span class="n" ${addr ? `data-addr="${addr.toString(16)}"` : ''} title="${addr ? (breakpoints.has(addr) ? 'Remove breakpoint' : 'Toggle breakpoint') : ''}">${i + 1}</span>` +
             (c ? `<span class="c">${c}</span>` : '') + '</div>';
   }
   gutter.innerHTML = html;
 }
 gutter.addEventListener('click', (e) => {
-  const el = e.target.closest('div[data-addr]');
-  if (el) runToLine(parseInt(el.dataset.addr, 16));
+  const el = e.target.closest('[data-addr]');
+  if (!el || el.closest('.err')) return;
+  const addr = parseInt(el.dataset.addr, 16);
+  if (el.classList.contains('n')) toggleBreakpoint(addr);
+  else runToLine(addr);
 });
+
+function toggleBreakpoint(addr) {
+  if (breakpoints.has(addr)) { breakpoints.delete(addr); toast('Breakpoint removed'); }
+  else { breakpoints.add(addr); toast('Breakpoint set at ' + fmt(addr).padStart(4, '0') + 'h'); }
+  renderSource();
+}
 function renderSource() { buildGutter(); renderHl(); }
 editor.oninput = () => { renderSource(); saveSource(); };
 editor.onscroll = () => { gutter.scrollTop = editor.scrollTop; hl.scrollTop = editor.scrollTop; hl.scrollLeft = editor.scrollLeft; };
@@ -691,10 +715,14 @@ function stepOver() {
     maybePromptInput();
     return;
   }
-  const n = emu.run_to(ret, 100000);
+  const active = [...breakpoints].filter(a => a !== emu.pc());
+  const n = emu.run_bp(100000, active.concat([ret]));
   steps += n;
   refresh();
   maybePromptInput();
+  if (!emu.halted() && !emu.waiting_input() && breakpoints.has(emu.pc()) && emu.pc() !== ret) {
+    toast('Breakpoint at ' + fmt(emu.pc()).padStart(4, '0') + 'h');
+  }
 }
 
 function runToLine(addr) {
@@ -702,23 +730,30 @@ function runToLine(addr) {
   history.push(emu.snapshot());
   if (history.length > 50) history.shift();
   if (addr === emu.pc()) return;
-  const n = emu.run_to(addr, 100000);
+  const active = [...breakpoints].filter(a => a !== emu.pc());
+  const n = emu.run_bp(100000, active.concat([addr]));
   steps += n;
   refresh();
   maybePromptInput();
-  if (!emu.halted() && !emu.waiting_input() && emu.pc() !== addr) {
-    toast('Never reached that line (jumped over it?)');
+  if (!emu.halted() && !emu.waiting_input()) {
+    if (breakpoints.has(emu.pc()) && emu.pc() !== addr) toast('Breakpoint at ' + fmt(emu.pc()).padStart(4, '0') + 'h');
+    else if (emu.pc() !== addr) toast('Never reached that line (jumped over it?)');
   }
 }
 
 function startRun() {
   if (emu.halted()) return;
   stopRequested = false;
+  const active = [...breakpoints].filter(a => a !== emu.pc()); // continue past the bp we are stopped at
   runTimer = setInterval(() => {
-    const n = emu.run(30000);
+    const n = emu.run_bp(30000, active);
     steps += n;
     refresh();
     if (emu.waiting_input()) { stopRun(); maybePromptInput(); }
+    else if (n < 30000 && !stopRequested && breakpoints.has(emu.pc())) {
+      stopRun();
+      toast('Breakpoint at ' + fmt(emu.pc()).padStart(4, '0') + 'h');
+    }
     if (emu.halted() || stopRequested) stopRun();
   }, 16);
   $('stopBtn').disabled = false;

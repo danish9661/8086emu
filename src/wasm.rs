@@ -52,6 +52,11 @@ impl Emulator {
         self.inner.step();
     }
 
+    /// Set the program counter (entry point after load).
+    pub fn set_pc(&mut self, addr: u32) {
+        self.inner.set_pc(addr);
+    }
+
     /// Run up to `max_steps` instructions; returns steps executed.
     pub fn run(&mut self, max_steps: u32) -> u32 {
         let r: RunResult = self.inner.run(max_steps);
@@ -62,6 +67,13 @@ impl Emulator {
     /// or halt / blocked on input / max steps. Returns steps executed.
     pub fn run_to(&mut self, target_pc: u32, max_steps: u32) -> u32 {
         let r: RunResult = self.inner.run_to(max_steps, target_pc);
+        r.steps
+    }
+
+    /// Run until PC lands on one of `bps` (that instruction is NOT executed),
+    /// or halt / blocked on input / max steps. Returns steps executed.
+    pub fn run_bp(&mut self, max_steps: u32, bps: Vec<u32>) -> u32 {
+        let r: RunResult = self.inner.run_to_bp(max_steps, &bps);
         r.steps
     }
 
@@ -93,6 +105,11 @@ impl Emulator {
 
     pub fn mem(&self, addr: u32, len: u32) -> Vec<u8> {
         self.inner.mem_read(addr, len as usize)
+    }
+
+    /// Write bytes into memory (IDE memory poking).
+    pub fn mem_write(&mut self, addr: u32, data: &[u8]) {
+        self.inner.mem_write(addr, data);
     }
 
     /// Drain the program output buffer.

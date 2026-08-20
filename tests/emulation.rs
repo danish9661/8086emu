@@ -1058,3 +1058,29 @@ fn ports_8051_latch_without_pins() {
     assert_eq!(reg(&regs, "A"), 0x0F);
     assert_eq!(reg(&regs, "R1"), 0xAA);
 }
+
+#[test]
+fn run_to_bp_breaks_before_target() {
+    let src = "ORG 100h\nMOV AX, 1\nMOV BX, 2\nMOV CX, 3\nMOV AH, 4Ch\nINT 21h\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    let r = emu.run_to_bp(1000, &[0x106]); // MOV CX,3
+    assert_eq!(r.steps, 2);
+    assert_eq!(emu.pc(), 0x106, "stopped before executing the breakpoint");
+    assert_eq!(reg(&emu.regs(), "CX"), 0);
+    let r2 = emu.run_to_bp(1000, &[]); // resume (bp at PC skipped like a debugger): runs to halt
+    assert!(r2.halted);
+}
+
+#[test]
+fn run_to_bp_empty_set_runs_to_halt() {
+    let src = "ORG 0\nMVI A, 01h\nHLT\nEND";
+    let mut emu = make_emulator("8085").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    let r = emu.run_to_bp(1000, &[]);
+    assert!(r.halted);
+    assert_eq!(reg(&emu.regs(), "A"), 1);
+}

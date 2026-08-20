@@ -132,6 +132,24 @@ pub trait Cpu {
         r
     }
 
+    /// Run until PC lands on one of `bps` (that instruction is NOT executed),
+    /// or halted/blocked on input/max steps. Used by the IDE for breakpoints.
+    fn run_to_bp(&mut self, max_steps: u32, bps: &[u32]) -> RunResult {
+        let mut r = RunResult::default();
+        while r.steps < max_steps && !self.is_halted() {
+            if self.waiting_input() || bps.contains(&self.pc()) {
+                break;
+            }
+            if !self.step() {
+                r.halted = true;
+                break;
+            }
+            r.steps += 1;
+        }
+        r.halted = self.is_halted();
+        r
+    }
+
     /// Run until `target` becomes the next instruction to execute (target not
     /// executed), or halted/blocked on input/max steps. Used for step-over
     /// (target = return address) and run-to-line in the debugger.

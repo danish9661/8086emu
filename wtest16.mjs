@@ -1,0 +1,12 @@
+import { writeFileSync } from 'node:fs';
+const js = await (await fetch('http://127.0.0.1:8124/pkg/multi_cpu_emu.js')).text();
+writeFileSync('/tmp/opencode/pkgmod12.mjs', js);
+const mod = await import('file:///tmp/opencode/pkgmod12.mjs?x=' + Date.now());
+const wasmBytes = new Uint8Array(await (await fetch('http://127.0.0.1:8124/pkg/multi_cpu_emu_bg.wasm')).arrayBuffer());
+await mod.default(wasmBytes);
+const { Emulator } = mod;
+const e = new Emulator("8086");
+const src = "ORG 100h\nMOV AX, 1\nMOV BX, 2\nMOV CX, 3\nMOV DX, 4\nMOV AH, 4Ch\nINT 21h\nEND";
+e.load(e.assemble(src), 0);
+const n = e.run_bp(30000, [0x109]);
+console.log("run_bp: steps =", n, "pc =", e.pc().toString(16), "| type:", typeof e.run_bp);

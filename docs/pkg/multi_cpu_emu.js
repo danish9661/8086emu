@@ -96,6 +96,16 @@ export class Emulator {
         return v1;
     }
     /**
+     * Write bytes into memory (IDE memory poking).
+     * @param {number} addr
+     * @param {Uint8Array} data
+     */
+    mem_write(addr, data) {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.emulator_mem_write(this.__wbg_ptr, addr, ptr0, len0);
+    }
+    /**
      * @param {string} isa
      */
     constructor(isa) {
@@ -185,6 +195,19 @@ export class Emulator {
         return ret >>> 0;
     }
     /**
+     * Run until PC lands on one of `bps` (that instruction is NOT executed),
+     * or halt / blocked on input / max steps. Returns steps executed.
+     * @param {number} max_steps
+     * @param {Uint32Array} bps
+     * @returns {number}
+     */
+    run_bp(max_steps, bps) {
+        const ptr0 = passArray32ToWasm0(bps, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.emulator_run_bp(this.__wbg_ptr, max_steps, ptr0, len0);
+        return ret >>> 0;
+    }
+    /**
      * Run until `target` is the next instruction to execute (not executed),
      * or halt / blocked on input / max steps. Returns steps executed.
      * @param {number} target_pc
@@ -194,6 +217,13 @@ export class Emulator {
     run_to(target_pc, max_steps) {
         const ret = wasm.emulator_run_to(this.__wbg_ptr, target_pc, max_steps);
         return ret >>> 0;
+    }
+    /**
+     * Set the program counter (entry point after load).
+     * @param {number} addr
+     */
+    set_pc(addr) {
+        wasm.emulator_set_pc(this.__wbg_ptr, addr);
     }
     /**
      * @returns {Uint8Array}
@@ -279,12 +309,27 @@ function getStringFromWasm0(ptr, len) {
     return decodeText(ptr >>> 0, len);
 }
 
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
+}
+
 let cachedUint8ArrayMemory0 = null;
 function getUint8ArrayMemory0() {
     if (cachedUint8ArrayMemory0 === null || cachedUint8ArrayMemory0.byteLength === 0) {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function passArray32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getUint32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passArray8ToWasm0(arg, malloc) {
@@ -372,6 +417,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
     cachedDataViewMemory0 = null;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

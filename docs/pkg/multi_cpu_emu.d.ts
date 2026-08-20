@@ -25,6 +25,10 @@ export class Emulator {
      */
     load(code: Uint8Array, origin: number): void;
     mem(addr: number, len: number): Uint8Array;
+    /**
+     * Write bytes into memory (IDE memory poking).
+     */
+    mem_write(addr: number, data: Uint8Array): void;
     constructor(isa: string);
     /**
      * Drain the program output buffer.
@@ -48,10 +52,19 @@ export class Emulator {
      */
     run(max_steps: number): number;
     /**
+     * Run until PC lands on one of `bps` (that instruction is NOT executed),
+     * or halt / blocked on input / max steps. Returns steps executed.
+     */
+    run_bp(max_steps: number, bps: Uint32Array): number;
+    /**
      * Run until `target` is the next instruction to execute (not executed),
      * or halt / blocked on input / max steps. Returns steps executed.
      */
     run_to(target_pc: number, max_steps: number): number;
+    /**
+     * Set the program counter (entry point after load).
+     */
+    set_pc(addr: number): void;
     snapshot(): Uint8Array;
     /**
      * Execute one instruction.
@@ -75,6 +88,7 @@ export interface InitOutput {
     readonly emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];
     readonly emulator_load: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_mem: (a: number, b: number, c: number) => [number, number];
+    readonly emulator_mem_write: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_new: (a: number, b: number) => [number, number, number];
     readonly emulator_out: (a: number) => [number, number];
     readonly emulator_pc: (a: number) => number;
@@ -85,7 +99,9 @@ export interface InitOutput {
     readonly emulator_reset: (a: number) => void;
     readonly emulator_restore: (a: number, b: number, c: number) => void;
     readonly emulator_run: (a: number, b: number) => number;
+    readonly emulator_run_bp: (a: number, b: number, c: number, d: number) => number;
     readonly emulator_run_to: (a: number, b: number, c: number) => number;
+    readonly emulator_set_pc: (a: number, b: number) => void;
     readonly emulator_snapshot: (a: number) => [number, number];
     readonly emulator_step: (a: number) => void;
     readonly emulator_waiting_input: (a: number) => number;
