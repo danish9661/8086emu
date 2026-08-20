@@ -35,9 +35,17 @@ sample programs, line-numbered editor with assemble-error highlighting, step /
 run / stop / reset, live register + flag panels, memory dump with the PC
 highlighted, and a program-output console.
 
-To deploy: GitHub **Settings → Pages → Deploy from a branch → `main`, folder
-`/docs`**. The site appears at `https://<user>.github.io/8086emu/`. After any
-Rust change, rebuild and commit the pkg:
+Deployment is handled by the workflow in `.github/workflows/pages.yml`: on every
+push to `main` it builds the wasm pkg, runs the native tests, and deploys
+`docs/` to GitHub Pages.
+
+One-time setup in GitHub: **Settings → Pages → Source: "GitHub Actions"** (the
+first workflow run may enable the site automatically). The site then appears at
+`https://<user>.github.io/8086emu/`.
+
+Alternative (no workflow): **Settings → Pages → Deploy from a branch → `main`,
+folder `/docs`** — works because all asset paths in `docs/` are relative and the
+prebuilt `docs/pkg/` is committed. After any Rust change, rebuild and commit it:
 `wasm-pack build --target web --out-dir docs/pkg --release --features wasm`.
 Root `index.html` redirects to `docs/` for local convenience.
 

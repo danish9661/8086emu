@@ -91,16 +91,19 @@ python3 -m http.server -d docs 8000   # then open http://localhost:8000
 
 ## GitHub Pages deployment
 
-The demo lives in `docs/` (all asset paths are relative), so it deploys
-with zero config:
+A workflow at `.github/workflows/pages.yml` handles deployment: on every push
+to `main` it builds the wasm pkg (wasm-pack), runs `cargo test --test
+emulation`, and deploys `docs/` via the Pages API. One-time repo setup:
+**Settings → Pages → Source: "GitHub Actions"** (the first workflow run may
+enable the site automatically). The site appears at
+`https://<user>.github.io/8086emu/`.
 
-1. GitHub → repo **Settings → Pages → Source: "Deploy from a branch"**,
-   select branch `main` and folder `/docs`, save.
-2. The site appears at `https://<user>.github.io/8086emu/`.
-3. After any Rust change, rebuild the pkg and commit it:
-   `wasm-pack build --target web --out-dir docs/pkg --release --features wasm`
-   (the prebuilt `docs/pkg/` is committed so Pages needs no build step).
-4. Root `index.html` redirects to `docs/` for local convenience.
+Alternative (no workflow): **Settings → Pages → Source: "Deploy from a branch"**
+with folder `/docs` — works because all asset paths in `docs/` are relative and
+the prebuilt `docs/pkg/` is committed, so Pages needs no build step. After any
+Rust change, rebuild and commit the pkg:
+`wasm-pack build --target web --out-dir docs/pkg --release --features wasm`.
+Root `index.html` redirects to `docs/` for local convenience.
 
 ## Core design (src/cpu.rs)
 
