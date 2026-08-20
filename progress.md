@@ -20,7 +20,7 @@ Legend:
       assemble / load / step / run / pc / regs / flags / mem / out / halted /
       reset / snapshot / restore / interrupt (8085)
 - [x] Native CLI runner (examples/run.rs)
-- [x] 38 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
+- [x] 40 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
       warning-free
 - [x] `ORG` emits a complete memory image: forward `ORG` pads with zeros
       (place code at hardware vectors), backward `ORG` is an error; load code
@@ -196,8 +196,9 @@ Legend:
       tested)
 3. [x] 8086: real keyboard input for INT 21h AH=01/07 via the web UI (done,
       tested)
-4. Web IDE: syntax highlighting, per-line machine-code column, step-back
-   (time-travel via snapshot/restore)
+4. [x] Web IDE: syntax highlighting, per-line machine-code column, step-back
+   (time-travel via snapshot/restore) + Step-Over (F10) and run-to-line
+   (click a machine-code line) via the new `run_to(target, max)` API
 5. [x] More integration tests per ISA (flags, string ops, stack, timers) —
       14 new tests; caught and fixed 4 real bugs:
       - 8085 RLC/RRC never set CY

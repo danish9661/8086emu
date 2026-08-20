@@ -937,3 +937,33 @@ fn timers_8051_stopped() {
     emu.run(200);
     assert_eq!(emu.sfr(0x8A), 0x12, "TL0 must count only while TR0 is set");
 }
+
+#[test]
+fn run_to_target() {
+    // run_to stops with the target as the next instruction (not executed)
+    let src = "ORG 100h\nMOV AX, 5\nMOV BX, 3\nMUL BX\nMOV AH, 4Ch\nINT 21h\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    let r = emu.run_to(1000, 0x106); // target = MUL BX
+    assert_eq!(r.steps, 2, "runs exactly up to (not including) the target");
+    assert_eq!(emu.pc(), 0x106);
+    let r2 = emu.run_to(1000, 0xFFFF); // unreachable target
+    assert!(r2.halted, "unreachable target runs to halt");
+}
+
+#[test]
+fn run_to_step_over_call() {
+    // step-over semantics: run_to(return address) executes a CALL body
+    let src = "ORG 100h\nCALL sub\nMOV AX, 1234h\nMOV AH, 4Ch\nINT 21h\nsub:\nMOV BX, 5678h\nRET\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    let r = emu.run_to(1000, 0x103); // return address after CALL
+    assert_eq!(r.steps, 3, "CALL + callee body + RET");
+    assert_eq!(emu.pc(), 0x103, "stopped at the instruction after CALL");
+    assert_eq!(reg(&emu.regs(), "BX"), 0x5678, "callee ran");
+    assert_eq!(reg(&emu.regs(), "AX"), 0, "caller code after the call must not run");
+}

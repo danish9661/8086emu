@@ -169,6 +169,17 @@ export class Emulator {
         return ret >>> 0;
     }
     /**
+     * Run until `target` is the next instruction to execute (not executed),
+     * or halt / blocked on input / max steps. Returns steps executed.
+     * @param {number} target_pc
+     * @param {number} max_steps
+     * @returns {number}
+     */
+    run_to(target_pc, max_steps) {
+        const ret = wasm.emulator_run_to(this.__wbg_ptr, target_pc, max_steps);
+        return ret >>> 0;
+    }
+    /**
      * @returns {Uint8Array}
      */
     snapshot() {

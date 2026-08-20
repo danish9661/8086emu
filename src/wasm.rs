@@ -58,6 +58,13 @@ impl Emulator {
         r.steps
     }
 
+    /// Run until `target` is the next instruction to execute (not executed),
+    /// or halt / blocked on input / max steps. Returns steps executed.
+    pub fn run_to(&mut self, target_pc: u32, max_steps: u32) -> u32 {
+        let r: RunResult = self.inner.run_to(max_steps, target_pc);
+        r.steps
+    }
+
     pub fn pc(&self) -> u32 {
         self.inner.pc()
     }

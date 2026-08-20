@@ -131,4 +131,23 @@ pub trait Cpu {
         r.halted = self.is_halted();
         r
     }
+
+    /// Run until `target` becomes the next instruction to execute (target not
+    /// executed), or halted/blocked on input/max steps. Used for step-over
+    /// (target = return address) and run-to-line in the debugger.
+    fn run_to(&mut self, max_steps: u32, target: u32) -> RunResult {
+        let mut r = RunResult::default();
+        while r.steps < max_steps && !self.is_halted() {
+            if self.pc() == target || self.waiting_input() {
+                break;
+            }
+            if !self.step() {
+                r.halted = true;
+                break;
+            }
+            r.steps += 1;
+        }
+        r.halted = self.is_halted();
+        r
+    }
 }

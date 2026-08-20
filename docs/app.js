@@ -421,6 +421,7 @@ function refresh() {
   $('sbSteps').textContent = steps;
   $('sbState').textContent = emu.halted() ? 'halted' : (emu.waiting_input() ? 'waiting for input' : (runTimer ? 'running…' : 'ready'));
   $('stepBtn').disabled = runTimer || emu.halted();
+  $('overBtn').disabled = runTimer || emu.halted();
   $('backBtn').disabled = runTimer || history.length === 0;
   $('runBtn').disabled = runTimer || emu.halted();
   $('stopBtn').disabled = !runTimer;
@@ -528,11 +529,16 @@ function buildGutter() {
   let html = '';
   for (let i = 0; i < lines.length; i++) {
     const c = codeMap[i] || '';
-    html += `<div class="${i + 1 === errLine ? 'err' : ''}"><span class="n">${i + 1}</span>` +
+    const addr = c ? parseInt(c, 16) : 0;
+    html += `<div class="${i + 1 === errLine ? 'err' : ''}" ${addr ? `data-addr="${addr.toString(16)}"` : ''}><span class="n">${i + 1}</span>` +
             (c ? `<span class="c">${c}</span>` : '') + '</div>';
   }
   gutter.innerHTML = html;
 }
+gutter.addEventListener('click', (e) => {
+  const el = e.target.closest('div[data-addr]');
+  if (el) runToLine(parseInt(el.dataset.addr, 16));
+});
 function renderSource() { buildGutter(); renderHl(); }
 editor.oninput = () => { renderSource(); saveSource(); };
 editor.onscroll = () => { gutter.scrollTop = editor.scrollTop; hl.scrollTop = editor.scrollTop; hl.scrollLeft = editor.scrollLeft; };
@@ -605,6 +611,68 @@ function stepOnce() {
   maybePromptInput();
 }
 
+// Return address of the instruction at PC, or null if it is not a CALL.
+function callRetAddr() {
+  const b = emu.mem(emu.pc(), 6);
+  const pc = emu.pc();
+  const op = b[0];
+  if (isa === '8086') {
+    if (op === 0xE8) return pc + 3;        // CALL rel16
+    if (op === 0x9A) return pc + 5;        // CALL far
+    if (op === 0xFF) {                     // CALL r/m
+      const modrm = b[1] & 0xC7;
+      const mod = b[1] >> 6, rm = b[1] & 7;
+      if ((modrm & 0x38) === 0x10) {       // mod=00 reg=010
+        if (mod === 0 && rm === 6) return pc + 6;   // disp32
+        return pc + 2;
+      }
+      if (mod === 1) return pc + 3;
+      if (mod === 2) return pc + 4;
+      return null;
+    }
+    return null;
+  }
+  if (isa === '8085') {
+    return op === 0xCD ? pc + 3 : null;    // CALL (unconditional only)
+  }
+  // 8051
+  if (op === 0x12) return pc + 3;          // LCALL
+  if ((op & 0xF1) === 0x11) return pc + 2; // ACALL
+  return null;
+}
+
+function stepOver() {
+  if (emu.halted() || runTimer) return;
+  history.push(emu.snapshot());
+  if (history.length > 50) history.shift();
+  const ret = callRetAddr();
+  if (ret === null) {
+    emu.step();
+    steps++;
+    refresh();
+    maybePromptInput();
+    return;
+  }
+  const n = emu.run_to(ret, 100000);
+  steps += n;
+  refresh();
+  maybePromptInput();
+}
+
+function runToLine(addr) {
+  if (runTimer || emu.halted()) return;
+  history.push(emu.snapshot());
+  if (history.length > 50) history.shift();
+  if (addr === emu.pc()) return;
+  const n = emu.run_to(addr, 100000);
+  steps += n;
+  refresh();
+  maybePromptInput();
+  if (!emu.halted() && !emu.waiting_input() && emu.pc() !== addr) {
+    toast('Never reached that line (jumped over it?)');
+  }
+}
+
 function startRun() {
   if (emu.halted()) return;
   stopRequested = false;
@@ -627,6 +695,7 @@ function stopRun() {
 
 $('asmBtn').onclick = assemble;
 $('stepBtn').onclick = stepOnce;
+$('overBtn').onclick = stepOver;
 $('backBtn').onclick = () => {
   if (!history.length || runTimer) return;
   emu.restore(history.pop());
@@ -690,10 +759,11 @@ document.addEventListener('keydown', (e) => {
     toast('Saved to browser');
     return;
   }
-  if (document.activeElement === editor && ['F5','F7','F8','Escape'].includes(e.key)) e.preventDefault();
+  if (document.activeElement === editor && ['F5','F7','F8','F10','Escape'].includes(e.key)) e.preventDefault();
   switch (e.key) {
     case 'F7': assemble(); break;
     case 'F8': stepOnce(); break;
+    case 'F10': e.preventDefault(); stepOver(); break;
     case 'F5': startRun(); break;
     case 'Escape': stopRun(); break;
   }

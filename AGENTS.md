@@ -120,6 +120,9 @@ pub trait Cpu {
     fn restore(&mut self, data: &[u8]);
     fn is_halted(&self) -> bool;
     fn run(&mut self, max_steps: u32) -> RunResult;  // default impl
+    fn run_to(&mut self, max_steps: u32, target: u32) -> RunResult;  // stop when
+        target is the next instruction (target not executed); used by the IDE
+        for Step-Over (target = return address) and run-to-line
 }
 ```
 
@@ -222,6 +225,7 @@ assemble_info(source: &str) -> Vec<String> // per-line "ADDR  BYTES" strings (ID
 load(code: &[u8], origin: u32)           // place code in memory
 step()                                   // one instruction
 run(max_steps: u32) -> u32               // steps executed
+run_to(target_pc: u32, max_steps: u32) -> u32 // steps until target is next (IDE Step-Over/run-to-line)
 pc() -> u32
 regs() -> Vec<String>                    // e.g. "AX=1234"
 flags() -> Vec<String>                   // e.g. "ZF"

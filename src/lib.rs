@@ -68,6 +68,10 @@ impl Emulator {
         self.cpu().run(max_steps)
     }
 
+    pub fn run_to(&mut self, max_steps: u32, target: u32) -> RunResult {
+        self.cpu().run_to(max_steps, target)
+    }
+
     pub fn pc(&self) -> u32 {
         self.cpu_ref().pc()
     }

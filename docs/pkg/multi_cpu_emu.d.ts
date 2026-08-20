@@ -42,6 +42,11 @@ export class Emulator {
      * Run up to `max_steps` instructions; returns steps executed.
      */
     run(max_steps: number): number;
+    /**
+     * Run until `target` is the next instruction to execute (not executed),
+     * or halt / blocked on input / max steps. Returns steps executed.
+     */
+    run_to(target_pc: number, max_steps: number): number;
     snapshot(): Uint8Array;
     /**
      * Execute one instruction.
@@ -73,6 +78,7 @@ export interface InitOutput {
     readonly emulator_reset: (a: number) => void;
     readonly emulator_restore: (a: number, b: number, c: number) => void;
     readonly emulator_run: (a: number, b: number) => number;
+    readonly emulator_run_to: (a: number, b: number, c: number) => number;
     readonly emulator_snapshot: (a: number) => [number, number];
     readonly emulator_step: (a: number) => void;
     readonly emulator_waiting_input: (a: number) => number;

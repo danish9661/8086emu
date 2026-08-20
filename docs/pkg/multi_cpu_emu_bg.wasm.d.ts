@@ -17,6 +17,7 @@ export const emulator_regs: (a: number) => [number, number];
 export const emulator_reset: (a: number) => void;
 export const emulator_restore: (a: number, b: number, c: number) => void;
 export const emulator_run: (a: number, b: number) => number;
+export const emulator_run_to: (a: number, b: number, c: number) => number;
 export const emulator_snapshot: (a: number) => [number, number];
 export const emulator_step: (a: number) => void;
 export const emulator_waiting_input: (a: number) => number;
