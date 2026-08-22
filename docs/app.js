@@ -338,7 +338,7 @@ const ISA_INFO = {
 };
 
 const FLAG_MAP = {
-  '8086': [['carry','CF'],['zero','ZF'],['sign','SF'],['parity','PF'],['aux','AF'],['overflow','OF'],['direction','DF'],['interrupt','IF']],
+  '8086': [['carry','CF'],['zero','ZF'],['sign','SF'],['parity','PF'],['aux','AF'],['overflow','OF'],['direction','DF'],['interrupt','IF'],['trap','TF']],
   '8085': [['carry','CY'],['zero','Z'],['sign','S'],['parity','P'],['aux','AC'],['interrupt','IE']],
   '8051': [['carry','CY'],['aux','AC'],['overflow','OV'],['parity','P']],
 };
@@ -814,6 +814,38 @@ $('runBtn').onclick = startRun;
 $('stopBtn').onclick = stopRun;
 $('resetBtn').onclick = () => { newEmulator(); refresh(); toast('CPU reset'); };
 $('clearOutBtn').onclick = () => { accumOut = ''; outputBox.textContent = ''; };
+
+// ---------- snapshot Save / Load ----------
+$('saveBtn').onclick = () => {
+  if (!emu) return;
+  const bytes = emu.snapshot();
+  const blob = new Blob([bytes], { type: 'application/octet-stream' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `emu-${isa}-state.bin`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('State saved');
+};
+let loadInput = null;
+$('loadBtn').onclick = () => {
+  if (!emu) return;
+  if (!loadInput) {
+    loadInput = document.createElement('input');
+    loadInput.type = 'file';
+    loadInput.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      file.arrayBuffer().then((buf) => {
+        emu.restore(new Uint8Array(buf));
+        history = [];
+        refresh();
+        toast('State loaded');
+      });
+    };
+  }
+  loadInput.click();
+};
 
 // ---------- examples / persistence ----------
 let exIndex = 0;

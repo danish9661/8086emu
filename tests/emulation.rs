@@ -318,16 +318,16 @@ fn interrupts_8051_external() {
 fn interrupts_8051_stack_layout() {
     // PCL must sit at SP+1 (real 8051 pushes low byte first)
     let mut emu = make_emulator("8051").unwrap();
-    let src = "ORG 0\nSJMP main\nORG 03h\nRETI\nORG 30h\nmain:\nMOV IE, #81h\nstart:\nSJMP start\nEND";
+    let src = "ORG 0\nSJMP main\nORG 03h\nRETI\nORG 30h\nmain:\nSETB IT0\nMOV IE, #81h\nstart:\nSJMP start\nEND";
     let code = emu.assemble(src).unwrap();
     emu.mem_write(0, &code);
     emu.set_pc(0);
     emu.request_interrupt("INT0", 0).unwrap();
-    emu.run(2); // dispatch: PC = 03h, SP pushed 2 bytes
+    emu.run(3); // SETB IT0; MOV IE -> dispatch: PC = 03h, SP pushed 2 bytes
     assert_eq!(reg(&emu.regs(), "SP"), 9, "dispatch must push two bytes");
     assert_eq!(emu.pc(), 0x03);
     emu.run(1); // RETI
-    assert_eq!(emu.pc(), 0x33, "RETI must return to the address after MOV IE (PCL pushed first)");
+    assert_eq!(emu.pc(), 0x35, "RETI must return to the address after MOV IE (PCL pushed first)");
     assert_eq!(reg(&emu.regs(), "SP"), 7, "stack must be balanced after RETI");
 }
 
@@ -348,14 +348,14 @@ fn interrupts_8051_priority() {
     // TF0 (PT0=1) blocks low-priority INT0 while its ISR runs; after RETI
     // the still-pending INT0 fires.
     let mut emu = make_emulator("8051").unwrap();
-    let src = "ORG 0\nSJMP main\nORG 03h\nMOV SBUF, #'0'\nRETI\nORG 0Bh\nPUSH ACC\nNOP\nNOP\nPOP ACC\nRETI\nORG 30h\nmain:\nMOV TMOD, #01h\nMOV TH0, #0FFh\nMOV TL0, #0FFh\nSETB TR0\nMOV IP, #02h\nMOV IE, #83h\nstart:\nSJMP start\nEND";
+    let src = "ORG 0\nSJMP main\nORG 03h\nMOV SBUF, #'0'\nRETI\nORG 0Bh\nPUSH ACC\nNOP\nNOP\nPOP ACC\nRETI\nORG 30h\nmain:\nSETB IT0\nMOV TMOD, #01h\nMOV TH0, #0FFh\nMOV TL0, #0FFh\nSETB TR0\nMOV IP, #02h\nMOV IE, #83h\nstart:\nSJMP start\nEND";
     let code = emu.assemble(src).unwrap();
     emu.mem_write(0, &code);
     emu.set_pc(0);
-    emu.run(9); // inside the TF0 ISR (after NOP at 0x0E); no INT0 requested yet
+    emu.run(10); // inside the TF0 ISR (after NOP at 0x0E); no INT0 requested yet
     assert_eq!(emu.pc(), 0x0E, "TF0 (higher natural priority, no INT0 pending) must be in service");
     emu.request_interrupt("INT0", 0).unwrap();
-    emu.run(2); // NOP, POP ACC -> INT0 must NOT preempt the high-priority TF0 ISR
+    emu.run(2); // POP ACC, RETI -> INT0 must NOT preempt the high-priority TF0 ISR
     assert_eq!(emu.pc(), 0x11, "INT0 must stay blocked while the TF0 ISR is in service, pc={:X}", emu.pc());
     assert_eq!(emu.sfr(0x88) & 0x02, 0x02, "IE0 must remain pending (not serviced)");
     emu.run(10); // RETI -> INT0 fires
@@ -1272,4 +1272,112 @@ fn serial_rx_8051() {
     emu.run(100);
     assert_eq!(reg(&emu.regs(), "R7"), b'X' as u32, "serial ISR captured SBUF");
     assert!(!emu.is_halted(), "program spins in main loop after RETI");
+}
+
+#[test]
+fn pusha_popa_8086() {
+    // All GP registers pushed, scrambled, then restored by POPA (SP excluded).
+    let src = r#"
+        ORG 100h
+        MOV AX, 1111h
+        MOV BX, 2222h
+        MOV CX, 3333h
+        MOV DX, 4444h
+        MOV BP, 5555h
+        MOV SI, 6666h
+        MOV DI, 7777h
+        MOV SP, 8000h
+        PUSHA
+        MOV AX, 0AAAAh
+        MOV BX, 0BBBBh
+        MOV CX, 0CCCCh
+        MOV DX, 0DDDDh
+        MOV BP, 0EEEEh
+        MOV SI, 0FFFFh
+        MOV DI, 09999h
+        POPA
+        HLT
+    END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 1000);
+    assert_eq!(reg(&regs, "AX"), 0x1111);
+    assert_eq!(reg(&regs, "BX"), 0x2222);
+    assert_eq!(reg(&regs, "CX"), 0x3333);
+    assert_eq!(reg(&regs, "DX"), 0x4444);
+    assert_eq!(reg(&regs, "BP"), 0x5555);
+    assert_eq!(reg(&regs, "SI"), 0x6666);
+    assert_eq!(reg(&regs, "DI"), 0x7777);
+    assert_eq!(reg(&regs, "SP"), 0x8000, "POPA restores SP to its pre-PUSHA value");
+}
+
+#[test]
+fn int0_edge_8051_fires_once() {
+    // Edge-triggered (IT0=1 set before IE enables): one request -> one
+    // service, IE0 latch cleared. If IT0 were still 0 (level) the held line
+    // would re-trigger, so we set IT0 first.
+    let src = r#"
+        ORG 0
+        SJMP main
+        ORG 3
+        isr: INC R0
+        RETI
+        ORG 30h
+        main:
+        SETB IT0
+        MOV IE, #81h
+        loop: SJMP loop
+        END
+    "#;
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.request_interrupt("INT0", 0).unwrap();
+    emu.run(50);
+    assert_eq!(reg(&emu.regs(), "R0"), 1, "edge mode fires INT0 exactly once");
+}
+
+#[test]
+fn int0_level_8051_reasserts() {
+    // Level-triggered (IT0=0): the held line re-asserts after RETI.
+    let src = r#"
+        ORG 0
+        SJMP main
+        ORG 3
+        isr: INC R0
+        RETI
+        ORG 30h
+        main:
+        MOV IE, #81h
+        CLR IT0
+        loop: SJMP loop
+        END
+    "#;
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.request_interrupt("INT0", 0).unwrap();
+    emu.run(50);
+    assert!(reg(&emu.regs(), "R0") > 1, "level mode re-asserts INT0 while the line is held");
+}
+
+#[test]
+fn sid_sod_8085() {
+    // set_sid feeds the RIM SID bit; SIM with A=80h drives the SOD pin.
+    let mut emu = make_emulator("8085").unwrap();
+    emu.set_sid(true);
+    let src = r#"
+        RIM
+        MVI A, 80h
+        SIM
+        HLT
+    END
+    "#;
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "A"), 0x80, "RIM reads the SID pin into bit 7");
+    assert_eq!(emu.sod(), 1, "SIM with SOD bit set drives the SOD output pin");
 }

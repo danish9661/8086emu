@@ -100,6 +100,7 @@ impl Emulator {
         if f.overflow { v.push("OF".to_string()); }
         if f.direction { v.push("DF".to_string()); }
         if f.interrupt { v.push("IF".to_string()); }
+        if f.trap { v.push("TF".to_string()); }
         v
     }
 
@@ -144,6 +145,16 @@ impl Emulator {
     /// Inject a received serial byte into the 8051 (sets SBUF + RI).
     pub fn serial_rx(&mut self, ch: u8) -> Result<(), JsValue> {
         to_js(self.inner.serial_rx(ch))
+    }
+
+    /// Set the 8085 SID (Serial Input Data) pin read by RIM (bit 7). 8085 only.
+    pub fn set_sid(&mut self, v: bool) {
+        self.inner.set_sid(v);
+    }
+
+    /// Read the 8085 SOD (Serial Output Data) pin set by SIM (bit 7). 8085 only.
+    pub fn sod(&self) -> u8 {
+        self.inner.sod()
     }
 
     pub fn push_key(&mut self, ch: u8) {

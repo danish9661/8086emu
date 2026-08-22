@@ -41,6 +41,10 @@ pub struct Cpu8051 {
     pub fault: Option<String>,
     in_svc_low: bool,
     in_svc_high: bool,
+    /// External INT0/INT1 line held low (level-triggered mode, ITx=0): the
+    /// interrupt re-asserts after service until the line is released.
+    ext_int0_held: bool,
+    ext_int1_held: bool,
 }
 
 impl Default for Cpu8051 {
@@ -61,6 +65,8 @@ impl Cpu8051 {
             fault: None,
             in_svc_low: false,
             in_svc_high: false,
+            ext_int0_held: false,
+            ext_int1_held: false,
         };
         c.reset();
         c
@@ -77,6 +83,8 @@ impl Cpu8051 {
         self.fault = None;
         self.in_svc_low = false;
         self.in_svc_high = false;
+        self.ext_int0_held = false;
+        self.ext_int1_held = false;
     }
 
     // ----- helpers -----
@@ -529,8 +537,17 @@ impl Cpu8051 {
     /// edge, the latch is cleared on service; document this simplification).
     pub fn request_interrupt(&mut self, kind: &str) -> Result<(), String> {
         match kind.to_ascii_uppercase().as_str() {
-            "INT0" => { self.sfr[S_TCON] |= 0x02; Ok(()) }
-            "INT1" => { self.sfr[S_TCON] |= 0x08; Ok(()) }
+            "INT0" => {
+                self.sfr[S_TCON] |= 0x02; // IE0 latch (edge mode)
+                // Held only if level-triggered (IT0=0): re-asserts after RETI.
+                self.ext_int0_held = self.sfr[S_TCON] & 0x01 == 0;
+                Ok(())
+            }
+            "INT1" => {
+                self.sfr[S_TCON] |= 0x08; // IE1 latch (edge mode)
+                self.ext_int1_held = self.sfr[S_TCON] & 0x04 == 0;
+                Ok(())
+            }
             _ => Err(format!("unknown 8051 interrupt '{kind}' (use INT0 or INT1)")),
         }
     }
@@ -550,10 +567,14 @@ impl Cpu8051 {
         let tcon = self.sfr[S_TCON];
         let scon = self.sfr[S_SCON];
         let ip = self.sfr[S_IP];
+        // INT0/INT1: edge mode uses the IE0/IE1 latch; level mode (ITx=0) uses
+        // the external line held low (re-asserts after the ISR returns).
+        let ie0 = if tcon & 0x01 != 0 { tcon & 0x02 != 0 } else { self.ext_int0_held };
+        let ie1 = if tcon & 0x04 != 0 { tcon & 0x08 != 0 } else { self.ext_int1_held };
         let sources: [(bool, u16, u8, bool); 5] = [
-            (tcon & 0x02 != 0, 0x03, ie & 0x01, ip & 0x01 != 0), // INT0
+            (ie0, 0x03, ie & 0x01, ip & 0x01 != 0), // INT0
             (tcon & 0x20 != 0, 0x0B, ie & 0x02, ip & 0x02 != 0), // TF0
-            (tcon & 0x08 != 0, 0x13, ie & 0x04, ip & 0x04 != 0), // INT1
+            (ie1, 0x13, ie & 0x04, ip & 0x04 != 0), // INT1
             (tcon & 0x80 != 0, 0x1B, ie & 0x08, ip & 0x08 != 0), // TF1
             (scon & 0x03 != 0, 0x23, ie & 0x10, ip & 0x10 != 0), // RI|TI
         ];
@@ -565,9 +586,11 @@ impl Cpu8051 {
                 continue;
             }
             match vector {
-                0x03 => self.sfr[S_TCON] &= !0x02, // IE0 cleared by hardware
+                // Clear the IE0/IE1 latch only in edge mode (level mode is
+                // driven by the held external line, not the latch).
+                0x03 => if tcon & 0x01 != 0 { self.sfr[S_TCON] &= !0x02; }
                 0x0B => self.sfr[S_TCON] &= !0x20, // TF0
-                0x13 => self.sfr[S_TCON] &= !0x08, // IE1
+                0x13 => if tcon & 0x04 != 0 { self.sfr[S_TCON] &= !0x08; }
                 0x1B => self.sfr[S_TCON] &= !0x80, // TF1
                 _ => {} // serial RI/TI are cleared by the ISR in software
             }
@@ -650,8 +673,8 @@ impl Cpu for Cpu8051 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(5 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4);
-        v.push(3);
+        let mut v = Vec::with_capacity(5 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 2);
+        v.push(4);
         v.push(self.halted as u8);
         v.push((self.pc >> 8) as u8);
         v.push(self.pc as u8);
@@ -662,6 +685,8 @@ impl Cpu for Cpu8051 {
         v.extend_from_slice(&self.xdata.data);
         v.extend_from_slice(&self.code.data);
         v.extend_from_slice(&self.port_pins);
+        v.push(self.ext_int0_held as u8);
+        v.push(self.ext_int1_held as u8);
         v
     }
 
@@ -684,6 +709,12 @@ impl Cpu for Cpu8051 {
         self.port_pins = [0; 4];
         if data[0] >= 3 {
             take(4, &mut self.port_pins);
+        }
+        self.ext_int0_held = false;
+        self.ext_int1_held = false;
+        if data[0] >= 4 {
+            self.ext_int0_held = data[data.len() - 2] != 0;
+            self.ext_int1_held = data[data.len() - 1] != 0;
         }
     }
 

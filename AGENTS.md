@@ -146,6 +146,7 @@ pub trait Cpu {
   MOVS/LODS/STOS/CMPS/SCAS
   (byte+word, with REP prefixes), LAHF/SAHF, flag ops (CLC/STC/CMC/CLI/STI/
   CLD/STD), Jcc/JMP (short/near/far)/CALL/RET/RETF, LOOP/LOOPZ/LOOPNZ/JCXZ,
+  PUSHA/POPA (push/pop AX/CX/DX/BX/SP/BP/SI/DI; POPA discards the saved SP),
   INT n/INT3/INTO/IRET, NOP, HLT.
 - DOS/BIOS service subset: INT 21h (AH=01, 02, 06, 07, 08, 09, 0C, 4Ch),
   INT 10h (AH=0Eh). Output goes to the `Output` buffer.
@@ -183,6 +184,8 @@ pub trait Cpu {
   flags are latched and cleared on service (simplification). SIM (A: D0-D2
   masks 5.5/6.5/7.5, D3=MSE, D4=reset RST 7.5 latch, D7=SOD) and RIM
   (A: D7=SID, D6-D4 pending 7.5/6.5/5.5, D3=IE, D2-D0 masks) match the chip.
+  The SID input pin is injectable via `Emulator::set_sid` / wasm `set_sid(ch)`;
+  the SOD output pin is readable via `Emulator::sod` / wasm `sod()`.
   Interrupts are serviced at the end of `step()` (so they take effect right
   after EI) and never while halted. Snapshot/restore covers all interrupt
   state.
@@ -214,8 +217,10 @@ pub trait Cpu {
   8051 stack layout); hardware clears IE0/IE1/TF0/TF1, serial RI/TI are
   software-cleared (a serial ISR that forgets `CLR TI` re-fires). `RETI`
   clears the in-service latch; RET/ACALL/LCALL push/pop PCL-first/PCH-first.
-  INT0/INT1 level-triggered mode (ITx=0) is treated like edge (latch cleared
-  on service — documented simplification).
+  INT0/INT1 level-triggered mode (ITx=0, set via `CLR ITx`) is honored: the
+  external line is treated as held low, so the interrupt re-asserts after the
+  ISR returns (until released); edge mode (ITx=1) latches on `request_interrupt`
+  and clears on service like the real chip.
 
 ## Assembler design (src/asm)
 
@@ -260,6 +265,8 @@ restore(data: &[u8])
 port_read(port: u8) -> u8             // 8085/8086 port space; 8051 P0-P3 (latch|pin)
 port_write(port: u8, val: u8)        // 8085/8086 port space; 8051 pin injection
 serial_rx(ch: u8)                     // 8051: inject received byte (SBUF + RI)
+set_sid(ch: bool)                      // 8085: inject SID input pin (read by RIM bit 7)
+sod() -> u8                             // 8085: read SOD output pin (set by SIM bit 7)
 interrupt(kind: &str, data: u32)     // 8085: TRAP|RST75|RST65|RST55|INTR; 8051: INT0|INT1; 8086: NMI|INTR(data=vector)
 ```
 

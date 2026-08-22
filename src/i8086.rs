@@ -542,7 +542,22 @@ impl Cpu8086 {
             }
             0x50..=0x57 => self.push16(self.reg16(op & 7)),
             0x58..=0x5F => { let v = self.pop16(); self.set_reg16(op & 7, v); }
-            0x60 | 0x61 => {} // PUSHA/POPA: unsupported no-op
+            0x60 => { // PUSHA
+                let temp = self.sp;
+                for i in [0u8, 1, 2, 3] { self.push16(self.reg16(i)); }
+                self.push16(temp);
+                for i in [5u8, 6, 7] { self.push16(self.reg16(i)); }
+            }
+            0x61 => { // POPA
+                self.di = self.pop16();
+                self.si = self.pop16();
+                self.bp = self.pop16();
+                let _ = self.pop16(); // discard SP
+                self.bx = self.pop16();
+                self.dx = self.pop16();
+                self.cx = self.pop16();
+                self.ax = self.pop16();
+            }
             0x62 => { // BOUND r16, m16
                 let (m, r, rm) = self.modrm();
                 let (seg, off) = self.ea(m, rm, self.ds);

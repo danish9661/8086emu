@@ -236,6 +236,13 @@ export class Emulator {
         wasm.emulator_set_pc(this.__wbg_ptr, addr);
     }
     /**
+     * Set the 8085 SID (Serial Input Data) pin read by RIM (bit 7). 8085 only.
+     * @param {boolean} v
+     */
+    set_sid(v) {
+        wasm.emulator_set_sid(this.__wbg_ptr, v);
+    }
+    /**
      * @returns {Uint8Array}
      */
     snapshot() {
@@ -243,6 +250,14 @@ export class Emulator {
         var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v1;
+    }
+    /**
+     * Read the 8085 SOD (Serial Output Data) pin set by SIM (bit 7). 8085 only.
+     * @returns {number}
+     */
+    sod() {
+        const ret = wasm.emulator_sod(this.__wbg_ptr);
+        return ret;
     }
     /**
      * Execute one instruction.

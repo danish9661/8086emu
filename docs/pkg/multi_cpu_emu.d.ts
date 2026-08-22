@@ -69,7 +69,15 @@ export class Emulator {
      * Set the program counter (entry point after load).
      */
     set_pc(addr: number): void;
+    /**
+     * Set the 8085 SID (Serial Input Data) pin read by RIM (bit 7). 8085 only.
+     */
+    set_sid(v: boolean): void;
     snapshot(): Uint8Array;
+    /**
+     * Read the 8085 SOD (Serial Output Data) pin set by SIM (bit 7). 8085 only.
+     */
+    sod(): number;
     /**
      * Execute one instruction.
      */
@@ -107,7 +115,9 @@ export interface InitOutput {
     readonly emulator_run_to: (a: number, b: number, c: number) => number;
     readonly emulator_serial_rx: (a: number, b: number) => [number, number];
     readonly emulator_set_pc: (a: number, b: number) => void;
+    readonly emulator_set_sid: (a: number, b: number) => void;
     readonly emulator_snapshot: (a: number) => [number, number];
+    readonly emulator_sod: (a: number) => number;
     readonly emulator_step: (a: number) => void;
     readonly emulator_waiting_input: (a: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

@@ -20,7 +20,7 @@ Legend:
       assemble / load / step / run / pc / regs / flags / mem / out / halted /
       reset / snapshot / restore / interrupt (8085)
 - [x] Native CLI runner (examples/run.rs)
-- [x] 53 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
+- [x] 57 integration tests (tests/emulation.rs), `cargo clippy --all-targets`
       warning-free
 - [x] `ORG` emits a complete memory image: forward `ORG` pads with zeros
       (place code at hardware vectors), backward `ORG` is an error; load code
@@ -71,7 +71,9 @@ Legend:
       0x64-0x67 prefixes are no-ops)
 - [x] INT 21h keyboard input (done, see above) — no ANSI/console escape
       sequences (F-keys etc.)
-- [ ] PUSHA/POPA, 386+ instructions (ARPL, 0x64-0x67 prefixes) — no-ops
+- [x] PUSHA/POPA (0x60/0x61) implemented (push/pop AX/CX/DX/BX/SP/BP/SI/DI;
+      POPA discards the saved SP); 386+ instructions (ARPL, 0x64-0x67 prefixes)
+      remain no-ops (out of scope)
 - [x] Hardware interrupts: NMI (vector 02h) + INTR (maskable, device-supplied
       vector), latched, serviced at end of step, NMI > INTR, IVT dispatch
       (8259/8253/PIT still not modeled — out of scope)
@@ -116,7 +118,9 @@ Legend:
 
 ### Left / known gaps
 
-- [ ] SID/SOD pins are emulator-side state (no real serial I/O attached)
+- [x] SID/SOD pins exposed: `Emulator::set_sid` / wasm `set_sid(ch)` injects the
+      SID input (RIM bit 7); `Emulator::sod` / wasm `sod()` reads the SOD output
+      (SIM bit 7)
 - [ ] I/O ports beyond 01h are no-ops (no peripheral model)
 - [ ] Timing/clock cycles not modeled (step = 1 instruction)
 
@@ -169,8 +173,8 @@ Legend:
 - [x] Serial receive: `Emulator::serial_rx(ch)` / wasm `serial_rx(ch)` sets
       SBUF + RI so the serial ISR fires (still no baud-rate generation —
       timer-based baud not modeled)
-- [ ] INT0/INT1 level-triggered (ITx=0) treated like edge — latch cleared on
-      service, no level re-assertion without a new request (documented)
+- [x] INT0/INT1 level-triggered (ITx=0) re-asserts after the ISR returns while
+      the external line is held (edge mode latches on request, clears on service)
 - [ ] Timer counting is per-emulator-step (no real-time calibration /
       machine-cycle accuracy)
 - [ ] External memory beyond 64 KiB (up to 256 KiB via ports) — not modeled
@@ -186,8 +190,10 @@ Legend:
 (snapshot undo)/Run/Stop/Reset, IRQ buttons (8085 TRAP/RSTs/INTR,
        8051 INT0/INT1, 8086 NMI/INTR), keyboard-input dialog (8086), keyboard
       shortcuts,
-      live registers/flags, pageable memory dump with PC marker, output
-      console, localStorage persistence, Ctrl+S save
+      live registers/flags (8086 shows TF trap flag when set), pageable memory
+      dump with PC marker, output console, localStorage persistence, Ctrl+S
+      save, **Save State / Load State** buttons (snapshot download / file
+      restore)
 - [x] GitHub Pages workflow (.github/workflows/pages.yml) — builds wasm pkg,
       runs tests, deploys docs/
 - [x] Live at https://danish9661.github.io/8086emu/ (verified 200 on
@@ -222,3 +228,7 @@ Legend:
         operated on the whole AX instead of AL
       - asm8051 LJMP/LCALL/DW emitted little-endian (8051 code memory is
         big-endian; LJMP to 0x35 jumped to 0x3500)
+7. [x] 8086 PUSHA/POPA (0x60/0x61), 8051 level-triggered INT0/INT1 (ITx=0
+      re-asserts while held), 8085 SID/SOD pins (set_sid / sod), IDE TF flag
+      chip + snapshot Save/Load buttons — 4 new tests (57 total); wasm smoke
+      test wtest19.mjs

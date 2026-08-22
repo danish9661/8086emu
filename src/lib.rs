@@ -161,6 +161,23 @@ impl Emulator {
         }
     }
 
+    /// Set the 8085 SID (Serial Input Data) pin that the RIM instruction reads
+    /// (bit 7). 8085 only.
+    pub fn set_sid(&mut self, v: bool) {
+        if let Emulator::I8085(c) = self {
+            c.sid = v;
+        }
+    }
+
+    /// Read the 8085 SOD (Serial Output Data) pin set by the SIM instruction
+    /// (bit 7, returned as 0/1). 8085 only.
+    pub fn sod(&self) -> u8 {
+        match self {
+            Emulator::I8085(c) => c.sod as u8,
+            _ => 0,
+        }
+    }
+
     /// Read the SFR / internal-RAM byte at the given address (8051 only).
     pub fn sfr(&self, addr: u8) -> u8 {
         match self {
