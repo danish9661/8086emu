@@ -126,6 +126,10 @@ export class Emulator {
      */
     set_ea(ea: boolean): void;
     /**
+     * Set the Z80 interrupt mode (0/1 -> 0x0038, 2 -> I*0x100 + data).
+     */
+    set_interrupt_mode(m: number): void;
+    /**
      * Set the program counter (entry point after load).
      */
     set_pc(addr: number): void;
@@ -233,6 +237,7 @@ export interface InitOutput {
     readonly emulator_serial_rx: (a: number, b: number) => [number, number];
     readonly emulator_set_clock: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly emulator_set_ea: (a: number, b: number) => void;
+    readonly emulator_set_interrupt_mode: (a: number, b: number) => [number, number];
     readonly emulator_set_pc: (a: number, b: number) => void;
     readonly emulator_set_reg: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_set_rom_region: (a: number, b: number, c: number) => void;

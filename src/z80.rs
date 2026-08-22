@@ -586,6 +586,7 @@ impl CpuZ80 {
 impl CpuZ80 {
     pub fn request_int(&mut self) { self.pending_int = true; }
     pub fn request_nmi(&mut self) { self.pending_nmi = true; }
+    pub fn set_im(&mut self, m: u8) { self.im = m & 3; }
     pub fn port_read(&self, port: u8) -> u8 { self.ports[port as usize] }
     pub fn port_write(&mut self, port: u8, v: u8) { self.ports[port as usize] = v; }
     pub fn rom_region(&self) -> (u32, u32) { let (b, l) = self.mem.rom_range(); (b as u32, l as u32) }

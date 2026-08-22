@@ -523,6 +523,31 @@ loop:
 END
 `,
     },
+    {
+      name: 'Interrupts (NMI/INT)',
+      src: `; Z80 interrupt demo. Click the NMI / INT buttons in the IRQ bar.
+; NMI jumps to 0066h, INT (when IFF1 set) to 0038h.
+ORG 0
+    JP main
+    ORG 0x38
+int_handler:
+    LD A, 'I'
+    OUT (1), A
+    RETI
+    ORG 0x66
+nmi_handler:
+    LD A, 'N'
+    OUT (1), A
+    RETI
+main:
+    EI
+loop:
+    LD A, '.'
+    OUT (1), A
+    JR loop
+END
+`,
+    },
   ],
 };
 
@@ -1576,6 +1601,7 @@ $('isa').onchange = () => {
   $('intrBar85').style.display = isa === '8085' ? '' : 'none';
   $('intrBar51').style.display = isa === '8051' ? '' : 'none';
   $('intrBar86').style.display = isa === '8086' ? '' : 'none';
+  $('intrBarZ80').style.display = isa === 'Z80' ? '' : 'none';
   renderSource();
   refresh();
 };
@@ -1589,6 +1615,9 @@ $('irqInt0').onclick = () => { emu.interrupt('INT0', 0); refresh(); };
 $('irqInt1').onclick = () => { emu.interrupt('INT1', 0); refresh(); };
 $('irqNmi').onclick = () => { emu.interrupt('NMI', 0); refresh(); };
 $('irqIntr86').onclick = () => { emu.interrupt('INTR', 0x08); refresh(); };
+$('irqNmiZ80').onclick = () => { emu.interrupt('NMI', 0); refresh(); };
+$('irqIntZ80').onclick = () => { emu.interrupt('INT', 0); refresh(); };
+$('z80im').onchange = () => { const m = parseInt($('z80im').value, 10) || 0; try { emu.set_interrupt_mode(m); } catch (e) {} refresh(); };
 
 // ---------- keys ----------
 document.addEventListener('keydown', (e) => {
@@ -1612,9 +1641,10 @@ document.addEventListener('keydown', (e) => {
  newEmulator();
  loadSource();
  applyHash();
- $('intrBar85').style.display = 'none';
-$('intrBar51').style.display = 'none';
-$('intrBar86').style.display = '';   // default ISA is 8086
+  $('intrBar85').style.display = 'none';
+  $('intrBar51').style.display = 'none';
+  $('intrBar86').style.display = '';   // default ISA is 8086
+  $('intrBarZ80').style.display = 'none';
  $('romaddr').value = isa === '8086' ? 'F0000' : '0';
  if (window.applyI18n) window.applyI18n();
  refresh();

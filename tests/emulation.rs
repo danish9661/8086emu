@@ -2370,3 +2370,39 @@ fn z80_ix_loop() {
     emu.run(1000);
     assert_eq!(emu.mem_read(0x40, 1)[0], 15, "1+2+3+4+5 = 15");
 }
+
+#[test]
+fn z80_nmi_vectors() {
+    let mut emu = make_emulator("Z80").unwrap();
+    emu.mem_write(0x66, &[0x76]);
+    emu.set_pc(0x10);
+    emu.request_interrupt("NMI", 0);
+    emu.step();
+    assert_eq!(emu.pc(), 0x66, "NMI always vectors to 0066h");
+}
+
+#[test]
+fn z80_int_when_enabled() {
+    let mut emu = make_emulator("Z80").unwrap();
+    emu.mem_write(0x38, &[0x76]);
+    let code = emu.assemble("ORG 0\n EI\n HALT\n").expect("assemble");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(10);
+    emu.request_interrupt("INT", 0);
+    emu.step();
+    assert_eq!(emu.pc(), 0x38, "INT vectors to 0038h when IFF1 set");
+}
+
+#[test]
+fn z80_int_masked_when_di() {
+    let mut emu = make_emulator("Z80").unwrap();
+    let code = emu.assemble("ORG 0\n DI\n JR $-2\n").expect("assemble");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(5);
+    let pc_before = emu.pc();
+    emu.request_interrupt("INT", 0);
+    emu.step();
+    assert_eq!(emu.pc(), pc_before, "INT ignored while IFF1 clear (DI)");
+}

@@ -58,6 +58,18 @@
       <button id="irqNmi" title="NMI (non-maskable interrupt, vector 02h)">NMI</button>
       <button id="irqIntr86" title="INTR (maskable via IF, device vector 08h)">INTR</button>
     </span>
+    <span id="intrBarZ80" style="display:none">
+      <span style="color:var(--muted);font-size:11px">IRQ:</span>
+      <button id="irqNmiZ80" title="NMI (non-maskable, jumps to 0066h)">NMI</button>
+      <button id="irqIntZ80" title="INT (maskable via IFF1; EI enables, DI disables). IM0/1 -> 0038h, IM2 -> I*100h">INT</button>
+      <label title="Interrupt mode (0/1 -> 0038h, 2 -> I*100h + data)" style="font-size:11px;color:var(--muted)">IM
+        <select id="z80im">
+          <option value="0" selected>0</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+        </select>
+      </label>
+    </span>
   </header>
 
   <main>

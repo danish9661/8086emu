@@ -390,6 +390,16 @@ export class Emulator {
         wasm.emulator_set_ea(this.__wbg_ptr, ea);
     }
     /**
+     * Set the Z80 interrupt mode (0/1 -> 0x0038, 2 -> I*0x100 + data).
+     * @param {number} m
+     */
+    set_interrupt_mode(m) {
+        const ret = wasm.emulator_set_interrupt_mode(this.__wbg_ptr, m);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Set the program counter (entry point after load).
      * @param {number} addr
      */

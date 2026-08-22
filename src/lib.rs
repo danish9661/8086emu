@@ -186,6 +186,14 @@ impl Emulator {
         }
     }
 
+    /// Set the Z80 interrupt mode (0/1 -> 0x0038, 2 -> I*0x100 + data).
+    pub fn set_interrupt_mode(&mut self, m: u8) -> Result<(), String> {
+        match self {
+            Emulator::Z80(c) => { c.set_im(m); Ok(()) }
+            _ => Err("set_interrupt_mode is only supported for Z80".into()),
+        }
+    }
+
     /// Read an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins
     /// merged with the latch, quasi-bidirectional).
     pub fn port_read(&self, port: u8) -> u8 {

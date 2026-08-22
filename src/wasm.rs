@@ -213,6 +213,11 @@ impl Emulator {
         to_js(self.inner.request_interrupt(kind, data))
     }
 
+    /// Set the Z80 interrupt mode (0/1 -> 0x0038, 2 -> I*0x100 + data).
+    pub fn set_interrupt_mode(&mut self, m: u8) -> Result<(), JsValue> {
+        to_js(self.inner.set_interrupt_mode(m))
+    }
+
     /// Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
     pub fn port_read(&self, port: u8) -> u8 {
         self.inner.port_read(port)
