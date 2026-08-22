@@ -7,6 +7,9 @@
 //! Grade a program against a spec file:
 //!     cargo run --example run -- --grade spec.txt examples/prog.asm
 //!
+//! Trace each instruction and peripheral I/O writes:
+//!     cargo run --example run -- --verbose examples/hello.asm
+//!
 //! The spec file is line-oriented (blank lines and `;`/`#` comments ignored):
 //!     out   expected.txt        ; program output must match this file
 //!     reg   AX      0x1234       ; register compare (decimal or 0x ok)
@@ -79,31 +82,61 @@ fn main() {
     let mut path: Option<String> = None;
     let mut grade: Option<String> = None;
     let mut max_steps: u32 = 5_000_000;
+    let mut verbose = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--isa" => { i += 1; isa = args.get(i).cloned().unwrap_or("8086".into()); }
-            "--max-steps" => { i += 1; max_steps = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(5_000_000); }
-            "--grade" => { i += 1; grade = args.get(i).cloned(); }
-            "--help" | "-h" => {
-                println!("usage: run [--isa 8086|8085|8051] [--max-steps N] [--grade spec.txt] <file.asm>");
-                return;
+            "--isa" => {
+                i += 1;
+                isa = args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!("error: --isa requires a value (8086|8085|8051|6502|Z80|rv32)");
+                    std::process::exit(2);
+                });
             }
+            "--max-steps" => {
+                i += 1;
+                max_steps = args.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| {
+                    eprintln!("error: --max-steps requires a positive integer");
+                    std::process::exit(2);
+                });
+            }
+            "--grade" => { i += 1; grade = args.get(i).cloned(); }
+            "--verbose" | "-v" => { verbose = true; }
+            "--help" | "-h" => { print_usage(); return; }
+            p if p.starts_with('-') => { eprintln!("error: unknown option '{p}'"); print_usage(); std::process::exit(2); }
             p => path = Some(p.to_string()),
         }
         i += 1;
     }
-    let path = path.expect("missing input file");
-    let source = std::fs::read_to_string(&path).expect("cannot read file");
 
-    let mut emu = make_emulator(&isa).unwrap_or_else(|e| { eprintln!("{e}"); std::process::exit(1); });
+    let Some(path) = path else {
+        print_usage();
+        std::process::exit(0);
+    };
+    let source = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("error: cannot read '{}': {}", path, e); std::process::exit(1); }
+    };
+
+    let mut emu = match make_emulator(&isa) {
+        Ok(e) => e,
+        Err(_) => {
+            eprintln!("error: unsupported ISA '{}'. Valid choices: 8086, 8085, 8051, 6502, Z80, rv32", isa);
+            std::process::exit(1);
+        }
+    };
     let code = match emu.assemble(&source) {
         Ok(c) => c,
-        Err(e) => { eprintln!("assembly error: {e}"); std::process::exit(1); }
+        Err(e) => { eprintln!("assembly failed for '{}':\n{}", path, e); std::process::exit(1); }
     };
     let entry = if isa == "8086" { 0x100 } else { 0 };
     emu.mem_write(0, &code);
     emu.set_pc(entry);
+
+    if verbose && grade.is_none() {
+        run_verbose(&mut emu, max_steps);
+        return;
+    }
 
     let res = emu.run(max_steps);
 
@@ -164,6 +197,72 @@ fn main() {
         std::process::exit(1);
     }
     println!("--- all {tested} checks PASSED ({} steps) ---", res.steps);
+}
+
+fn print_usage() {
+    println!(
+        "usage: run [options] <file.asm>\n\
+         \n\
+         Options:\n\
+           --isa <isa>        one of: 8086, 8085, 8051, 6502, Z80, rv32  (default 8086)\n\
+           --max-steps <N>   stop after N instructions (default 5,000,000)\n\
+           --grade <spec>    grade the program against a spec file (see below)\n\
+           --verbose, -v     trace each instruction and peripheral I/O writes\n\
+           --help, -h        show this help and exit\n\
+         \n\
+         Spec file (--grade) is line-oriented; blank lines and ;/# comments ignored:\n\
+           out   expected.txt   ; program output must match this file\n\
+           reg   AX      0x1234  ; register compare (decimal or 0x ok)\n\
+           mem   0x200   0xAB     ; memory byte compare\n\
+           steps 1000            ; must finish within this many steps (optional)\n\
+         \n\
+         Exit code is 0 on success, 1 on failure, 2 on usage error."
+    );
+}
+
+/// Step the emulator instruction-by-instruction and print the decoded
+/// mnemonic plus any peripheral register (port) writes that occur, so the
+/// user can see exactly what the program does to hardware.
+fn run_verbose(emu: &mut multi_cpu_emu::Emulator, max_steps: u32) {
+    use std::collections::HashMap;
+    let mut prev: HashMap<u16, u8> = (0..=255).map(|p: u16| (p, emu.port_read(p as u8))).collect();
+    let mut steps = 0u32;
+    while steps < max_steps && !emu.is_halted() {
+        let pc = emu.pc();
+        let dis = emu
+            .disassemble(pc, 1)
+            .first()
+            .map(|d| d.text.clone())
+            .unwrap_or_else(|| {
+                let b = emu.mem_read(pc, 1).first().copied().unwrap_or(0);
+                format!("<?? {:02X}>", b)
+            });
+        emu.step();
+        steps += 1;
+        let mut changed = Vec::new();
+        for p in 0u16..=255u16 {
+            let n = emu.port_read(p as u8);
+            if n != prev[&p] {
+                changed.push((p, n));
+                prev.insert(p, n);
+            }
+        }
+        if changed.is_empty() {
+            println!("{:06X}  {}", pc, dis);
+        } else {
+            let s = changed
+                .iter()
+                .map(|(p, v)| format!("P{:02X}={:02X}", p, v))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("{:06X}  {:<28} IO: {}", pc, dis, s);
+        }
+    }
+    println!(
+        "--- verbose trace: {} steps, halted={} ---",
+        steps,
+        emu.is_halted()
+    );
 }
 
 fn print_run(emu: &mut multi_cpu_emu::Emulator, res: &multi_cpu_emu::cpu::RunResult) {

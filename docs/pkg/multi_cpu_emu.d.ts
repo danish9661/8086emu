@@ -35,6 +35,9 @@ export class Emulator {
      * 8051 external-code (XDATA) region (base, len) when EA is low, else null.
      */
     ext_code_region(): Uint32Array | undefined;
+    /**
+     * Active flag names as short strings (e.g. "ZF", "CY").
+     */
     flags(): string[];
     /**
      * Read a file back from the 8086 DOS virtual filesystem (empty if absent).
@@ -48,6 +51,9 @@ export class Emulator {
      * 8086 graphics framebuffer, or None when in a text mode / non-8086 ISA.
      */
     gfx(): GfxInfo | undefined;
+    /**
+     * True once the CPU has executed HLT (or otherwise stopped).
+     */
     halted(): boolean;
     /**
      * Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
@@ -63,16 +69,26 @@ export class Emulator {
      * code (XDATA) when EA is low.
      */
     load_rom(data: Uint8Array, addr: number): void;
+    /**
+     * Linear memory read of `len` bytes starting at `addr`.
+     */
     mem(addr: number, len: number): Uint8Array;
     /**
      * Write bytes into memory (IDE memory poking).
      */
     mem_write(addr: number, data: Uint8Array): void;
+    /**
+     * Create an emulator for one of: "8086", "8085", "8051", "6502", "Z80", "rv32".
+     * Throws if the ISA name is unknown.
+     */
     constructor(isa: string);
     /**
      * Drain the program output buffer.
      */
     out(): string;
+    /**
+     * Current program counter (instruction pointer).
+     */
     pc(): number;
     /**
      * Current reload/count of an 8086 PIT channel (0..2). Other ISAs: 0.
@@ -86,9 +102,21 @@ export class Emulator {
      * Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins).
      */
     port_write(port: number, val: number): void;
+    /**
+     * Queue a type-ahead character for INT 21h/keyboard reads (8086).
+     */
     push_key(ch: number): void;
+    /**
+     * Register dump as "NAME=value" strings (e.g. "AX=1234").
+     */
     regs(): string[];
+    /**
+     * Reset the CPU to its initial state (registers, flags, PC, memory preserved).
+     */
     reset(): void;
+    /**
+     * Restore a previously captured `snapshot()` (state must match the ISA).
+     */
     restore(data: Uint8Array): void;
     /**
      * Write-protected ROM region (base, len) if configured, else null.
@@ -157,6 +185,9 @@ export class Emulator {
      * Read an 8051 SFR / IRAM byte (peripheral-register readout).
      */
     sfr(addr: number): number;
+    /**
+     * Deterministic serialization of full CPU state (for save/restore and step-back).
+     */
     snapshot(): Uint8Array;
     /**
      * Read the 8085 SOD (Serial Output Data) pin set by SIM (bit 7). 8085 only.

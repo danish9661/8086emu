@@ -27,6 +27,8 @@ pub struct Emulator {
 #[wasm_bindgen]
 impl Emulator {
     #[wasm_bindgen(constructor)]
+    /// Create an emulator for one of: "8086", "8085", "8051", "6502", "Z80", "rv32".
+    /// Throws if the ISA name is unknown.
     pub fn new(isa: &str) -> Result<Emulator, JsValue> {
         to_js(crate::make_emulator(isa).map(|inner| Emulator { inner }))
     }
@@ -92,10 +94,12 @@ impl Emulator {
         r.steps
     }
 
+    /// Current program counter (instruction pointer).
     pub fn pc(&self) -> u32 {
         self.inner.pc()
     }
 
+    /// Register dump as "NAME=value" strings (e.g. "AX=1234").
     pub fn regs(&self) -> Vec<String> {
         self.inner
             .regs()
@@ -104,6 +108,7 @@ impl Emulator {
             .collect()
     }
 
+    /// Active flag names as short strings (e.g. "ZF", "CY").
     pub fn flags(&self) -> Vec<String> {
         let f = self.inner.flags();
         let mut v = Vec::new();
@@ -140,6 +145,7 @@ impl Emulator {
         vec![c, r]
     }
 
+    /// Linear memory read of `len` bytes starting at `addr`.
     pub fn mem(&self, addr: u32, len: u32) -> Vec<u8> {
         self.inner.mem_read(addr, len as usize)
     }
@@ -215,10 +221,12 @@ impl Emulator {
         self.inner.take_output()
     }
 
+    /// True once the CPU has executed HLT (or otherwise stopped).
     pub fn halted(&self) -> bool {
         self.inner.is_halted()
     }
 
+    /// Reset the CPU to its initial state (registers, flags, PC, memory preserved).
     pub fn reset(&mut self) {
         self.inner.reset();
     }
@@ -270,6 +278,7 @@ impl Emulator {
         self.inner.sod()
     }
 
+    /// Queue a type-ahead character for INT 21h/keyboard reads (8086).
     pub fn push_key(&mut self, ch: u8) {
         self.inner.push_key(ch);
     }
@@ -279,10 +288,12 @@ impl Emulator {
         self.inner.waiting_input()
     }
 
+    /// Deterministic serialization of full CPU state (for save/restore and step-back).
     pub fn snapshot(&self) -> Vec<u8> {
         self.inner.snapshot()
     }
 
+    /// Restore a previously captured `snapshot()` (state must match the ISA).
     pub fn restore(&mut self, data: &[u8]) {
         self.inner.restore(data);
     }

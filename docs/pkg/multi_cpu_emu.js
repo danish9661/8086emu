@@ -98,6 +98,7 @@ export class Emulator {
         return v1;
     }
     /**
+     * Active flag names as short strings (e.g. "ZF", "CY").
      * @returns {string[]}
      */
     flags() {
@@ -149,6 +150,7 @@ export class Emulator {
         return ret === 0 ? undefined : GfxInfo.__wrap(ret);
     }
     /**
+     * True once the CPU has executed HLT (or otherwise stopped).
      * @returns {boolean}
      */
     halted() {
@@ -191,6 +193,7 @@ export class Emulator {
         wasm.emulator_load_rom(this.__wbg_ptr, ptr0, len0, addr);
     }
     /**
+     * Linear memory read of `len` bytes starting at `addr`.
      * @param {number} addr
      * @param {number} len
      * @returns {Uint8Array}
@@ -212,6 +215,8 @@ export class Emulator {
         wasm.emulator_mem_write(this.__wbg_ptr, addr, ptr0, len0);
     }
     /**
+     * Create an emulator for one of: "8086", "8085", "8051", "6502", "Z80", "rv32".
+     * Throws if the ISA name is unknown.
      * @param {string} isa
      */
     constructor(isa) {
@@ -242,6 +247,7 @@ export class Emulator {
         }
     }
     /**
+     * Current program counter (instruction pointer).
      * @returns {number}
      */
     pc() {
@@ -275,12 +281,14 @@ export class Emulator {
         wasm.emulator_port_write(this.__wbg_ptr, port, val);
     }
     /**
+     * Queue a type-ahead character for INT 21h/keyboard reads (8086).
      * @param {number} ch
      */
     push_key(ch) {
         wasm.emulator_push_key(this.__wbg_ptr, ch);
     }
     /**
+     * Register dump as "NAME=value" strings (e.g. "AX=1234").
      * @returns {string[]}
      */
     regs() {
@@ -289,10 +297,14 @@ export class Emulator {
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
         return v1;
     }
+    /**
+     * Reset the CPU to its initial state (registers, flags, PC, memory preserved).
+     */
     reset() {
         wasm.emulator_reset(this.__wbg_ptr);
     }
     /**
+     * Restore a previously captured `snapshot()` (state must match the ISA).
      * @param {Uint8Array} data
      */
     restore(data) {
@@ -457,6 +469,7 @@ export class Emulator {
         return ret;
     }
     /**
+     * Deterministic serialization of full CPU state (for save/restore and step-back).
      * @returns {Uint8Array}
      */
     snapshot() {
