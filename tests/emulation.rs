@@ -2044,3 +2044,24 @@ fn aam_div0_8086() {
     assert!(emu.is_halted(), "AAM base 0 must raise #DE and halt");
 }
 
+#[test]
+fn mem_info_facade() {
+    // Live memory-map getters reflect configured ROM/SRAM/EA state.
+    // 8085: external SRAM window present by default; ROM region only after load.
+    let mut e85 = make_emulator("8085").unwrap();
+    assert!(e85.sram_region().is_some(), "8085 should expose external SRAM region");
+    assert!(e85.rom_region().is_none(), "8085 ROM region hidden until loaded");
+    e85.set_rom_region(0x0000, 0x2000);
+    assert_eq!(e85.rom_region(), Some((0x0000, 0x2000)), "8085 ROM region reported");
+
+    // 8051: EA high by default; external code region appears when EA is low + loaded.
+    let mut e51 = make_emulator("8051").unwrap();
+    assert!(e51.ea_active(), "8051 EA defaults high");
+    assert!(e51.ext_code_region().is_none(), "no external code while EA high");
+    e51.set_ea(false);
+    let code = e51.assemble("ORG 0\nNOP\nEND\n").unwrap();
+    e51.load_rom(&code, 0);
+    assert!(!e51.ea_active(), "8051 EA low after set_ea(false)");
+    assert!(e51.ext_code_region().is_some(), "external code region present with EA low");
+}
+

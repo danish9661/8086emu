@@ -683,6 +683,20 @@ impl Cpu8051 {
         if addr < 0x80 { self.iram[addr as usize] } else { self.sfr[addr as usize - 0x80] }
     }
 
+    /// Write an SFR (debug/IDE edit), routing port SFRs through the port model.
+    pub fn set_sfr_byte(&mut self, addr: u8, v: u8) {
+        match addr {
+            0x80 => self.port_write(0, v),
+            0x90 => self.port_write(1, v),
+            0xA0 => self.port_write(2, v),
+            0xB0 => self.port_write(3, v),
+            _ => {
+                if addr < 0x80 { self.iram[addr as usize] = v; }
+                else { self.sfr[addr as usize - 0x80] = v; }
+            }
+        }
+    }
+
     /// Set the EA pin. When false, code is fetched from external program memory
     /// (the XDATA space) instead of the internal `code` image.
     pub fn set_ea(&mut self, ea: bool) { self.ea = ea; }

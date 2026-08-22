@@ -134,6 +134,36 @@ impl Emulator {
         self.inner.set_sram(base, len);
     }
 
+    /// Write-protected ROM region (base, len) if configured, else null.
+    pub fn rom_region(&self) -> Option<Vec<u32>> {
+        self.inner.rom_region().map(|(b, l)| vec![b, l])
+    }
+
+    /// External SRAM window (base, len) if configured (8055), else null.
+    pub fn sram_region(&self) -> Option<Vec<u32>> {
+        self.inner.sram_region().map(|(b, l)| vec![b, l])
+    }
+
+    /// 8051 EA pin state (true = internal code, false = external via XDATA).
+    pub fn ea_active(&self) -> bool {
+        self.inner.ea_active()
+    }
+
+    /// 8051 external-code (XDATA) region (base, len) when EA is low, else null.
+    pub fn ext_code_region(&self) -> Option<Vec<u32>> {
+        self.inner.ext_code_region().map(|(b, l)| vec![b, l])
+    }
+
+    /// Read an 8051 SFR / IRAM byte (peripheral-register readout).
+    pub fn sfr(&self, addr: u8) -> u8 {
+        self.inner.sfr(addr)
+    }
+
+    /// Write an 8051 SFR / IRAM byte (peripheral-register editor).
+    pub fn set_sfr(&mut self, addr: u8, v: u8) {
+        self.inner.set_sfr(addr, v);
+    }
+
     /// Drain the program output buffer.
     pub fn out(&mut self) -> String {
         self.inner.take_output()

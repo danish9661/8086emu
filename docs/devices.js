@@ -156,34 +156,65 @@ export function renderDevices(emu, isa) {
 }
 
 // Static memory-map overview per ISA for the "Memory map" panel.
-export function renderMemMap(emu, isa) {
-  const el = document.getElementById('memmap');
-  if (!el) return;
-  let rows;
-  if (isa === '8086') {
-    rows = [
-      '00000–9FFFF  RAM (640 KiB)',
-      'A0000–BFFFF  VGA / video',
-      'C0000–EFFFF  ROM / expansion',
-      'F0000–FFFFF  ROM (BIOS) — load via “Load ROM”',
-      '0000–FFFF    I/O ports (OUT/IN)',
-    ];
-  } else if (isa === '8085') {
-    rows = [
-      '0000–7FFF   main RAM',
-      '8000–80FF   8155 external RAM',
-      '8000–80FF   8155 I/O (ports 80–85)',
-      '9000–9FFF   external SRAM (8 KiB)',
-      '00–FF       I/O ports (OUT/IN)',
-    ];
-  } else {
-    rows = [
-      '0000–FFFF   code ROM (internal, EA=1)',
-      '0000–FFFF   XDATA = external ROM (EA=0) + RAM',
-      'FF00–FFFF   XDATA top → I/O ports',
-      '00–7F       internal RAM',
-      '80–FF       SFRs',
-    ];
-  }
-  el.innerHTML = rows.map((r) => `<div>${r}</div>`).join('');
-}
+ export function renderMemMap(emu, isa) {
+   const el = document.getElementById('memmap');
+   if (!el) return;
+   const fmt = (a) => a.toString(16).toUpperCase().padStart(4, '0');
+   const rom = emu.rom_region();
+   const sram = emu.sram_region();
+   const ext = emu.ext_code_region();
+   let rows;
+   if (isa === '8086') {
+     rows = [
+       '00000–9FFFF  RAM (640 KiB)',
+       'A0000–BFFFF  VGA / video',
+       'C0000–EFFFF  ROM / expansion',
+     ];
+     rows.push(rom
+       ? `${fmt(rom[0])}–${fmt(rom[0] + rom[1] - 1)}  ROM (BIOS) — LOADED`
+       : 'F0000–FFFFF  ROM (BIOS) — load via “Load ROM”');
+     rows.push('0000–FFFF    I/O ports (OUT/IN)');
+   } else if (isa === '8085') {
+     rows = [
+       '0000–7FFF   main RAM',
+       '8000–80FF   8155 external RAM',
+       '8000–80FF   8155 I/O (ports 80–85)',
+     ];
+     rows.push(sram
+       ? `${fmt(sram[0])}–${fmt(sram[0] + sram[1] - 1)}  external SRAM — LOADED`
+       : '9000–9FFF   external SRAM (8 KiB)');
+     rows.push('00–FF       I/O ports (OUT/IN)');
+   } else {
+     rows = [];
+     rows.push(emu.ea_active()
+       ? '0000–FFFF   code ROM (internal, EA=1)'
+       : '0000–FFFF   code ROM (internal) — EA LOW');
+     rows.push(ext
+       ? `${fmt(ext[0])}–${fmt(ext[0] + ext[1] - 1)}  XDATA = external ROM (EA=0) + RAM`
+       : '0000–FFFF   XDATA = external ROM (EA=0) + RAM');
+     rows.push('FF00–FFFF   XDATA top → I/O ports');
+     rows.push('00–7F       internal RAM');
+     rows.push('80–FF       SFRs');
+   }
+   el.innerHTML = rows.map((r) => `<div>${r}</div>`).join('');
+ }
+
+ // 8051 special-function-register readout (click a cell to edit it live).
+ export function renderPeripherals(emu, isa) {
+   const el = document.getElementById('peripherals');
+   if (!el) return;
+   if (isa !== '8051') {
+     el.innerHTML = '<div class="hint">Peripheral (SFR) readouts are shown for the 8051. Use the Ports panel for 8086/8085 I/O.</div>';
+     return;
+   }
+   const sfrs = [
+     ['P0', 0x80], ['P1', 0x90], ['P2', 0xA0], ['P3', 0xB0],
+     ['SP', 0x81], ['DPL', 0x82], ['DPH', 0x83], ['PCON', 0x87],
+     ['TCON', 0x88], ['TMOD', 0x89], ['TL0', 0x8A], ['TH0', 0x8C],
+     ['TL1', 0x8B], ['TH1', 0x8D], ['SCON', 0x98], ['SBUF', 0x99],
+     ['IE', 0xA8], ['IP', 0xB8], ['PSW', 0xD0], ['ACC', 0xE0], ['B', 0xF0],
+   ];
+   el.innerHTML = sfrs
+     .map(([n, a]) => `<span class="sfr" data-sfr="${a}" title="${n} (${a.toString(16).toUpperCase()}h) — click to edit">${n} ${emu.sfr(a).toString(16).toUpperCase().padStart(2, '0')}</span>`)
+     .join('');
+ }

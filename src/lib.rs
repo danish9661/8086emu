@@ -276,6 +276,60 @@ impl Emulator {
         }
     }
 
+    /// Write an 8051 SFR / IRAM byte (IDE peripheral-register editor).
+    pub fn set_sfr(&mut self, addr: u8, v: u8) {
+        if let Emulator::Mcs51(c) = self {
+            c.set_sfr_byte(addr, v);
+        }
+    }
+
+    /// Live memory-map info: write-protected ROM region, if configured.
+    pub fn rom_region(&self) -> Option<(u32, u32)> {
+        match self {
+            Emulator::I8086(c) => {
+                let (b, l) = c.mem.rom_range();
+                if l > 0 { Some((b as u32, l as u32)) } else { None }
+            }
+            Emulator::I8085(c) => {
+                let (b, l) = c.mem.rom_range();
+                if l > 0 { Some((b as u32, l as u32)) } else { None }
+            }
+            Emulator::Mcs51(_) => None,
+        }
+    }
+
+    /// Live memory-map info: external SRAM window (8085), if configured.
+    pub fn sram_region(&self) -> Option<(u32, u32)> {
+        match self {
+            Emulator::I8085(c) => {
+                if c.sram_len > 0 { Some((c.sram_base, c.sram_len)) } else { None }
+            }
+            _ => None,
+        }
+    }
+
+    /// 8051 EA pin state (true = internal code, false = external code via XDATA).
+    pub fn ea_active(&self) -> bool {
+        match self {
+            Emulator::Mcs51(c) => c.ea,
+            _ => true,
+        }
+    }
+
+    /// 8051 external-code region (XDATA) bounds when EA is low, if loaded.
+    pub fn ext_code_region(&self) -> Option<(u32, u32)> {
+        match self {
+            Emulator::Mcs51(c) => {
+                if !c.ea && c.xdata.size() > 0 {
+                    Some((0, c.xdata.size() as u32))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
     pub fn push_key(&mut self, ch: u8) {
         if let Emulator::I8086(c) = self {

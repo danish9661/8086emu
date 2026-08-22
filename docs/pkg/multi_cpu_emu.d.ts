@@ -22,6 +22,14 @@ export class Emulator {
      * cycle-accurate timers (8086 PIT, 8051 timers, 8085 8155 timer).
      */
     cycles(): bigint;
+    /**
+     * 8051 EA pin state (true = internal code, false = external via XDATA).
+     */
+    ea_active(): boolean;
+    /**
+     * 8051 external-code (XDATA) region (base, len) when EA is low, else null.
+     */
+    ext_code_region(): Uint32Array | undefined;
     flags(): string[];
     /**
      * Read a file back from the 8086 DOS virtual filesystem (empty if absent).
@@ -74,6 +82,10 @@ export class Emulator {
     reset(): void;
     restore(data: Uint8Array): void;
     /**
+     * Write-protected ROM region (base, len) if configured, else null.
+     */
+    rom_region(): Uint32Array | undefined;
+    /**
      * Run up to `max_steps` instructions; returns steps executed.
      */
     run(max_steps: number): number;
@@ -113,6 +125,10 @@ export class Emulator {
      */
     set_rom_region(base: number, len: number): void;
     /**
+     * Write an 8051 SFR / IRAM byte (peripheral-register editor).
+     */
+    set_sfr(addr: number, v: number): void;
+    /**
      * Set the 8085 SID (Serial Input Data) pin read by RIM (bit 7). 8085 only.
      */
     set_sid(v: boolean): void;
@@ -120,11 +136,19 @@ export class Emulator {
      * 8085: (re)configure the external SRAM chip window (default 8 KiB @ 0x9000).
      */
     set_sram(base: number, len: number): void;
+    /**
+     * Read an 8051 SFR / IRAM byte (peripheral-register readout).
+     */
+    sfr(addr: number): number;
     snapshot(): Uint8Array;
     /**
      * Read the 8085 SOD (Serial Output Data) pin set by SIM (bit 7). 8085 only.
      */
     sod(): number;
+    /**
+     * External SRAM window (base, len) if configured (8055), else null.
+     */
+    sram_region(): Uint32Array | undefined;
     /**
      * Execute one instruction.
      */
@@ -144,6 +168,8 @@ export interface InitOutput {
     readonly emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_cursor: (a: number) => [number, number];
     readonly emulator_cycles: (a: number) => bigint;
+    readonly emulator_ea_active: (a: number) => number;
+    readonly emulator_ext_code_region: (a: number) => [number, number];
     readonly emulator_flags: (a: number) => [number, number];
     readonly emulator_fs_get: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_fs_put: (a: number, b: number, c: number, d: number, e: number) => [number, number];
@@ -163,6 +189,7 @@ export interface InitOutput {
     readonly emulator_regs: (a: number) => [number, number];
     readonly emulator_reset: (a: number) => void;
     readonly emulator_restore: (a: number, b: number, c: number) => void;
+    readonly emulator_rom_region: (a: number) => [number, number];
     readonly emulator_run: (a: number, b: number) => number;
     readonly emulator_run_bp: (a: number, b: number, c: number, d: number) => number;
     readonly emulator_run_to: (a: number, b: number, c: number) => number;
@@ -172,10 +199,13 @@ export interface InitOutput {
     readonly emulator_set_ea: (a: number, b: number) => void;
     readonly emulator_set_pc: (a: number, b: number) => void;
     readonly emulator_set_rom_region: (a: number, b: number, c: number) => void;
+    readonly emulator_set_sfr: (a: number, b: number, c: number) => void;
     readonly emulator_set_sid: (a: number, b: number) => void;
     readonly emulator_set_sram: (a: number, b: number, c: number) => void;
+    readonly emulator_sfr: (a: number, b: number) => number;
     readonly emulator_snapshot: (a: number) => [number, number];
     readonly emulator_sod: (a: number) => number;
+    readonly emulator_sram_region: (a: number) => [number, number];
     readonly emulator_step: (a: number) => void;
     readonly emulator_waiting_input: (a: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

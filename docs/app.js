@@ -1,5 +1,5 @@
 import init, { Emulator } from './pkg/multi_cpu_emu.js';
-import { renderDevices, resetDevices, renderMemMap } from './devices.js';
+import { renderDevices, resetDevices, renderMemMap, renderPeripherals } from './devices.js';
 
 const EXAMPLES = {
   '8086': [
@@ -531,6 +531,7 @@ function refresh() {
   // --- peripherals (ports 10h..27h) ---
   renderDevices(emu, isa);
   renderMemMap(emu, isa);
+  renderPeripherals(emu, isa);
 
   // --- ports ---
   renderPorts();
@@ -594,6 +595,19 @@ $('ports').addEventListener('click', (e) => {
   if (Number.isNaN(v) || v < 0 || v > 0xFF) { toast('Bad port value: ' + inp); return; }
   emu.port_write(port, v);
   renderPorts();
+});
+
+$('peripherals').addEventListener('click', (e) => {
+  const el = e.target.closest('.sfr');
+  if (!el) return;
+  const addr = parseInt(el.dataset.sfr, 10);
+  const cur = emu.sfr(addr);
+  const inp = prompt('SFR ' + addr.toString(16).toUpperCase() + 'h value (hex, 00-FF)', fmt(cur, 2));
+  if (inp === null) return;
+  const v = parseInt(inp.trim(), 16);
+  if (Number.isNaN(v) || v < 0 || v > 0xFF) { toast('Bad SFR value: ' + inp); return; }
+  emu.set_sfr(addr, v);
+  renderPeripherals(emu, isa);
 });
 
 $('portsClearBtn').onclick = () => {

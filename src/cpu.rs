@@ -18,6 +18,9 @@ impl Mem {
         Mem { data: vec![0u8; size], rom_base: 0, rom_len: 0 }
     }
 
+    /// Total size of the memory array in bytes.
+    pub fn size(&self) -> usize { self.data.len() }
+
     #[inline]
     pub fn read(&self, addr: usize) -> u8 {
         self.data[addr & (self.data.len() - 1)]

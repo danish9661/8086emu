@@ -64,6 +64,27 @@ export class Emulator {
         return BigInt.asUintN(64, ret);
     }
     /**
+     * 8051 EA pin state (true = internal code, false = external via XDATA).
+     * @returns {boolean}
+     */
+    ea_active() {
+        const ret = wasm.emulator_ea_active(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * 8051 external-code (XDATA) region (base, len) when EA is low, else null.
+     * @returns {Uint32Array | undefined}
+     */
+    ext_code_region() {
+        const ret = wasm.emulator_ext_code_region(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        }
+        return v1;
+    }
+    /**
      * @returns {string[]}
      */
     flags() {
@@ -259,6 +280,19 @@ export class Emulator {
         wasm.emulator_restore(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Write-protected ROM region (base, len) if configured, else null.
+     * @returns {Uint32Array | undefined}
+     */
+    rom_region() {
+        const ret = wasm.emulator_rom_region(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        }
+        return v1;
+    }
+    /**
      * Run up to `max_steps` instructions; returns steps executed.
      * @param {number} max_steps
      * @returns {number}
@@ -350,6 +384,14 @@ export class Emulator {
         wasm.emulator_set_rom_region(this.__wbg_ptr, base, len);
     }
     /**
+     * Write an 8051 SFR / IRAM byte (peripheral-register editor).
+     * @param {number} addr
+     * @param {number} v
+     */
+    set_sfr(addr, v) {
+        wasm.emulator_set_sfr(this.__wbg_ptr, addr, v);
+    }
+    /**
      * Set the 8085 SID (Serial Input Data) pin read by RIM (bit 7). 8085 only.
      * @param {boolean} v
      */
@@ -363,6 +405,15 @@ export class Emulator {
      */
     set_sram(base, len) {
         wasm.emulator_set_sram(this.__wbg_ptr, base, len);
+    }
+    /**
+     * Read an 8051 SFR / IRAM byte (peripheral-register readout).
+     * @param {number} addr
+     * @returns {number}
+     */
+    sfr(addr) {
+        const ret = wasm.emulator_sfr(this.__wbg_ptr, addr);
+        return ret;
     }
     /**
      * @returns {Uint8Array}
@@ -380,6 +431,19 @@ export class Emulator {
     sod() {
         const ret = wasm.emulator_sod(this.__wbg_ptr);
         return ret;
+    }
+    /**
+     * External SRAM window (base, len) if configured (8055), else null.
+     * @returns {Uint32Array | undefined}
+     */
+    sram_region() {
+        const ret = wasm.emulator_sram_region(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        }
+        return v1;
     }
     /**
      * Execute one instruction.
@@ -437,6 +501,11 @@ function getArrayJsValueFromWasm0(ptr, len) {
     }
     wasm.__externref_drop_slice(ptr, len);
     return result;
+}
+
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
 function getArrayU8FromWasm0(ptr, len) {
