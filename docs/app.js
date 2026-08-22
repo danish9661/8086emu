@@ -1,4 +1,5 @@
 import init, { Emulator } from './pkg/multi_cpu_emu.js';
+import { renderDevices, resetDevices } from './devices.js';
 
 const EXAMPLES = {
   '8086': [
@@ -139,6 +140,39 @@ JMP done
 less:
 MOV CX, 2       ; AX < BX
 done:
+ MOV AH, 4Ch
+INT 21h
+END
+`,
+    },
+    {
+      name: 'Peripherals demo (ports 10h-27h)',
+      src: `; Drive the peripheral devices panel via OUT.
+; Traffic light: red+yellow+green (bits 0/1/2 of port 10h)
+; 7-seg: write hex digit to 11h (low) / 12h (high)
+; Stepper: 4-bit coil pattern to 13h
+; Printer: write chars to 14h (read status 15h)
+; Robot: write X to 16h, Y to 17h
+; LED matrix: 8 rows at 20h-27h
+ORG 100h
+MOV AL, 001b
+OUT 10h, AL          ; red on
+MOV AL, 0Ch
+OUT 11h, AL          ; 7-seg low = 'C'
+MOV AL, 05h
+OUT 12h, AL          ; 7-seg high = '5'
+MOV AL, 0011b
+OUT 13h, AL          ; stepper pos 1
+MOV AL, 'H'
+OUT 14h, AL
+MOV AL, 'i'
+OUT 14h, AL
+MOV AL, 2
+OUT 16h, AL          ; robot X = 2
+MOV AL, 5
+OUT 17h, AL          ; robot Y = 5
+MOV AL, 10000000b
+OUT 20h, AL          ; LED row 0 leftmost lit
 MOV AH, 4Ch
 INT 21h
 END
@@ -455,6 +489,9 @@ function refresh() {
 
   // --- text screen (8086 INT 10h / 0xB8000) ---
   renderScreen();
+
+  // --- peripherals (ports 10h..27h) ---
+  renderDevices(emu, isa);
 
   // --- ports ---
   renderPorts();
@@ -837,7 +874,8 @@ $('backBtn').onclick = () => {
 };
 $('runBtn').onclick = startRun;
 $('stopBtn').onclick = stopRun;
-$('resetBtn').onclick = () => { newEmulator(); refresh(); toast('CPU reset'); };
+$('resetBtn').onclick = () => { newEmulator(); resetDevices(); refresh(); toast('CPU reset'); };
+$('devResetBtn').onclick = () => { resetDevices(); renderDevices(emu, isa); toast('Devices cleared'); };
 $('clearOutBtn').onclick = () => { accumOut = ''; outputBox.textContent = ''; };
 
 // ---------- snapshot Save / Load ----------
