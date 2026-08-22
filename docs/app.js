@@ -429,7 +429,8 @@ let accumOut = '';
 let errLine = -1;
 let codeMap = [];
 let breakpoints = new Set();   // per source line: "ADDR  BYTES" or ''
-let history = [];   // snapshots for Step-Back
+let history = [];   // snapshots for Step-Back (time-travel debugger)
+const MAX_HISTORY = 200;        // bounded ring of CPU states
 
 const $ = (id) => document.getElementById(id);
 const editor = $('editor'), gutter = $('gutter'), hl = $('hl'), errorsBox = $('errors'),
@@ -800,8 +801,8 @@ function assemble() {
 
 function stepOnce() {
   if (emu.halted()) return;
-  history.push(emu.snapshot());
-  if (history.length > 50) history.shift();
+  history.push({ snap: emu.snapshot(), steps });
+  if (history.length > MAX_HISTORY) history.shift();
   emu.step();
   steps++;
   refresh();
@@ -840,8 +841,8 @@ function callRetAddr() {
 
 function stepOver() {
   if (emu.halted() || runTimer) return;
-  history.push(emu.snapshot());
-  if (history.length > 50) history.shift();
+  history.push({ snap: emu.snapshot(), steps });
+  if (history.length > MAX_HISTORY) history.shift();
   const ret = callRetAddr();
   if (ret === null) {
     emu.step();
@@ -862,8 +863,8 @@ function stepOver() {
 
 function runToLine(addr) {
   if (runTimer || emu.halted()) return;
-  history.push(emu.snapshot());
-  if (history.length > 50) history.shift();
+  history.push({ snap: emu.snapshot(), steps });
+  if (history.length > MAX_HISTORY) history.shift();
   if (addr === emu.pc()) return;
   const active = [...breakpoints].filter(a => a !== emu.pc());
   const n = emu.run_bp(100000, active.concat([addr]));
@@ -879,6 +880,9 @@ function runToLine(addr) {
 function startRun() {
   if (emu.halted()) return;
   stopRequested = false;
+  // Snapshot the pre-run state so Step-Back can undo the whole run (time-travel).
+  history.push({ snap: emu.snapshot(), steps });
+  if (history.length > MAX_HISTORY) history.shift();
   const active = [...breakpoints].filter(a => a !== emu.pc()); // continue past the bp we are stopped at
   runTimer = setInterval(() => {
     const n = emu.run_bp(30000, active);
@@ -906,8 +910,9 @@ $('stepBtn').onclick = stepOnce;
 $('overBtn').onclick = stepOver;
 $('backBtn').onclick = () => {
   if (!history.length || runTimer) return;
-  emu.restore(history.pop());
-  steps = Math.max(0, steps - 1);
+  const h = history.pop();
+  emu.restore(h.snap);
+  steps = h.steps;
   refresh();
 };
 $('runBtn').onclick = startRun;

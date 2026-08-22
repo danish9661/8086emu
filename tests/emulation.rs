@@ -1991,3 +1991,19 @@ fn ext_code_8051_ea() {
     assert!(emu.take_output().contains('A'), "8051 must fetch+run external code (EA=0)");
 }
 
+#[test]
+fn bios_boot_8086() {
+    // A ROM image reaching the top of memory boots from the 8086 reset vector
+    // FFFF:FFF0. Here a tiny "BIOS" far-jumps to code that prints 'A' via OUT 01h.
+    let mut emu = make_emulator("8086").unwrap();
+    emu.set_rom_region(0xF0000, 0x10000);
+    // reset vector at FFFF0: JMP FAR F000:F000 (physical FF000)
+    emu.mem_write(0xFFFF0, &[0xEA, 0x00, 0xF0, 0x00, 0xF0]);
+    // BIOS code at FF000: MOV AL,'A'(0x41); OUT 01h,AL; HLT
+    emu.mem_write(0xFF000, &[0xB0, 0x41, 0xE7, 0x01, 0xF4]);
+    emu.reset();
+    assert_eq!(emu.pc(), 0xFFFF0, "reset must vector to FFFF0 when ROM reaches top");
+    emu.run(100);
+    assert_eq!(emu.take_output(), "A", "BIOS must execute from the top ROM");
+}
+

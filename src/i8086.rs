@@ -2153,6 +2153,14 @@ impl Cpu for Cpu8086 {
         self.pit = Pit8253::new();
         self.cycles = 0;
         self.mem_clear_text();
+        // If a ROM image reaches the top of memory, boot from the 8086 reset
+        // vector at FFFF:FFF0 (physical FFFFF0) like real hardware; otherwise
+        // start at 0 (the COM-style entry the loader sets PC past).
+        let (rb, rl) = self.mem.rom_range();
+        if (rb as u32) <= 0xFFFF0 && (rb as u32).saturating_add(rl as u32) >= 0xFFFF0 {
+            self.cs = 0xF000;
+            self.ip = 0xFFF0;
+        }
     }
 
     fn step(&mut self) -> bool {
