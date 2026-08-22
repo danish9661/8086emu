@@ -8,6 +8,7 @@ pub mod i8086;
 pub mod mcs51;
 pub mod asm;
 pub mod pit;
+pub mod pic8259;
 pub mod i8155;
 
 #[cfg(feature = "wasm")]

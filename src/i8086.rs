@@ -7,6 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg, RunResult};
+use crate::pic8259::Pic8259;
 use crate::pit::Pit8253;
 
 /// Nominal per-instruction host-cycle cost. The 8086's real cycle counts vary
@@ -126,8 +127,10 @@ pub struct Cpu8086 {
     // text-mode screen state (framebuffer itself lives at 0xB8000 in `mem`)
     cursor: (u8, u8), // (col, row); 80x25 colour text
     video_mode: u8,
-    // 8253 PIT (system timer): channel 0 pulses INT 8
+    // 8253 PIT (system timer): channel 0 pulses IRQ0
     pit: Pit8253,
+    // 8259 PIC: routes IRQ lines (incl. PIT channel 0) to the INTR pin
+    pic: Pic8259,
     // total host clock cycles executed (drives the PIT; nominal per-instruction cost)
     cycles: u64,
 }
@@ -161,17 +164,21 @@ impl Cpu8086 {
     }
 
     /// Service latched hardware interrupts at the end of a step (never while
-    /// halted or blocked on input). NMI > INTR; INTR needs IF set.
+    /// halted or blocked on input). NMI > INTR (PIC IRQs, then external INTR);
+    /// maskable sources need IF set. The 8259 PIC asserts INTR for any unmasked,
+    /// non-preempting device IRQ (the 8253 PIT channel 0 maps to IRQ0/INT 8).
     fn service_interrupts(&mut self) {
         if self.pending_nmi {
             self.pending_nmi = false;
             self.hardware_intr(2);
-        } else if self.pending_intr && self.flag(IF) {
-            self.pending_intr = false;
-            self.hardware_intr(self.intr_vector);
-        } else if self.pit.take_irq0() && self.flag(IF) {
-            // 8253 channel 0 terminal count -> IRQ0 (INT 8), maskable via IF
-            self.hardware_intr(8);
+        } else if self.flag(IF) {
+            if let Some(v) = self.pic.output_vector() {
+                self.pic.acknowledge(v.wrapping_sub(self.pic.base()));
+                self.hardware_intr(v);
+            } else if self.pending_intr {
+                self.pending_intr = false;
+                self.hardware_intr(self.intr_vector);
+            }
         }
     }
 
@@ -200,6 +207,7 @@ impl Cpu8086 {
             cursor: (0, 0),
             video_mode: 3,
             pit: Pit8253::new(),
+            pic: Pic8259::new(),
             cycles: 0,
         };
         c.reset();
@@ -535,6 +543,8 @@ impl Cpu8086 {
     }
     fn port_out8(&mut self, p: usize, v: u8) {
         match p {
+            0x20 => self.pic.write_cmd(v),
+            0x21 => self.pic.write_data(v),
             0x40 => self.pit.write_data(0, v),
             0x41 => self.pit.write_data(1, v),
             0x42 => self.pit.write_data(2, v),
@@ -556,6 +566,8 @@ impl Cpu8086 {
     }
     fn port_in8(&self, p: usize) -> u8 {
         match p {
+            0x20 => self.pic.read_cmd(),
+            0x21 => self.pic.read_data(),
             0x40 => self.pit.read_data(0),
             0x41 => self.pit.read_data(1),
             0x42 => self.pit.read_data(2),
@@ -2170,6 +2182,7 @@ impl Cpu for Cpu8086 {
         self.cursor = (0, 0);
         self.video_mode = 3;
         self.pit = Pit8253::new();
+        self.pic = Pic8259::new();
         self.cycles = 0;
         self.mem_clear_text();
         // If a ROM image reaches the top of memory, boot from the 8086 reset
@@ -2192,6 +2205,9 @@ impl Cpu for Cpu8086 {
         if !self.halted {
             self.cycles += c;
             self.pit.advance(c);
+            if self.pit.take_irq0() {
+                self.pic.request(0); // 8253 channel 0 terminal count -> IRQ0
+            }
             self.service_interrupts();
             if trap && self.flag(TF) {
                 self.hardware_intr(1); // single-step trap: INT 1
@@ -2254,8 +2270,8 @@ impl Cpu for Cpu8086 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53 + 8);
-        v.push(8); // version
+        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53 + 16);
+        v.push(9); // version
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.fs, self.gs, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -2280,6 +2296,7 @@ impl Cpu for Cpu8086 {
         let (rb, rl) = self.mem.rom_range();
         v.extend_from_slice(&(rb as u32).to_le_bytes());
         v.extend_from_slice(&(rl as u32).to_le_bytes());
+        v.extend_from_slice(&self.pic.snapshot());
         v
     }
 
@@ -2323,7 +2340,9 @@ impl Cpu for Cpu8086 {
                 self.intr_vector = body.get(start + 2).copied().unwrap_or(0);
             }
             if ver >= 5 {
-                let tail = if ver >= 8 {
+                let tail = if ver >= 9 {
+                    data.len() - 139 // 67 fpu + 3 cursor/mode + 45 pit + 8 cycles + 8 rom + 8 pic
+                } else if ver >= 8 {
                     data.len() - 131 // 67 fpu + 3 cursor/mode + 45 pit + 8 cycles + 8 rom
                 } else if ver >= 7 {
                     data.len() - 123 // 67 fpu + 3 cursor/mode + 45 pit + 8 cycles
@@ -2358,6 +2377,9 @@ impl Cpu for Cpu8086 {
                     let rb = u32::from_le_bytes([data[tail + 123], data[tail + 124], data[tail + 125], data[tail + 126]]);
                     let rl = u32::from_le_bytes([data[tail + 127], data[tail + 128], data[tail + 129], data[tail + 130]]);
                     self.mem.set_rom(rb as usize, rl as usize);
+                }
+                if ver >= 9 {
+                    self.pic.restore(&data[tail + 131..tail + 131 + 8]);
                 }
             }
         }

@@ -1857,31 +1857,38 @@ SJMP $\nEND";
 
 #[test]
 fn pit_int8_periodic_8086() {
-    // The 8253 PIT channel 0 is wired to IRQ0 -> INT 8. Program it to a small
-    // mode-2 period and confirm the BIOS-style periodic tick actually fires.
+    // The 8253 PIT channel 0 is wired through the 8259 PIC to IRQ0 -> INT 8.
+    // Program a small mode-2 period, install an ISR that issues a real EOI, and
+    // confirm the tick fires periodically (not just once).
     let mut emu = make_emulator("8086").unwrap();
-    let src = "ORG 100h\n\
-STI\n\
-MOV AL, 34h\n\
-OUT 43h, AL\n\
-MOV AX, 03E8h\n\
-OUT 40h, AL\n\
-MOV AL, AH\n\
-OUT 40h, AL\n\
-loop:\n\
-JMP loop\n\
-ORG 200h\n\
-MOV AL, 0ABh\n\
-OUT 20h, AL\n\
-IRET\n\
-END\n";
+    let src = "\
+ORG 100h
+    STI
+    MOV AL, 34h
+    OUT 43h, AL
+    MOV AX, 03E8h
+    OUT 40h, AL
+    MOV AL, AH
+    OUT 40h, AL
+inf:
+    JMP inf
+ORG 200h
+    IN AL, 80h
+    INC AL
+    OUT 80h, AL
+    MOV AL, 20h
+    OUT 20h, AL
+    IRET
+END
+";
     let code = emu.assemble(src).unwrap();
     emu.mem_write(0, &code);
     // IVT entry for INT 8 (vector 8 -> physical 0x20) points at the handler @ 0x200.
     emu.mem_write(0x20, &[0x00, 0x02, 0x00, 0x00]);
     emu.set_pc(0x100);
-    emu.run(5000);
-    assert_eq!(emu.port_read(0x20), 0xAB, "PIT channel 0 must pulse INT 8 periodically");
+    emu.run(50_000);
+    let ticks = emu.port_read(0x80);
+    assert!(ticks >= 3, "PIT channel 0 must pulse INT 8 repeatedly via the PIC (got {ticks})");
 }
 
 #[test]
@@ -2054,6 +2061,52 @@ fn loop_8086() {
     emu.set_pc(0x100);
     emu.run(1000);
     assert_eq!(emu.take_output(), "ABC", "LOOP branches on decremented CX");
+}
+
+#[test]
+fn timer_irq_8086() {
+    // 8253 PIT channel 0 (reprogrammed to a short period) must drive IRQ0
+    // through the 8259 PIC to INT 8; the ISR increments a counter and issues
+    // EOI so the interrupt re-fires each period.
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "\
+ORG 100h
+counter: DW 0
+    CLI
+    XOR AX, AX
+    MOV ES, AX
+    MOV AX, handler
+    MOV [ES:0x20], AX
+    MOV AX, CS
+    MOV [ES:0x22], AX
+    MOV AL, 34h
+    OUT 43h, AL
+    MOV AL, 0E8h
+    OUT 40h, AL
+    MOV AL, 03h
+    OUT 40h, AL
+    STI
+wait:
+    CMP WORD PTR [counter], 5
+    JL wait
+    HLT
+handler:
+    INC WORD PTR [counter]
+    MOV AL, 20h
+    OUT 20h, AL
+    IRET
+END
+";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0x100, &code);
+    emu.set_pc(0x100);
+    emu.run(500_000);
+    assert!(emu.is_halted(), "timer demo should reach HLT");
+    // counter is the first word emitted (the `DW 0` at the top).
+    let lo = emu.mem_read(0x100, 1)[0];
+    let hi = emu.mem_read(0x101, 1)[0];
+    let c = u16::from_le_bytes([lo, hi]);
+    assert_eq!(c, 5, "INT 8 must fire 5 times (PIT -> PIC -> EOI -> re-fire)");
 }
 
 #[test]

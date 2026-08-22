@@ -60,4 +60,33 @@ function assert(cond, msg) {
   assert(e.out() === 'A', '8086 BIOS boots from top ROM');
 }
 
+// 8086: 8253 PIT channel 0 -> 8259 PIC (IRQ0) -> INT 8, periodic via EOI.
+{
+  const e = new Emulator('8086');
+  const src = `ORG 100h
+  STI
+  MOV AL, 34h
+  OUT 43h, AL
+  MOV AX, 03E8h
+  OUT 40h, AL
+  MOV AL, AH
+  OUT 40h, AL
+inf:
+  JMP inf
+ORG 200h
+  IN AL, 80h
+  INC AL
+  OUT 80h, AL
+  MOV AL, 20h
+  OUT 20h, AL
+  IRET
+END`;
+  const code = e.assemble(src);
+  e.load(code, 0);
+  e.mem_write(0x20, [0x00, 0x02, 0x00, 0x00]); // IVT[8] -> handler @ 0x200
+  e.set_pc(0x100);
+  e.run(50_000);
+  assert(e.port_read(0x80) >= 3, 'PIT->PIC INT 8 fires periodically via EOI');
+}
+
 console.log('WASM smoke test passed for all three ISAs.');
