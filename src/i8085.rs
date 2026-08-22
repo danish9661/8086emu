@@ -600,6 +600,17 @@ impl Cpu for Cpu8085 {
 
     fn set_pc(&mut self, addr: u32) { self.pc = addr as u16; }
 
+    fn set_reg(&mut self, name: &str, val: u32) {
+        let v = val as u8;
+        match name.to_ascii_uppercase().as_str() {
+            "A" => self.a = v, "B" => self.b = v, "C" => self.c = v, "D" => self.d = v,
+            "E" => self.e = v, "H" => self.h = v, "L" => self.l = v,
+            "SP" => self.sp = val as u16,
+            "PC" => self.pc = val as u16,
+            _ => {}
+        }
+    }
+
     fn regs(&self) -> Vec<Reg> {
         vec![
             Reg::new("A", self.a as u32),

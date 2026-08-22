@@ -90,6 +90,12 @@ impl Emulator {
         self.cpu().set_pc(addr);
     }
 
+    /// Set a register by name (e.g. "AX", "PC", "R0"). Ignored if the ISA
+    /// does not expose that register. Used by the IDE watch window.
+    pub fn set_reg(&mut self, name: &str, val: u32) {
+        self.cpu().set_reg(name, val);
+    }
+
     pub fn regs(&self) -> Vec<Reg> {
         self.cpu_ref().regs()
     }

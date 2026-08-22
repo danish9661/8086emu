@@ -126,6 +126,11 @@ export class Emulator {
      */
     set_pc(addr: number): void;
     /**
+     * Set a register by name (e.g. "AX", "PC", "R0"). Used by the IDE watch
+     * window for click-to-edit. Ignored for names the ISA does not expose.
+     */
+    set_reg(name: string, val: number): void;
+    /**
      * Mark `[base, base+len)` of main memory as read-only ROM (8086/8085).
      */
     set_rom_region(base: number, len: number): void;
@@ -204,6 +209,7 @@ export interface InitOutput {
     readonly emulator_set_clock: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly emulator_set_ea: (a: number, b: number) => void;
     readonly emulator_set_pc: (a: number, b: number) => void;
+    readonly emulator_set_reg: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_set_rom_region: (a: number, b: number, c: number) => void;
     readonly emulator_set_sfr: (a: number, b: number, c: number) => void;
     readonly emulator_set_sid: (a: number, b: number) => void;

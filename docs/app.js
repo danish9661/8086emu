@@ -432,8 +432,20 @@ let breakpoints = new Set();   // per source line: "ADDR  BYTES" or ''
 let history = [];   // snapshots for Step-Back (time-travel debugger)
 const MAX_HISTORY = 200;        // bounded ring of CPU states
 let prevRegMap = {};            // previous register values for change highlighting
-let watches = [];               // watch expressions (registers / memory)
+let watches = loadWatches();    // watch expressions (registers / memory), persisted
 let watchPrev = [];             // previous values for watch change highlighting
+
+function loadWatches() {
+  try {
+    const s = localStorage.getItem('mcu_watches');
+    if (!s) return [];
+    const a = JSON.parse(s);
+    return Array.isArray(a) ? a : [];
+  } catch { return []; }
+}
+function saveWatches() {
+  try { localStorage.setItem('mcu_watches', JSON.stringify(watches)); } catch {}
+}
 
 // Register name sets per ISA, for the watch window.
 const WATCH_REGS = {
@@ -453,8 +465,6 @@ function newEmulator() {
   steps = 0; accumOut = '';
   history = [];
   prevRegMap = {};
-  watches = [];
-  watchPrev = [];
   closeInput();
 }
 
@@ -701,13 +711,46 @@ $('memaddr').onchange = () => renderMem(emu.pc());
 // ---------- watch window ----------
 $('watchAdd').onclick = () => {
   const v = $('watchInput').value.trim();
-  if (v && !watches.includes(v)) { watches.push(v); watchPrev.push(undefined); $('watchInput').value = ''; renderWatch(emu.regs()); }
+  if (v && !watches.includes(v)) { watches.push(v); watchPrev.push(undefined); $('watchInput').value = ''; saveWatches(); renderWatch(emu.regs()); }
 };
 $('watchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('watchAdd').click(); });
 $('watchList').addEventListener('click', (e) => {
   const d = e.target.closest('.wdel');
-  if (d) { watches.splice(+d.dataset.i, 1); watchPrev.splice(+d.dataset.i, 1); renderWatch(emu.regs()); }
+  if (d) { watches.splice(+d.dataset.i, 1); watchPrev.splice(+d.dataset.i, 1); saveWatches(); renderWatch(emu.regs()); return; }
+  const wv = e.target.closest('.wv');
+  if (wv) editWatch(+wv.dataset.i);
 });
+
+// Click a watch value to edit it (registers via set_reg, memory via mem_write).
+function editWatch(i) {
+  const expr = watches[i];
+  if (expr === undefined) return;
+  const up = expr.trim().toUpperCase();
+  const SUB = { AH:['AX',8], AL:['AX',0], BH:['BX',8], BL:['BX',0], CH:['CX',8], CL:['CX',0], DH:['DX',8], DL:['DX',0] };
+  const isReg = !!SUB[up] || up === 'FLAGS' || WATCH_REGS[isa].includes(up);
+  const cur = evalWatch(expr, emu.regs());
+  const inp = prompt('New value for ' + cur.text + ' (hex):', Number.isFinite(cur.num) ? fmt(cur.num) : '0');
+  if (inp === null) return;
+  const v = parseInt(inp.trim(), 16);
+  if (Number.isNaN(v) || v < 0 || v > 0xFFFFFFFF) { toast('Bad value: ' + inp); return; }
+  if (isReg) {
+    if (SUB[up]) {
+      const [p, sh] = SUB[up];
+      const parent = val(emu.regs(), p);
+      emu.set_reg(p, (parent & ~(0xFF << sh)) | ((v & 0xFF) << sh));
+    } else {
+      emu.set_reg(up, v);
+    }
+  } else {
+    let addr = null;
+    if (expr.startsWith('[') && expr.endsWith(']')) addr = parseAddr(expr.slice(1, -1));
+    else addr = parseAddr(expr);
+    if (addr === null || addr < 0) { toast('Not editable'); return; }
+    emu.mem_write(addr, new Uint8Array([v & 0xFF, (v >> 8) & 0xFF]));
+  }
+  refresh();
+}
+
 
 // ---------- disassembly: click a line to toggle a breakpoint ----------
 $('disasmView').addEventListener('click', (e) => {
@@ -717,6 +760,12 @@ $('disasmView').addEventListener('click', (e) => {
   if (breakpoints.has(addr)) { breakpoints.delete(addr); toast('Breakpoint removed'); }
   else { breakpoints.add(addr); toast('Breakpoint set at ' + fmt(addr).padStart(4, '0') + 'h'); }
   renderDisasm(emu.pc());
+});
+// double-click a line to run-to-cursor
+$('disasmView').addEventListener('dblclick', (e) => {
+  const row = e.target.closest('.drow');
+  if (!row || !row.dataset.addr) return;
+  runToLine(parseInt(row.dataset.addr, 16));
 });
 
 // ---------- editor ----------
@@ -738,11 +787,10 @@ function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// ---------- disassembly view (8086) ----------
+// ---------- disassembly view (all ISAs) ----------
 function renderDisasm(pc) {
   const view = $('disasmView');
   if (!view) return;
-  if (isa !== '8086') { view.innerHTML = '<span class="muted">(disassembly is available for the 8086)</span>'; return; }
   let lines;
   try { lines = emu.disasm(pc, 40); } catch (e) { view.innerHTML = '<span class="muted">disasm unavailable</span>'; return; }
   let html = '';
@@ -824,7 +872,7 @@ function renderWatch(regs) {
     const ch = (watchPrev[i] !== undefined && watchPrev[i] !== num) ? ' changed' : '';
     watchPrev[i] = num;
     html += `<div class="watchrow"><span class="wn">${escHtml(text)}</span>` +
-            `<span class="wv${ch}">${escHtml(value)}</span>` +
+            `<span class="wv${ch}" data-i="${i}" title="click to edit">${escHtml(value)}</span>` +
             `<span class="wdel" data-i="${i}" title="remove">✕</span></div>`;
   }
   box.innerHTML = html;
@@ -1069,7 +1117,7 @@ $('backBtn').onclick = () => {
 };
 $('runBtn').onclick = startRun;
 $('stopBtn').onclick = stopRun;
-$('resetBtn').onclick = () => { newEmulator(); resetDevices(); refresh(); toast('CPU reset'); };
+$('resetBtn').onclick = () => { stopRun(); newEmulator(); resetDevices(); refresh(); toast('CPU reset'); };
 $('devResetBtn').onclick = () => { resetDevices(); renderDevices(emu, isa); toast('Devices cleared'); };
 $('clearOutBtn').onclick = () => { accumOut = ''; outputBox.textContent = ''; };
 
@@ -1190,6 +1238,7 @@ document.addEventListener('keydown', (e) => {
     case 'F8': stepOnce(); break;
     case 'F10': e.preventDefault(); stepOver(); break;
     case 'F5': startRun(); break;
+    case 'F4': e.preventDefault(); stopRun(); newEmulator(); resetDevices(); refresh(); toast('CPU reset'); break;
     case 'Escape': stopRun(); break;
   }
 });

@@ -161,6 +161,9 @@ pub trait Cpu {
     fn step(&mut self) -> bool;
     fn pc(&self) -> u32;
     fn set_pc(&mut self, addr: u32);
+    /// Set a register by canonical name (e.g. "AX", "PC", "R0", "FLAGS").
+    /// Cores implement the names they expose; the default ignores unknown ones.
+    fn set_reg(&mut self, name: &str, val: u32) { let _ = (name, val); }
     fn regs(&self) -> Vec<Reg>;
     fn flags(&self) -> FlagSet;
     fn mem_read(&self, addr: u32, len: usize) -> Vec<u8>;

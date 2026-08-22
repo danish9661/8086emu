@@ -89,4 +89,19 @@ END`;
   assert(e.port_read(0x80) >= 3, 'PIT->PIC INT 8 fires periodically via EOI');
 }
 
+// All ISAs: disasm() must return decoded instructions around the current PC.
+for (const [name, src, entry, expect] of [
+  ['8086', 'ORG 100h\nMOV AX, 5\nADD AX, 3\nHLT\nEND', 0x100, 'ADD AX'],
+  ['8085', 'MVI A, 5\nADI 03h\nHLT\nEND', 0, 'ADI'],
+  ['8051', 'MOV A, #05h\nADD A, #03h\nEND', 0, 'ADD A'],
+]) {
+  const e = new Emulator(name);
+  const code = e.assemble(src);
+  e.load(code, 0);
+  e.set_pc(entry);
+  e.step();
+  const lines = e.disasm(e.pc(), 8);
+  assert(lines.length > 0 && lines[0].includes(expect), `${name} disasm shows "${expect}" after one step`);
+}
+
 console.log('WASM smoke test passed for all three ISAs.');

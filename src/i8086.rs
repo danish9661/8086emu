@@ -2225,6 +2225,19 @@ impl Cpu for Cpu8086 {
         self.ip = (addr & 0xF) as u16;
     }
 
+    fn set_reg(&mut self, name: &str, val: u32) {
+        let v = val as u16;
+        match name.to_ascii_uppercase().as_str() {
+            "AX" => self.ax = v, "BX" => self.bx = v, "CX" => self.cx = v, "DX" => self.dx = v,
+            "SI" => self.si = v, "DI" => self.di = v, "BP" => self.bp = v, "SP" => self.sp = v,
+            "CS" => self.cs = v, "DS" => self.ds = v, "ES" => self.es = v, "SS" => self.ss = v,
+            "FS" => self.fs = v, "GS" => self.gs = v,
+            "IP" => self.ip = v,
+            "FLAGS" => self.flags = v,
+            _ => {}
+        }
+    }
+
     fn regs(&self) -> Vec<Reg> {
         vec![
             Reg::new("AX", self.ax as u32),

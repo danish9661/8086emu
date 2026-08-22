@@ -795,6 +795,24 @@ impl Cpu for Cpu8051 {
 
     fn set_pc(&mut self, addr: u32) { self.pc = addr as u16; }
 
+    fn set_reg(&mut self, name: &str, val: u32) {
+        let up = name.to_ascii_uppercase();
+        if up == "A" { self.sfr[S_ACC] = val as u8; return; }
+        if up == "B" { self.sfr[S_B] = val as u8; return; }
+        if up == "PSW" { self.sfr[S_PSW] = val as u8; return; }
+        if up == "SP" { self.sfr[S_SP] = val as u8; return; }
+        if up == "DPTR" { self.sfr[S_DPL] = (val & 0xFF) as u8; self.sfr[S_DPH] = (val >> 8) as u8; return; }
+        if up == "PC" { self.pc = val as u16; return; }
+        if up.starts_with('R') {
+            if let Ok(n) = up[1..].parse::<usize>() {
+                if n < 8 {
+                    let bank = ((self.sfr[S_PSW] >> 3) & 3) as usize;
+                    self.iram[bank * 8 + n] = val as u8;
+                }
+            }
+        }
+    }
+
     fn regs(&self) -> Vec<Reg> {
         let bank = self.bank();
         vec![

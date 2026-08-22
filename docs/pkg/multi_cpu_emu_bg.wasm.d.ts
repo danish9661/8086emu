@@ -37,6 +37,7 @@ export const emulator_serial_rx: (a: number, b: number) => [number, number];
 export const emulator_set_clock: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
 export const emulator_set_ea: (a: number, b: number) => void;
 export const emulator_set_pc: (a: number, b: number) => void;
+export const emulator_set_reg: (a: number, b: number, c: number, d: number) => void;
 export const emulator_set_rom_region: (a: number, b: number, c: number) => void;
 export const emulator_set_sfr: (a: number, b: number, c: number) => void;
 export const emulator_set_sid: (a: number, b: number) => void;

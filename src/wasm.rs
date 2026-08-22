@@ -57,6 +57,12 @@ impl Emulator {
         self.inner.set_pc(addr);
     }
 
+    /// Set a register by name (e.g. "AX", "PC", "R0"). Used by the IDE watch
+    /// window for click-to-edit. Ignored for names the ISA does not expose.
+    pub fn set_reg(&mut self, name: &str, val: u32) {
+        self.inner.set_reg(name, val);
+    }
+
     /// Run up to `max_steps` instructions; returns steps executed.
     pub fn run(&mut self, max_steps: u32) -> u32 {
         let r: RunResult = self.inner.run(max_steps);

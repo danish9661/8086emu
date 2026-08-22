@@ -389,6 +389,17 @@ export class Emulator {
         wasm.emulator_set_pc(this.__wbg_ptr, addr);
     }
     /**
+     * Set a register by name (e.g. "AX", "PC", "R0"). Used by the IDE watch
+     * window for click-to-edit. Ignored for names the ISA does not expose.
+     * @param {string} name
+     * @param {number} val
+     */
+    set_reg(name, val) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.emulator_set_reg(this.__wbg_ptr, ptr0, len0, val);
+    }
+    /**
      * Mark `[base, base+len)` of main memory as read-only ROM (8086/8085).
      * @param {number} base
      * @param {number} len
