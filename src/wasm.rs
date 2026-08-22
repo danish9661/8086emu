@@ -108,6 +108,16 @@ impl Emulator {
         self.inner.mem_read(addr, len as usize)
     }
 
+    /// Disassemble `count` instructions starting at `addr`. Each returned line
+    /// is "ADDR  BYTES  text" (use `Disasm::line`). Other ISAs return [].
+    pub fn disasm(&self, addr: u32, count: u32) -> Vec<String> {
+        self.inner
+            .disassemble(addr, count as usize)
+            .iter()
+            .map(|d| d.line())
+            .collect()
+    }
+
     /// Write bytes into memory (IDE memory poking).
     pub fn mem_write(&mut self, addr: u32, data: &[u8]) {
         self.inner.mem_write(addr, data);

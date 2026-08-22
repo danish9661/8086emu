@@ -2,7 +2,8 @@
 
 A single Rust crate that emulates three classic microprocessors:
 
-- **Intel 8086** — 16-bit, segmented, 1 MiB address space
+- **Intel 8086** — 16-bit, segmented, 1 MiB address space; includes an 8259 PIC
+  and 8253 PIT so timer interrupts (IRQ0 → `INT 8`) fire end-to-end
 - **Intel 8085** — 8-bit, 64 KiB, accumulator-centric
 - **Intel 8051 (MCS-51)** — 8-bit, SFRs, bit-addressable RAM, timers
 

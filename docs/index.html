@@ -71,6 +71,14 @@
         <div id="flags"></div>
       </div>
       <div class="panel">
+        <h2>Disassembly <span class="hint">click a line to toggle a breakpoint</span></h2>
+        <pre id="disasmView" class="mono"></pre>
+      </div>
+      <div class="panel">
+        <h2>Watch <span class="hint"><input id="watchInput" value="" spellcheck="false" placeholder="AX, [0x200], 100h, AL" size="20"><button id="watchAdd" title="Add watch">+</button></span></h2>
+        <div id="watchList" class="mono"></div>
+      </div>
+      <div class="panel">
         <h2>Memory</h2>
         <div id="memtools">
           <button id="mempgUp" title="Previous 256 bytes">&#9664;</button>

@@ -84,6 +84,22 @@ impl Mem {
     }
 }
 
+/// One decoded instruction for the disassembler view.
+#[derive(Clone, Debug)]
+pub struct Disasm {
+    pub addr: u32,
+    pub bytes: Vec<u8>,
+    pub text: String,
+}
+
+impl Disasm {
+    /// Render as "ADDR  BYTES  text" for the IDE gutter.
+    pub fn line(&self) -> String {
+        let hex: String = self.bytes.iter().map(|b| format!("{b:02X}")).collect();
+        format!("{:05X}  {:<12} {}", self.addr, hex, self.text)
+    }
+}
+
 /// All flags each CPU exposes; cores translate their internal flag state into
 /// this canonical set so the frontend/UI can be shared.
 #[derive(Default, Clone)]
@@ -159,6 +175,13 @@ pub trait Cpu {
     /// True while the CPU is blocked waiting for keyboard input
     /// (8086 INT 21h AH=01/06/07/08/0C with an empty input buffer).
     fn waiting_input(&self) -> bool { false }
+
+    /// Disassemble up to `count` instructions starting at `addr`. Cores provide
+    /// an ISA-specific decoder; the default returns an empty list.
+    fn disasm(&self, addr: u32, count: usize) -> Vec<Disasm> {
+        let _ = (addr, count);
+        Vec::new()
+    }
 
     fn run(&mut self, max_steps: u32) -> RunResult {
         let mut r = RunResult::default();

@@ -431,6 +431,16 @@ let codeMap = [];
 let breakpoints = new Set();   // per source line: "ADDR  BYTES" or ''
 let history = [];   // snapshots for Step-Back (time-travel debugger)
 const MAX_HISTORY = 200;        // bounded ring of CPU states
+let prevRegMap = {};            // previous register values for change highlighting
+let watches = [];               // watch expressions (registers / memory)
+let watchPrev = [];             // previous values for watch change highlighting
+
+// Register name sets per ISA, for the watch window.
+const WATCH_REGS = {
+  '8086': ['AX','BX','CX','DX','AH','AL','BH','BL','CH','CL','DH','DL','SI','DI','BP','SP','CS','DS','ES','SS','FS','GS','IP','FLAGS'],
+  '8085': ['A','B','C','D','E','H','L','SP','PC','PSW'],
+  '8051': ['A','B','DPTR','SP','PC','PSW','BANK','R0','R1','R2','R3','R4','R5','R6','R7'],
+};
 
 const $ = (id) => document.getElementById(id);
 const editor = $('editor'), gutter = $('gutter'), hl = $('hl'), errorsBox = $('errors'),
@@ -442,6 +452,9 @@ function newEmulator() {
   breakpoints = new Set();
   steps = 0; accumOut = '';
   history = [];
+  prevRegMap = {};
+  watches = [];
+  watchPrev = [];
   closeInput();
 }
 
@@ -479,19 +492,24 @@ function refresh() {
   const flags = emu.flags();
   const pc = emu.pc();
 
-  // --- registers ---
+  // --- registers (with change highlighting) ---
   let html = '';
   const pcPhys = ISA_INFO[isa].memBase(pc);
+  const markChanged = (n, v) => {
+    const ch = prevRegMap[n] !== undefined && prevRegMap[n] !== v;
+    prevRegMap[n] = v;
+    return ch;
+  };
   if (isa === '8086') {
     const pairs = [['AX','AH','AL'],['BX','BH','BL'],['CX','CH','CL'],['DX','DH','DL']];
     for (const [r, h, l] of pairs) {
       const v = val(regs, r);
-      html += chip(r, fmt(v), `${h}=${fmt(v >> 8, 2)} ${l}=${fmt(v & 0xFF, 2)}`);
+      html += chip(r, fmt(v), `${h}=${fmt(v >> 8, 2)} ${l}=${fmt(v & 0xFF, 2)}`, false, markChanged(r, v));
     }
     for (const r of ['SI','DI','BP','SP','CS','DS','ES','SS']) {
-      html += chip(r, fmt(val(regs, r)));
+      const v = val(regs, r);
+      html += chip(r, fmt(v), null, false, markChanged(r, v));
     }
-    const fl = flags.join('').replace(/[A-Z]/g, '');
     let fv = 0;
     if (flags.includes('CF')) fv |= 0x001;
     if (flags.includes('PF')) fv |= 0x004;
@@ -501,15 +519,18 @@ function refresh() {
     if (flags.includes('IF')) fv |= 0x200;
     if (flags.includes('DF')) fv |= 0x400;
     if (flags.includes('OF')) fv |= 0x800;
-    html += chip('IP', fmt(val(regs, 'IP')));
-    html += chip('FLAGS', fmt(fv));
+    const ipv = val(regs, 'IP');
+    html += chip('IP', fmt(ipv), null, false, markChanged('IP', ipv));
+    html += chip('FLAGS', fmt(fv), null, false, markChanged('FLAGS', fv));
   } else if (isa === '8085') {
-    for (const r of ['A','B','C','D','E','H','L','SP']) html += chip(r, fmt(val(regs, r), 2));
-    html += chip('PC', fmt(val(regs, 'PC')), null, true);
+    for (const r of ['A','B','C','D','E','H','L','SP']) { const v = val(regs, r); html += chip(r, fmt(v, 2), null, false, markChanged(r, v)); }
+    const pcv = val(regs, 'PC');
+    html += chip('PC', fmt(pcv), null, true, markChanged('PC', pcv));
   } else {
-    for (const r of ['A','B','DPTR','SP','PC','PSW']) html += chip(r, fmt(val(regs, r), r === 'B' || r === 'A' ? 2 : 4), null, r === 'PC');
-    for (let i = 0; i < 8; i++) html += chip('R' + i, fmt(val(regs, 'R' + i), 2));
-    html += chip('BANK', fmt(val(regs, 'BANK'), 1));
+    for (const r of ['A','B','DPTR','SP','PC','PSW']) { const v = val(regs, r); html += chip(r, fmt(v, r === 'B' || r === 'A' ? 2 : 4), null, r === 'PC', markChanged(r, v)); }
+    for (let i = 0; i < 8; i++) { const v = val(regs, 'R' + i); html += chip('R' + i, fmt(v, 2), null, false, markChanged('R' + i, v)); }
+    const bk = val(regs, 'BANK');
+    html += chip('BANK', fmt(bk, 1), null, false, markChanged('BANK', bk));
   }
   regsBox.innerHTML = html;
 
@@ -535,6 +556,10 @@ function refresh() {
 
   // --- ports ---
   renderPorts();
+
+  // --- disassembly (8086) + watch window ---
+  renderDisasm(pc);
+  renderWatch(regs);
 
   // --- status ---
   $('sbPc').textContent = ISA_INFO[isa].pcLabel(pc, regs);
@@ -617,8 +642,8 @@ $('portsClearBtn').onclick = () => {
   toast('Ports cleared');
 };
 
-function chip(name, value, sub = null, isPc = false) {
-  return `<div class="rreg ${isPc ? 'pc' : ''}"><div class="n">${name}</div>` +
+function chip(name, value, sub = null, isPc = false, changed = false) {
+  return `<div class="rreg ${isPc ? 'pc' : ''} ${changed ? 'changed' : ''}"><div class="n">${name}</div>` +
          `<div class="v">${value}</div>` +
          (sub ? `<div class="v sub">${sub}</div>` : '') + `</div>`;
 }
@@ -673,6 +698,27 @@ $('mempgUp').onclick = () => { $('memaddr').value = fmt(Math.max(0, memBase - PA
 $('mempgDn').onclick = () => { $('memaddr').value = fmt(memBase + PAGE); renderMem(emu.pc()); };
 $('memaddr').onchange = () => renderMem(emu.pc());
 
+// ---------- watch window ----------
+$('watchAdd').onclick = () => {
+  const v = $('watchInput').value.trim();
+  if (v && !watches.includes(v)) { watches.push(v); watchPrev.push(undefined); $('watchInput').value = ''; renderWatch(emu.regs()); }
+};
+$('watchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('watchAdd').click(); });
+$('watchList').addEventListener('click', (e) => {
+  const d = e.target.closest('.wdel');
+  if (d) { watches.splice(+d.dataset.i, 1); watchPrev.splice(+d.dataset.i, 1); renderWatch(emu.regs()); }
+});
+
+// ---------- disassembly: click a line to toggle a breakpoint ----------
+$('disasmView').addEventListener('click', (e) => {
+  const row = e.target.closest('.drow');
+  if (!row || !row.dataset.addr) return;
+  const addr = parseInt(row.dataset.addr, 16);
+  if (breakpoints.has(addr)) { breakpoints.delete(addr); toast('Breakpoint removed'); }
+  else { breakpoints.add(addr); toast('Breakpoint set at ' + fmt(addr).padStart(4, '0') + 'h'); }
+  renderDisasm(emu.pc());
+});
+
 // ---------- editor ----------
 const HL = {
   dirs: ['ORG', 'DB', 'DW', 'EQU', 'END'],
@@ -690,6 +736,98 @@ const HL = {
 const TOKEN_RE = /('[^'\n]*')|(;[^\n]*$)|(0[xX][0-9a-fA-F]+)|([0-9a-fA-F]+[hHbBqQ](?![0-9a-fA-F]))|([0-9]+)|([A-Za-z_][A-Za-z0-9_.@]*)|([\[\](),:+\-*/])/g;
 function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ---------- disassembly view (8086) ----------
+function renderDisasm(pc) {
+  const view = $('disasmView');
+  if (!view) return;
+  if (isa !== '8086') { view.innerHTML = '<span class="muted">(disassembly is available for the 8086)</span>'; return; }
+  let lines;
+  try { lines = emu.disasm(pc, 40); } catch (e) { view.innerHTML = '<span class="muted">disasm unavailable</span>'; return; }
+  let html = '';
+  for (const ln of lines) {
+    const m = ln.match(/^([0-9A-Fa-f]+)\s+(\S*)\s*(.*)$/);
+    if (!m) { html += `<div class="drow"><span class="dtext">${escHtml(ln)}</span></div>`; continue; }
+    const addr = parseInt(m[1], 16);
+    const cur = (addr === pc) ? ' cur' : '';
+    const bp = breakpoints.has(addr) ? ' bp' : '';
+    html += `<div class="drow${cur}${bp}" data-addr="${addr.toString(16)}">` +
+            `<span class="daddr">${m[1]}</span>  <span class="dbytes">${m[2]}</span>  <span class="dtext">${escHtml(m[3])}</span></div>`;
+  }
+  view.innerHTML = html;
+  // keep the current instruction in view
+  const cur = view.querySelector('.drow.cur');
+  if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+}
+
+// ---------- watch window ----------
+function parseAddr(s) {
+  s = (s || '').trim();
+  if (/^0x/i.test(s)) return parseInt(s.slice(2), 16);
+  if (/^0b/i.test(s)) return parseInt(s.slice(2), 2);
+  if (/^0o/i.test(s)) return parseInt(s.slice(2), 8);
+  if (/h$/i.test(s)) return parseInt(s.slice(0, -1), 16);
+  if (/^%/.test(s)) return parseInt(s.slice(1), 2);
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+  return null;
+}
+
+function evalWatch(expr, regs) {
+  const e = expr.trim();
+  const up = e.toUpperCase();
+  // sub-registers (AH/AL/…) are derived from their 16-bit parent
+  const SUB = { AH:['AX',8], AL:['AX',0], BH:['BX',8], BL:['BX',0], CH:['CX',8], CL:['CX',0], DH:['DX',8], DL:['DX',0] };
+  if (SUB[up]) {
+    const [p, sh] = SUB[up];
+    const v = (val(regs, p) >> sh) & 0xFF;
+    return { text: up, value: fmt(v, 2), num: v };
+  }
+  if (up === 'FLAGS' && isa === '8086') {
+    const fl = emu.flags();
+    let fv = 0;
+    if (fl.includes('CF')) fv |= 0x001;
+    if (fl.includes('PF')) fv |= 0x004;
+    if (fl.includes('AF')) fv |= 0x010;
+    if (fl.includes('ZF')) fv |= 0x040;
+    if (fl.includes('SF')) fv |= 0x080;
+    if (fl.includes('IF')) fv |= 0x200;
+    if (fl.includes('DF')) fv |= 0x400;
+    if (fl.includes('OF')) fv |= 0x800;
+    return { text: 'FLAGS', value: fmt(fv), num: fv };
+  }
+  if (WATCH_REGS[isa].includes(up)) {
+    const v = val(regs, up);
+    return { text: up, value: fmt(v), num: v };
+  }
+  let addr = null;
+  if (e.startsWith('[') && e.endsWith(']')) addr = parseAddr(e.slice(1, -1));
+  else addr = parseAddr(e);
+  if (addr !== null && addr >= 0) {
+    const b = new Uint8Array(emu.mem(addr, 2));
+    const v = b[0] | (b[1] << 8);
+    return { text: '[' + fmt(addr) + ']', value: fmt(v), num: v };
+  }
+  return { text: e, value: '?', num: NaN };
+}
+
+function renderWatch(regs) {
+  const box = $('watchList');
+  if (!box) return;
+  if (watches.length === 0) {
+    box.innerHTML = '<span class="muted">Add a register (AX) or memory ([0x200], 100h) to watch.</span>';
+    return;
+  }
+  let html = '';
+  for (let i = 0; i < watches.length; i++) {
+    const { text, value, num } = evalWatch(watches[i], regs);
+    const ch = (watchPrev[i] !== undefined && watchPrev[i] !== num) ? ' changed' : '';
+    watchPrev[i] = num;
+    html += `<div class="watchrow"><span class="wn">${escHtml(text)}</span>` +
+            `<span class="wv${ch}">${escHtml(value)}</span>` +
+            `<span class="wdel" data-i="${i}" title="remove">✕</span></div>`;
+  }
+  box.innerHTML = html;
 }
 function renderHl() {
   const labels = new Set();

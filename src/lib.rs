@@ -7,6 +7,9 @@ pub mod i8085;
 pub mod i8086;
 pub mod mcs51;
 pub mod asm;
+pub mod disasm8086;
+pub mod disasm8085;
+pub mod disasm8051;
 pub mod pit;
 pub mod pic8259;
 pub mod i8155;
@@ -343,6 +346,17 @@ impl Emulator {
         match self {
             Emulator::I8086(c) => c.waiting_input(),
             _ => false,
+        }
+    }
+
+    /// Disassemble instructions from memory. 8086 uses the real decoder; the
+    /// Decodes instructions starting at `start` for the active ISA. Works for
+    /// 8086, 8085 and 8051.
+    pub fn disassemble(&self, start: u32, count: usize) -> Vec<cpu::Disasm> {
+        match self {
+            Emulator::I8086(c) => disasm8086::disasm(&c.mem, start, count),
+            Emulator::I8085(c) => disasm8085::disasm(&c.mem, start, count),
+            Emulator::Mcs51(c) => disasm8051::disasm(&c.code, start, count),
         }
     }
 

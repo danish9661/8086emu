@@ -23,6 +23,11 @@ export class Emulator {
      */
     cycles(): bigint;
     /**
+     * Disassemble `count` instructions starting at `addr`. Each returned line
+     * is "ADDR  BYTES  text" (use `Disasm::line`). Other ISAs return [].
+     */
+    disasm(addr: number, count: number): string[];
+    /**
      * 8051 EA pin state (true = internal code, false = external via XDATA).
      */
     ea_active(): boolean;
@@ -168,6 +173,7 @@ export interface InitOutput {
     readonly emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_cursor: (a: number) => [number, number];
     readonly emulator_cycles: (a: number) => bigint;
+    readonly emulator_disasm: (a: number, b: number, c: number) => [number, number];
     readonly emulator_ea_active: (a: number) => number;
     readonly emulator_ext_code_region: (a: number) => [number, number];
     readonly emulator_flags: (a: number) => [number, number];

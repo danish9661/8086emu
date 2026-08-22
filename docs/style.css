@@ -117,8 +117,26 @@ main {
 .rreg .n { color: var(--accent); font-size: 11px; }
 .rreg .v { font-size: 14px; font-weight: 600; color: #e6edf3; letter-spacing: .5px; }
 .rreg .v.sub { font-size: 10px; color: var(--muted); font-weight: 400; }
-.rreg.pc { border-color: var(--green); }
-.rreg.pc .v { color: var(--green); }
+ .rreg.pc { border-color: var(--green); }
+ .rreg.pc .v { color: var(--green); }
+ .rreg.changed { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber) inset; }
+ .rreg.changed .v { color: var(--amber); }
+ #disasmView { margin: 0; padding: 10px; max-height: 260px; overflow: auto; font-size: 12px; line-height: 1.5; cursor: text; }
+ #disasmView .drow { white-space: pre; padding: 0 4px; border-radius: 3px; }
+ #disasmView .drow .daddr { color: var(--muted); }
+ #disasmView .drow .dbytes { color: #8b949e; }
+ #disasmView .drow .dtext { color: #e6edf3; }
+ #disasmView .drow.cur { background: rgba(63,185,80,.18); }
+ #disasmView .drow.cur .daddr { color: var(--green); }
+ #disasmView .drow.bp { box-shadow: inset 3px 0 0 var(--red); }
+ #disasmView .drow:hover { background: #161b22; }
+ #watchList { padding: 10px; font-size: 12px; }
+ .watchrow { display: flex; justify-content: space-between; gap: 10px; padding: 3px 4px; border-bottom: 1px solid var(--border); }
+ .watchrow .wn { color: var(--accent); }
+ .watchrow .wv { color: #e6edf3; font-weight: 600; }
+ .watchrow .wv.changed { color: var(--amber); }
+ .watchrow .wdel { color: var(--muted); cursor: pointer; }
+ .watchrow .wdel:hover { color: var(--red); }
 #flags { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px; }
 .flag {
   padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;

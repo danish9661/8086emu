@@ -6,6 +6,7 @@ export const emulator_assemble: (a: number, b: number, c: number) => [number, nu
 export const emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
 export const emulator_cursor: (a: number) => [number, number];
 export const emulator_cycles: (a: number) => bigint;
+export const emulator_disasm: (a: number, b: number, c: number) => [number, number];
 export const emulator_ea_active: (a: number) => number;
 export const emulator_ext_code_region: (a: number) => [number, number];
 export const emulator_flags: (a: number) => [number, number];

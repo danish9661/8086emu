@@ -64,6 +64,19 @@ export class Emulator {
         return BigInt.asUintN(64, ret);
     }
     /**
+     * Disassemble `count` instructions starting at `addr`. Each returned line
+     * is "ADDR  BYTES  text" (use `Disasm::line`). Other ISAs return [].
+     * @param {number} addr
+     * @param {number} count
+     * @returns {string[]}
+     */
+    disasm(addr, count) {
+        const ret = wasm.emulator_disasm(this.__wbg_ptr, addr, count);
+        var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]);
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * 8051 EA pin state (true = internal code, false = external via XDATA).
      * @returns {boolean}
      */
