@@ -1,0 +1,60 @@
+name: Publish to npm & GitHub Packages
+
+# Publishes the WebAssembly build as the `8086emu` npm package.
+#   - npmjs.com         -> uses secret NPM_TOKEN  (scoped to the npm account)
+#   - GitHub Packages   -> uses GITHUB_TOKEN      (auto-provided; scoped @danish9661)
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # needed to push to GitHub Packages
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: |
+          url=$(curl -sSL https://api.github.com/repos/rustwasm/wasm-pack/releases/latest | grep -o 'https://[^"]*x86_64-unknown-linux-musl.tar.gz' | head -1)
+          curl -sSL "$url" -o /tmp/wasm-pack.tar.gz
+          tar -xzf /tmp/wasm-pack.tar.gz -C /tmp
+          sudo mv /tmp/wasm-pack-*/wasm-pack /usr/local/bin/
+          wasm-pack --version
+
+      - name: Build wasm package
+        run: wasm-pack build --target web --out-dir pkg --release --features wasm
+
+      # ----- publish to npmjs.com as `8086emu` -----
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish to npm (NPM_TOKEN)
+        working-directory: pkg
+        run: |
+          npm pkg set name=8086emu
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ----- publish to GitHub Packages as @danish9661/8086emu -----
+      - name: Publish to GitHub Packages (GITHUB_TOKEN)
+        working-directory: pkg
+        run: |
+          npm pkg set name=@danish9661/8086emu
+          npm pkg set repository.url=git+https://github.com/danish9661/8086emu.git
+          printf '@danish9661:registry=https://npm.pkg.github.com/\n//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}\n' > .npmrc
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
