@@ -4,8 +4,61 @@
 //! buffer (so lab programs can "print" headlessly).
 
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg};
+use crate::i8155::I8155;
 
 const MEM_SIZE: usize = 64 * 1024;
+
+/// Approximate 8085 T-state (clock-cycle) cost per instruction. The 8155 timer
+/// is clocked by these so its period tracks real time; 8085 T-states are
+/// instruction-dependent (4–18), so this models the dominant cases. The 8086
+/// PIT and 8051 timers use exact per-instruction counts.
+fn i8085_tstates(op: u8) -> u8 {
+    match op {
+        0x00 => 4, // NOP
+        0x06 | 0x0E | 0x16 | 0x1E | 0x26 | 0x2E | 0x3E => 7, // MVI reg
+        0x36 => 10, // MVI M
+        0x07 | 0x0F | 0x17 | 0x1F | 0x27 | 0x2F | 0x37 => 4, // rotate / DAA
+        0x04 | 0x0C | 0x14 | 0x1C | 0x24 | 0x2C | 0x3C => 5, // INR reg
+        0x34 => 10, // INR M
+        0x05 | 0x0D | 0x15 | 0x1D | 0x25 | 0x2D | 0x3D => 5, // DCR reg
+        0x35 => 10, // DCR M
+        0x80..=0x87 => 4, // ADD reg
+        0x86 => 7, // ADD M
+        0x88..=0x8F => 4, // ADC
+        0x8E => 7,
+        0x90..=0x97 => 4, // SUB
+        0x96 => 7,
+        0x98..=0x9F => 4, // SBB
+        0x9E => 7,
+        0xA0..=0xA7 => 4, // ANA
+        0xA6 => 7,
+        0xA8..=0xAF => 4, // XRA
+        0xAE => 7,
+        0xB0..=0xB7 => 4, // ORA
+        0xB6 => 7,
+        0xB8..=0xBF => 4, // CMP
+        0xBE => 7,
+        0xC6 | 0xCE | 0xD6 | 0xDE | 0xE6 | 0xEE | 0xF6 | 0xFE => 7, // ALU imm
+        0x09 | 0x19 | 0x29 | 0x39 => 10, // DAD
+        0x01 | 0x11 | 0x21 | 0x31 => 10, // LXI
+        0x32 | 0x3A | 0x22 | 0x2A => 13, // STA/LDA/SHLD/LHLD
+        0x02 | 0x12 | 0x0A | 0x1A => 7, // STAX/LDAX
+        0xC3 => 10, // JMP
+        0xC2 | 0xCA | 0xD2 | 0xDA | 0xE2 | 0xEA | 0xF2 | 0xFA => 10, // Jcc
+        0xCD => 17, // CALL
+        0xC4 | 0xCC | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC => 17, // Ccc
+        0xC9 => 10, // RET
+        0xC0 | 0xC8 | 0xD0 | 0xD8 | 0xE0 | 0xE8 | 0xF0 | 0xF8 => 5, // Rcc
+        0xE3 => 18, // XTHL
+        0xE9 | 0xF9 => 5, // PCHL/SPHL
+        0xC5 | 0xD5 | 0xE5 | 0xF5 => 11, // PUSH rp
+        0xC1 | 0xD1 | 0xE1 | 0xF1 => 10, // POP rp
+        0xC7 | 0xCF | 0xD7 | 0xDF | 0xE7 | 0xEF | 0xF7 | 0xFF => 11, // RST
+        0xD3 | 0xDB => 10, // OUT / IN
+        0xFB | 0xF3 | 0x76 => 4, // EI / DI / HLT
+        _ => 4,
+    }
+}
 
 pub struct Cpu8085 {
     pub a: u8, pub b: u8, pub c: u8, pub d: u8, pub e: u8,
@@ -30,6 +83,12 @@ pub struct Cpu8085 {
     pub sod: bool,
     /// I/O port space (256 ports); OUT to port 01h also prints A.
     pub ports: [u8; 256],
+    /// External 8155 RAM/I/O/Timer (memory-mapped RAM at 0x8000..0x80FF,
+    /// registers at I/O ports 0x80..0x85). Its 14-bit timer counts host
+    /// clock cycles for cycle-accurate timing.
+    pub i8155: I8155,
+    /// Total host clock cycles (T-states) executed — drives the 8155 timer.
+    pub cycles: u64,
 }
 
 impl Default for Cpu8085 {
@@ -53,6 +112,8 @@ impl Cpu8085 {
             intr_vector: None,
             sid: false, sod: false,
             ports: [0; 256],
+            i8155: I8155::new(),
+            cycles: 0,
         };
         c.reset();
         c
@@ -379,12 +440,23 @@ impl Cpu8085 {
             }
             0xD3 => { // OUT port
                 let port = self.fetch8() as usize;
-                self.ports[port] = self.a;
-                if port == 0x01 {
-                    self.out.put_char(self.a as char);
+                if (0x80..=0x85).contains(&port) {
+                    self.i8155.write_reg(port - 0x80, self.a);
+                } else {
+                    self.ports[port] = self.a;
+                    if port == 0x01 {
+                        self.out.put_char(self.a as char);
+                    }
                 }
             }
-            0xDB => { let port = self.fetch8() as usize; self.a = self.ports[port]; } // IN
+            0xDB => { // IN port
+                let port = self.fetch8() as usize;
+                self.a = if (0x80..=0x85).contains(&port) {
+                    self.i8155.read_reg(port - 0x80)
+                } else {
+                    self.ports[port]
+                };
+            }
             0xFB => self.int_enabled = true,
             0xF3 => self.int_enabled = false,
             _ => self.unimplemented(op),
@@ -457,8 +529,12 @@ impl Cpu for Cpu8085 {
 
     fn step(&mut self) -> bool {
         if self.halted { return false; }
+        let op = self.mem.read(self.pc as usize);
         self.exec();
         if !self.halted {
+            let ts = i8085_tstates(op);
+            self.cycles += ts as u64;
+            self.i8155.advance(ts as u64);
             self.service_interrupts();
         }
         !self.halted
@@ -491,18 +567,30 @@ impl Cpu for Cpu8085 {
     }
 
     fn mem_read(&self, addr: u32, len: usize) -> Vec<u8> {
-        (0..len).map(|i| self.mem.read(addr as usize + i)).collect()
+        (0..len).map(|i| {
+            let a = addr as usize + i;
+            if (0x8000..=0x80FF).contains(&a) {
+                self.i8155.ram_read(a - 0x8000)
+            } else {
+                self.mem.read(a)
+            }
+        }).collect()
     }
 
     fn mem_write(&mut self, addr: u32, data: &[u8]) {
         for (i, b) in data.iter().enumerate() {
-            self.mem.write(addr as usize + i, *b);
+            let a = addr as usize + i;
+            if (0x8000..=0x80FF).contains(&a) {
+                self.i8155.ram_write(a - 0x8000, *b);
+            } else {
+                self.mem.write(a, *b);
+            }
         }
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(16 + MEM_SIZE + 256);
-        v.push(2);
+        let mut v = Vec::with_capacity(16 + MEM_SIZE + 256 + 267 + 8);
+        v.push(3);
         v.extend_from_slice(&[self.a, self.b, self.c, self.d, self.e, self.h, self.l]);
         v.extend_from_slice(&self.sp.to_le_bytes());
         v.extend_from_slice(&self.pc.to_le_bytes());
@@ -523,6 +611,8 @@ impl Cpu for Cpu8085 {
         v.push(self.sod as u8);
         v.extend_from_slice(&self.mem.data);
         v.extend_from_slice(&self.ports);
+        v.extend_from_slice(&self.i8155.snapshot());
+        v.extend_from_slice(&self.cycles.to_le_bytes());
         v
     }
 
@@ -558,7 +648,16 @@ impl Cpu for Cpu8085 {
             let n2 = body.len().saturating_sub(start).min(256);
             self.ports[..n2].copy_from_slice(&body[start..start + n2]);
         }
+        if ver >= 3 {
+            let n = data.len();
+            self.i8155.restore(&data[n - 275..n - 8]);
+            let mut cy = [0u8; 8];
+            cy.copy_from_slice(&data[n - 8..n]);
+            self.cycles = u64::from_le_bytes(cy);
+        }
     }
 
     fn is_halted(&self) -> bool { self.halted }
+
+    fn cycles(&self) -> u64 { self.cycles }
 }

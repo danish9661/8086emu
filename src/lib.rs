@@ -7,6 +7,8 @@ pub mod i8085;
 pub mod i8086;
 pub mod mcs51;
 pub mod asm;
+pub mod pit;
+pub mod i8155;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -167,6 +169,25 @@ impl Emulator {
             Self::I8085(c) => c.ports[port as usize] = v,
             Self::I8086(c) => c.ports[port as usize] = v,
             Self::Mcs51(c) => c.port_write(port, v),
+        }
+    }
+
+    /// Total clock cycles executed (machine cycles / T-states). Drives the
+    /// cycle-accurate timers (8086 PIT, 8051 timers, 8085 8155 timer).
+    pub fn cycles(&self) -> u64 {
+        match self {
+            Self::I8085(c) => c.cycles(),
+            Self::I8086(c) => c.cycles(),
+            Self::Mcs51(c) => c.cycles(),
+        }
+    }
+
+    /// Current reload/count of an 8086 PIT channel (0..2), for the IDE timer
+    /// view. Returns 0 for other ISAs.
+    pub fn pit_count(&self, n: usize) -> u16 {
+        match self {
+            Self::I8086(c) => c.pit_count(n),
+            _ => 0,
         }
     }
 

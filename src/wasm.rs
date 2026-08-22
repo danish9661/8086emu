@@ -139,7 +139,18 @@ impl Emulator {
 
     /// Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins).
     pub fn port_write(&mut self, port: u8, val: u8) {
-        self.inner.port_write(port, val);
+        self.inner.port_write(port, val)
+    }
+
+    /// Total clock cycles executed (machine cycles / T-states). Drives the
+    /// cycle-accurate timers (8086 PIT, 8051 timers, 8085 8155 timer).
+    pub fn cycles(&self) -> u64 {
+        self.inner.cycles()
+    }
+
+    /// Current reload/count of an 8086 PIT channel (0..2). Other ISAs: 0.
+    pub fn pit_count(&self, n: usize) -> u16 {
+        self.inner.pit_count(n)
     }
 
     /// Inject a received serial byte into the 8051 (sets SBUF + RI).

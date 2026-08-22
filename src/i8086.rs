@@ -7,6 +7,35 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg, RunResult};
+use crate::pit::Pit8253;
+
+/// Nominal per-instruction host-cycle cost. The 8086's real cycle counts vary
+/// with EA and prefixes; these values give correct *relative* timing so the
+/// PIT (clocked at CPU/4) measures accurate periods. 8051/8155 use exact
+/// machine-cycle counts instead.
+fn inst_cycles(op: u8) -> u8 {
+    match op {
+        0xF6 | 0xF7 => 20,                 // MUL/IMUL (8/16); DIV/IDIV also ~20-35 nominal
+        0xF2 | 0xF3 => 20,                 // REP/REPE/REPNE prefixes (nominal)
+        0x6B | 0x69 => 22,                 // IMUL imm
+        0xA4..=0xA7 | 0xAA..=0xAF => 10,   // string ops (per rep iteration ~)
+        0x70..=0x7F | 0xE0..=0xE3 | 0xEB => 15, // jumps/loops
+        0xE8 | 0xE9 | 0x9A | 0xEA => 18,  // CALL/JMP
+        0xC2 | 0xC3 | 0xCA | 0xCB => 16,  // RET
+        0x9C | 0x9D => 10,                 // PUSHF/POPF
+        0xCC => 12,                        // INT3
+        0xCD => 23,                        // INT n
+        0xCE => 24,                        // INTO
+        0x40..=0x5F => 2,                  // INC/DEC/PUSH/POP reg
+        0x88..=0x8F => 3,                  // MOV reg/mem
+        0xB0..=0xBF => 2,                  // MOV imm
+        0x90..=0x97 => 3,                  // XCHG
+        0x98..=0x99 => 4,                  // CBW/CWD
+        0xD4 | 0xD5 => 17,                 // AAM/AAD
+        0x00..=0x3F => 3,                  // ADD/OR/ADC/SBB/AND/SUB/XOR/CMP + ALU imm + DAA/DAS/AAA/AAS
+        _ => 4,
+    }
+}
 
 // ----- DOS virtual filesystem / clock (host-supplied, emulated services) -----
 struct DosFile { name: String, data: Vec<u8>, pos: usize }
@@ -97,6 +126,10 @@ pub struct Cpu8086 {
     // text-mode screen state (framebuffer itself lives at 0xB8000 in `mem`)
     cursor: (u8, u8), // (col, row); 80x25 colour text
     video_mode: u8,
+    // 8253 PIT (system timer): channel 0 pulses INT 8
+    pit: Pit8253,
+    // total host clock cycles executed (drives the PIT; nominal per-instruction cost)
+    cycles: u64,
 }
 
 impl Default for Cpu8086 {
@@ -136,6 +169,9 @@ impl Cpu8086 {
         } else if self.pending_intr && self.flag(IF) {
             self.pending_intr = false;
             self.hardware_intr(self.intr_vector);
+        } else if self.pit.take_irq0() && self.flag(IF) {
+            // 8253 channel 0 terminal count -> IRQ0 (INT 8), maskable via IF
+            self.hardware_intr(8);
         }
     }
 
@@ -163,6 +199,8 @@ impl Cpu8086 {
             dos: DosFs::new(),
             cursor: (0, 0),
             video_mode: 3,
+            pit: Pit8253::new(),
+            cycles: 0,
         };
         c.reset();
         c
@@ -174,6 +212,10 @@ impl Cpu8086 {
     /// character/attribute framebuffer itself lives at linear 0xB8000.
     pub fn text_cursor(&self) -> (u8, u8) { self.cursor }
     pub fn video_mode(&self) -> u8 { self.video_mode }
+    /// Total host clock cycles executed (drives the 8253 PIT; CPU_HZ_8086).
+    pub fn cycles(&self) -> u64 { self.cycles }
+    /// 8253 channel reload counts (0 => 65536) for inspection/debug.
+    pub fn pit_count(&self, n: usize) -> u16 { self.pit.ch_count(n) }
 
     fn phys(&self, seg: u16, off: u16) -> usize {
         (((seg as u32) << 4) + off as u32) as usize
@@ -481,14 +523,33 @@ impl Cpu8086 {
         self.ports[p] as u16 | (self.ports[(p + 1) & 0xFF] as u16) << 8
     }
     fn port_out8(&mut self, p: usize, v: u8) {
-        self.ports[p] = v;
-        if p == 0x01 {
-            self.out.put_char(v as char);
+        match p {
+            0x40 => self.pit.write_data(0, v),
+            0x41 => self.pit.write_data(1, v),
+            0x42 => self.pit.write_data(2, v),
+            0x43 => self.pit.write_cmd(v),
+            _ => {
+                self.ports[p] = v;
+                if p == 0x01 {
+                    self.out.put_char(v as char);
+                }
+            }
         }
     }
     fn port_out16(&mut self, p: usize, v: u16) {
         self.port_out8(p, v as u8);
-        self.ports[(p + 1) & 0xFF] = (v >> 8) as u8;
+        match p {
+            0x40 | 0x41 | 0x42 | 0x43 => {}
+            _ => self.ports[(p + 1) & 0xFF] = (v >> 8) as u8,
+        }
+    }
+    fn port_in8(&self, p: usize) -> u8 {
+        match p {
+            0x40 => self.pit.read_data(0),
+            0x41 => self.pit.read_data(1),
+            0x42 => self.pit.read_data(2),
+            _ => self.ports[p],
+        }
     }
 
     /// INT 21h input read. With an empty buffer the IP is re-pointed at the
@@ -1235,7 +1296,7 @@ impl Cpu8086 {
                     _ => { if cx == 0 { self.ip = self.ip.wrapping_add_signed(d); } }
                 }
             }
-            0xE4 => { let p = self.fetch8() as usize; self.set_al(self.ports[p]); } // IN AL,imm8
+            0xE4 => { let p = self.fetch8() as usize; self.set_al(self.port_in8(p)); } // IN AL,imm8
             0xE5 => { let p = self.fetch8() as usize; self.ax = self.port_in16(p); }
             0xE6 => { let p = self.fetch8() as usize; self.port_out8(p, self.al()); } // OUT imm8,AL
             0xE7 => { let p = self.fetch8() as usize; self.port_out16(p, self.ax); }
@@ -1247,7 +1308,7 @@ impl Cpu8086 {
             0xE9 => { let d = self.fetch16() as i16; self.ip = self.ip.wrapping_add_signed(d); }
             0xEA => { let off = self.fetch16(); let seg = self.fetch16(); self.cs = seg; self.ip = off; }
             0xEB => { let d = self.fetch8() as i8 as i16; self.ip = self.ip.wrapping_add_signed(d); }
-            0xEC => { let p = self.dx as usize & 0xFF; self.set_al(self.ports[p]); } // IN AL,DX
+            0xEC => { let p = self.dx as usize & 0xFF; self.set_al(self.port_in8(p)); } // IN AL,DX
             0xED => { let p = self.dx as usize & 0xFF; self.ax = self.port_in16(p); }
             0xEE => { let p = self.dx as usize & 0xFF; self.port_out8(p, self.al()); } // OUT DX,AL
             0xEF => { let p = self.dx as usize & 0xFF; self.port_out16(p, self.ax); }
@@ -2078,6 +2139,8 @@ impl Cpu for Cpu8086 {
         self.dos = DosFs::new();
         self.cursor = (0, 0);
         self.video_mode = 3;
+        self.pit = Pit8253::new();
+        self.cycles = 0;
         self.mem_clear_text();
     }
 
@@ -2085,8 +2148,12 @@ impl Cpu for Cpu8086 {
         if self.halted { return false; }
         if self.input_pending { return true; } // blocked on INT 21h input
         let trap = self.flag(TF);
+        let op0 = self.mem_read(self.pc(), 1)[0];
+        let c = inst_cycles(op0) as u64;
         self.exec();
         if !self.halted {
+            self.cycles += c;
+            self.pit.advance(c);
             self.service_interrupts();
             if trap && self.flag(TF) {
                 self.hardware_intr(1); // single-step trap: INT 1
@@ -2149,8 +2216,8 @@ impl Cpu for Cpu8086 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67);
-        v.push(6); // version
+        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53);
+        v.push(7); // version
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.fs, self.gs, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -2170,6 +2237,8 @@ impl Cpu for Cpu8086 {
         v.push(self.cursor.0);
         v.push(self.cursor.1);
         v.push(self.video_mode);
+        v.extend_from_slice(&self.pit.snapshot());
+        v.extend_from_slice(&self.cycles.to_le_bytes());
         v
     }
 
@@ -2213,17 +2282,34 @@ impl Cpu for Cpu8086 {
                 self.intr_vector = body.get(start + 2).copied().unwrap_or(0);
             }
             if ver >= 5 {
-                let tail = data.len() - 70; // 64 fpu_st + 1 top + 2 status + 2 cursor + 1 mode
-                if data.len() >= 70 {
-                    let mut st = [0.0f64; 8];
-                    for (i, c) in data[tail..tail + 64].chunks_exact(8).enumerate() {
-                        st[i] = f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
+                let tail = if ver >= 7 {
+                    data.len() - 123 // 67 fpu + 3 cursor/mode + 45 pit + 8 cycles
+                } else if ver == 6 {
+                    data.len() - 70
+                } else {
+                    data.len() - 67
+                };
+                if data.len() >= 67 {
+                    let n = data.len().saturating_sub(tail);
+                    if n >= 67 {
+                        let mut st = [0.0f64; 8];
+                        for (i, c) in data[tail..tail + 64].chunks_exact(8).enumerate() {
+                            st[i] = f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
+                        }
+                        self.fpu_st = st;
+                        self.fpu_top = data[tail + 64];
+                        self.fpu_status = u16::from_le_bytes([data[tail + 65], data[tail + 66]]);
                     }
-                    self.fpu_st = st;
-                    self.fpu_top = data[tail + 64];
-                    self.fpu_status = u16::from_le_bytes([data[tail + 65], data[tail + 66]]);
+                }
+                if ver >= 6 {
                     self.cursor = (data[tail + 67], data[tail + 68]);
                     self.video_mode = data[tail + 69];
+                }
+                if ver >= 7 {
+                    self.pit.restore(&data[tail + 70..tail + 70 + 45]);
+                    let mut cy = [0u8; 8];
+                    cy.copy_from_slice(&data[tail + 115..tail + 123]);
+                    self.cycles = u64::from_le_bytes(cy);
                 }
             }
         }
@@ -2232,6 +2318,8 @@ impl Cpu for Cpu8086 {
     }
 
     fn is_halted(&self) -> bool { self.halted }
+
+    fn cycles(&self) -> u64 { self.cycles }
 
     fn waiting_input(&self) -> bool { self.input_pending }
 }

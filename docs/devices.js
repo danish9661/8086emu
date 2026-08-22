@@ -127,11 +127,30 @@ export function renderDevices(emu, isa) {
 
   const led = ledMatrixHtml(rd);
 
+  // cycle-accurate clock / timer view
+  const cycles = emu.cycles();
+  let timing = `<div class="dev"><h3>Clock / timers <span class="p">real-time</span></h3><div class="mono">cycles: ${cycles}</div>`;
+  if (isa === '8086') {
+    timing += `<div class="mono">PIT0: ${emu.pit_count(0)}  PIT1: ${emu.pit_count(1)}  PIT2: ${emu.pit_count(2)}</div>`;
+    timing += `<div class="mono">PIT input 1.19318 MHz; CPU 4x -> 1 tick / 4 cycles</div>`;
+  } else if (isa === '8085') {
+    const tl = rd(0x84), th = rd(0x85);
+    const tcount = ((th << 8) | tl) & 0x3FFF;
+    const cmd = rd(0x80);
+    timing += `<div class="mono">8155 timer: ${tcount}  (cmd ${cmd.toString(16)})</div>`;
+    timing += `<div class="mono">8155 PA=${rd(0x81).toString(16)} PB=${rd(0x82).toString(16)} PC=${rd(0x83).toString(16)}</div>`;
+    timing += `<div class="mono">8155 RAM @ 0x8000 (T-states clock it)</div>`;
+  } else if (isa === '8051') {
+    timing += `<div class="mono">machine cycles; timers count 1 / cycle</div>`;
+  }
+  timing += `</div>`;
+
   panel.innerHTML =
     `<div class="dev"><h3>Traffic light <span class="p">10h</span></h3>${traffic}</div>` +
     `<div class="dev"><h3>7-segment <span class="p">11h/12h</span></h3>${seven}</div>` +
     `<div class="dev"><h3>Stepper <span class="p">13h</span></h3>${stepper}</div>` +
     `<div class="dev"><h3>Printer <span class="p">14h</span></h3>${printer}</div>` +
     `<div class="dev"><h3>Robot grid <span class="p">16h/17h</span></h3>${robot}</div>` +
-    `<div class="dev"><h3>LED matrix <span class="p">20h-27h</span></h3>${led}</div>`;
+    `<div class="dev"><h3>LED matrix <span class="p">20h-27h</span></h3>${led}</div>` +
+    timing;
 }

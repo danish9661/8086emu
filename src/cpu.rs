@@ -113,6 +113,10 @@ pub trait Cpu {
     fn snapshot(&self) -> Vec<u8>;
     fn restore(&mut self, data: &[u8]);
     fn is_halted(&self) -> bool;
+    /// Total clock cycles executed (machine cycles for 8051/8085, host cycles
+    /// for 8086). Drives the cycle-accurate timers / PIT; 0 if the core does
+    /// not model a clock.
+    fn cycles(&self) -> u64 { 0 }
     /// True while the CPU is blocked waiting for keyboard input
     /// (8086 INT 21h AH=01/06/07/08/0C with an empty input buffer).
     fn waiting_input(&self) -> bool { false }

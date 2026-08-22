@@ -57,10 +57,27 @@ pub struct Cpu8051 {
     /// character is emitted to Output (baud-rate modelled from Timer 1 / SMOD).
     tx_countdown: u32,
     tx_char: u8,
+    /// Total machine cycles executed (one 8051 machine cycle = 12 oscillator
+    /// periods). Timers count in machine cycles, so this drives real-time.
+    pub cycles: u64,
+    /// Instruction length of the opcode currently being fetched (1..=3).
+    cur_len: u8,
 }
 
 impl Default for Cpu8051 {
     fn default() -> Self { Self::new() }
+}
+
+/// Machine cycles consumed by one 8051 instruction. The 8051 executes most
+/// 1-byte opcodes in 1 cycle, 2/3-byte opcodes in 2, and only MUL/DIV in 4.
+/// RET/RETI are 1-byte but take 2 cycles (the only exception to the 1-byte=1
+/// rule). This drives the cycle-accurate timers.
+fn mcs51_cycles(op: u8, len: u8) -> u8 {
+    match op {
+        0xA4 | 0x84 => 4, // MUL AB, DIV AB
+        0x22 | 0x32 => 2, // RET, RETI
+        _ => if len <= 1 { 1 } else { 2 },
+    }
 }
 
 impl Cpu8051 {
@@ -83,6 +100,8 @@ impl Cpu8051 {
             xdata_bank: 0,
             tx_countdown: 0,
             tx_char: 0,
+            cycles: 0,
+            cur_len: 0,
         };
         c.reset();
         c
@@ -104,6 +123,8 @@ impl Cpu8051 {
         self.xdata_bank = 0;
         self.tx_countdown = 0;
         self.tx_char = 0;
+        self.cycles = 0;
+        self.cur_len = 0;
         self.ports = [0; 256];
     }
 
@@ -231,6 +252,7 @@ impl Cpu8051 {
     }
 
     #[inline] fn fetch8(&mut self) -> u8 {
+        self.cur_len += 1;
         let b = self.code.read(self.pc as usize);
         self.pc = self.pc.wrapping_add(1);
         b
@@ -258,17 +280,22 @@ impl Cpu8051 {
     #[inline] fn xdata_addr(&self, off: u32) -> usize {
         (((self.xdata_bank as u32) << 16) | off) as usize & (XDATA_SIZE - 1)
     }
-    fn tick_timers(&mut self) {
-        let tcon = self.sfr[S_TCON];
-        if tcon & 0x10 != 0 { self.tick_timer0(); }
-        if tcon & 0x40 != 0 { self.tick_timer1(); }
-        // serial transmit baud-rate countdown: when it elapses, emit the char
-        // and set TI (transmit-complete) — the serial ISR must clear TI.
-        if self.tx_countdown > 0 {
-            self.tx_countdown -= 1;
-            if self.tx_countdown == 0 {
-                self.out.put_char(self.tx_char as char);
-                self.sfr[S_SCON] |= 0x02;
+    /// Advance timers (and the serial TX baud countdown) by `n` machine cycles.
+    /// A real 8051 timer counts once per machine cycle, so this keeps the timer
+    /// period accurate regardless of the variable length of the instruction run.
+    fn tick_timers_n(&mut self, n: u8) {
+        for _ in 0..n {
+            let tcon = self.sfr[S_TCON];
+            if tcon & 0x10 != 0 { self.tick_timer0(); }
+            if tcon & 0x40 != 0 { self.tick_timer1(); }
+            // serial transmit baud-rate countdown: when it elapses, emit the char
+            // and set TI (transmit-complete) — the serial ISR must clear TI.
+            if self.tx_countdown > 0 {
+                self.tx_countdown -= 1;
+                if self.tx_countdown == 0 {
+                    self.out.put_char(self.tx_char as char);
+                    self.sfr[S_SCON] |= 0x02;
+                }
             }
         }
     }
@@ -707,14 +734,18 @@ impl Cpu for Cpu8051 {
         if pcon & 0x02 != 0 { // PD (power-down): oscillator stopped, frozen
             return true; // only reset wakes it; not "halted"
         }
+        let op = self.code.read(self.pc as usize); // peek for machine-cycle count
         if pcon & 0x01 != 0 { // IDL (idle): CPU sleeps, peripherals keep running
-            self.tick_timers();
+            self.tick_timers_n(1);
             if !self.halted { self.service_interrupts(); } // an interrupt wakes it (clears IDL)
             return true; // no user instruction executed this step
         }
-        self.tick_timers();
+        self.cur_len = 0;
         self.exec();
         if !self.halted {
+            let cyc = mcs51_cycles(op, self.cur_len);
+            self.cycles += cyc as u64;
+            self.tick_timers_n(cyc);
             self.service_interrupts();
         }
         !self.halted
@@ -770,8 +801,8 @@ impl Cpu for Cpu8051 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 256 + 2);
-        v.push(6);
+        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 256 + 2 + 8);
+        v.push(7);
         v.push(self.halted as u8);
         v.extend_from_slice(&self.pc.to_le_bytes());
         v.push(self.in_svc_low as u8);
@@ -786,6 +817,7 @@ impl Cpu for Cpu8051 {
         v.extend_from_slice(&self.ports);
         v.push(self.ext_int0_held as u8);
         v.push(self.ext_int1_held as u8);
+        v.extend_from_slice(&self.cycles.to_le_bytes());
         v
     }
 
@@ -823,11 +855,21 @@ impl Cpu for Cpu8051 {
         }
         self.ext_int0_held = false;
         self.ext_int1_held = false;
-        if data[0] >= 4 {
-            self.ext_int0_held = data[data.len() - 2] != 0;
-            self.ext_int1_held = data[data.len() - 1] != 0;
+        self.cycles = 0;
+        let n = data.len();
+        if data[0] >= 7 {
+            self.ext_int0_held = data[n - 10] != 0;
+            self.ext_int1_held = data[n - 9] != 0;
+            let mut cy = [0u8; 8];
+            cy.copy_from_slice(&data[n - 8..n]);
+            self.cycles = u64::from_le_bytes(cy);
+        } else if data[0] >= 4 {
+            self.ext_int0_held = data[n - 2] != 0;
+            self.ext_int1_held = data[n - 1] != 0;
         }
     }
 
     fn is_halted(&self) -> bool { self.halted }
+
+    fn cycles(&self) -> u64 { self.cycles }
 }
