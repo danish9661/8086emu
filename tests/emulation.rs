@@ -1819,3 +1819,31 @@ MOV AX, 4C00h\nINT 21h\nEND";
     assert_eq!(s[0], b' ', "scroll-up (AL=0) clears the window");
     assert_eq!(s[1], 0x07, "cleared cell uses BH fill attr");
 }
+
+#[test]
+fn mcs51_io_ports_via_movx() {
+    // 8051 reaches the device I/O space via MOVX to 0xFF00..0xFFFF.
+    let mut emu = make_emulator("8051").unwrap();
+    let src = "ORG 0\n\
+MOV DPTR, #0FF14h\n\
+MOV A, #'X'\n\
+MOVX @DPTR, A\n\
+MOV DPTR, #0FF14h\n\
+MOVX A, @DPTR\n\
+MOV R0, A\n\
+SJMP $\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(emu.port_read(0x14), b'X', "MOVX to 0xFF14 writes I/O port 14h");
+    assert_eq!(reg(&emu.regs(), "R0"), b'X' as u32, "MOVX read-back of port 14h");
+    // low XDATA is still RAM, not I/O
+    let mut emu2 = make_emulator("8051").unwrap();
+    let src2 = "ORG 0\nMOV DPTR, #0010h\nMOV A, #77h\nMOVX @DPTR, A\nSJMP $\nEND";
+    let code2 = emu2.assemble(src2).unwrap();
+    emu2.mem_write(0, &code2);
+    emu2.set_pc(0);
+    emu2.run(100);
+    assert_eq!(emu2.port_read(0x10), 0, "low XDATA (0010h) is RAM, not I/O port");
+}

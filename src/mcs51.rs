@@ -36,6 +36,10 @@ pub struct Cpu8051 {
     /// External pin state for P0-P3; reads of a port return `latch | pin`
     /// (quasi-bidirectional model). Set via `Emulator::port_write`.
     pub port_pins: [u8; 4],
+    /// External I/O port space (256 bytes). `Emulator::port_write`/`port_read`
+    /// hit this for ports >= 4; on-chip code reaches it via `MOVX` to the top
+    /// 256 bytes of XDATA (address 0xFF00..0xFFFF -> port 0x00..0xFF).
+    pub ports: [u8; 256],
     pub code: Mem,
     pub pc: u16,
     pub out: Output,
@@ -66,6 +70,7 @@ impl Cpu8051 {
             sfr: [0; 128],
             xdata: Mem::new(XDATA_SIZE),
             port_pins: [0; 4],
+            ports: [0; 256],
             code: Mem::new(CODE_SIZE),
             pc: 0,
             out: Output::default(),
@@ -99,6 +104,7 @@ impl Cpu8051 {
         self.xdata_bank = 0;
         self.tx_countdown = 0;
         self.tx_char = 0;
+        self.ports = [0; 256];
     }
 
     // ----- helpers -----
@@ -163,10 +169,11 @@ impl Cpu8051 {
     /// Inject external pin state for P0-P3 (quasi-bidirectional: a port read
     /// returns `latch | pin`).
     pub fn port_write(&mut self, port: u8, v: u8) {
+        self.ports[port as usize] = v;
         if port < 4 { self.port_pins[port as usize] = v; }
     }
     pub fn port_read(&self, port: u8) -> u8 {
-        if port < 4 { self.read_direct(0x80 + port * 0x10) } else { 0 }
+        if port < 4 { self.read_direct(0x80 + port * 0x10) } else { self.ports[port as usize] }
     }
     /// Inject a received serial byte: writes SBUF and sets RI (receive
     /// interrupt flag); the serial ISR must clear RI (as on the chip).
@@ -422,10 +429,10 @@ impl Cpu8051 {
                 let v = self.code.read(addr as usize);
                 self.set_acc(v);
             }
-            0xE2 | 0xE3 => { let a = self.xdata_addr(self.ri(op & 1) as u32); let v = self.xdata.read(a); self.set_acc(v); }
-            0xE0 => { let a = self.xdata_addr(self.dptr() as u32); let v = self.xdata.read(a); self.set_acc(v); }
-            0xF2 | 0xF3 => { let a = self.xdata_addr(self.ri(op & 1) as u32); let v = self.acc(); self.xdata.write(a, v); }
-            0xF0 => { let a = self.xdata_addr(self.dptr() as u32); let v = self.acc(); self.xdata.write(a, v); }
+            0xE2 | 0xE3 => { let a = self.xdata_addr(self.ri(op & 1) as u32); let v = if a >= 0xFF00 { self.port_read((a & 0xFF) as u8) } else { self.xdata.read(a) }; self.set_acc(v); }
+            0xE0 => { let a = self.xdata_addr(self.dptr() as u32); let v = if a >= 0xFF00 { self.port_read((a & 0xFF) as u8) } else { self.xdata.read(a) }; self.set_acc(v); }
+            0xF2 | 0xF3 => { let a = self.xdata_addr(self.ri(op & 1) as u32); let v = self.acc(); if a >= 0xFF00 { self.port_write((a & 0xFF) as u8, v); } else { self.xdata.write(a, v); } }
+            0xF0 => { let a = self.xdata_addr(self.dptr() as u32); let v = self.acc(); if a >= 0xFF00 { self.port_write((a & 0xFF) as u8, v); } else { self.xdata.write(a, v); } }
             // ----- stack -----
             0xC0 => { let d = self.fetch8(); let v = self.read_direct(d); self.push(v); }
             0xD0 => { let d = self.fetch8(); let v = self.pop(); self.write_direct(d, v); }
@@ -763,8 +770,8 @@ impl Cpu for Cpu8051 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 2);
-        v.push(5);
+        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 256 + 2);
+        v.push(6);
         v.push(self.halted as u8);
         v.extend_from_slice(&self.pc.to_le_bytes());
         v.push(self.in_svc_low as u8);
@@ -776,6 +783,7 @@ impl Cpu for Cpu8051 {
         v.extend_from_slice(&self.xdata.data);
         v.extend_from_slice(&self.code.data);
         v.extend_from_slice(&self.port_pins);
+        v.extend_from_slice(&self.ports);
         v.push(self.ext_int0_held as u8);
         v.push(self.ext_int1_held as u8);
         v
@@ -809,6 +817,9 @@ impl Cpu for Cpu8051 {
         self.port_pins = [0; 4];
         if data[0] >= 3 {
             take(4, &mut self.port_pins);
+        }
+        if data[0] >= 6 {
+            take(256, &mut self.ports);
         }
         self.ext_int0_held = false;
         self.ext_int1_held = false;

@@ -85,7 +85,7 @@ export function renderDevices(emu, isa) {
   const panel = document.getElementById('devices');
   if (!panel) return;
   const box = document.getElementById('devicePanel');
-  if (isa !== '8086' && isa !== '8085') {
+  if (isa !== '8086' && isa !== '8085' && isa !== '8051') {
     box.style.display = 'none';
     return;
   }

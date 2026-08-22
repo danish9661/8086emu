@@ -347,9 +347,46 @@ END
       name: 'Bit operations',
       src: `; Flip a port bit pattern: P1.0..P1.3
 SETB P1.0
-SETB P1.3
+ SETB P1.3
 CLR P1.1
 CPL P1.2
+END
+`,
+    },
+    {
+      name: 'Peripherals (MOVX to 0FF00h+ I/O)',
+      src: `; 8051 has no OUT; devices live in the top 256 bytes of XDATA,
+; so MOVX @DPTR,A with DPTR = 0FF00h+ writes I/O port (0..FF).
+; Traffic light (10h) bits 0/1/2; 7-seg (11h/12h); stepper (13h);
+; printer (14h); robot X/Y (16h/17h); LED matrix rows (20h-27h).
+ORG 0
+    MOV DPTR, #0FF10h
+    MOV A, #001b
+    MOVX @DPTR, A        ; red on
+    MOV DPTR, #0FF11h
+    MOV A, #0Ch
+    MOVX @DPTR, A        ; 7-seg low = 'C'
+    MOV DPTR, #0FF12h
+    MOV A, #05h
+    MOVX @DPTR, A        ; 7-seg high = '5'
+    MOV DPTR, #0FF13h
+    MOV A, #0011b
+    MOVX @DPTR, A        ; stepper pos 1
+    MOV DPTR, #0FF14h
+    MOV A, #'H'
+    MOVX @DPTR, A
+    MOV A, #'i'
+    MOVX @DPTR, A        ; printer "Hi"
+    MOV DPTR, #0FF16h
+    MOV A, #2
+    MOVX @DPTR, A        ; robot X = 2
+    MOV DPTR, #0FF17h
+    MOV A, #5
+    MOVX @DPTR, A        ; robot Y = 5
+    MOV DPTR, #0FF20h
+    MOV A, #10000000b
+    MOVX @DPTR, A        ; LED row 0 leftmost lit
+    SJMP $
 END
 `,
     },
