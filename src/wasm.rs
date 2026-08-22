@@ -186,4 +186,15 @@ impl Emulator {
     pub fn set_clock(&mut self, year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8) -> Result<(), JsValue> {
         to_js(self.inner.set_clock(year, month, day, hour, min, sec))
     }
+
+    /// 8086 text-mode screen: 4000 bytes (80x25 cells of char, attr). Other ISAs
+    /// return an empty vector.
+    pub fn screen(&self) -> Vec<u8> {
+        self.inner.screen()
+    }
+    /// 8086 text-mode cursor as a 2-byte vector [col, row]. Other ISAs: [0, 0].
+    pub fn cursor(&self) -> Vec<u8> {
+        let (c, r) = self.inner.cursor();
+        vec![c, r]
+    }
 }

@@ -1767,3 +1767,55 @@ fn movc_8051() {
 }
 
 
+
+#[test]
+fn int10_screen_8086() {
+    // INT 10h text-mode services populate the 0xB8000 framebuffer.
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "ORG 100h\nMOV AH, 00h\nMOV AL, 03h\nINT 10h\n\
+MOV AH, 0Eh\nMOV AL, 'A'\nINT 10h\n\
+MOV AH, 02h\nMOV BH, 0\nMOV DH, 2\nMOV DL, 5\nINT 10h\n\
+MOV AH, 09h\nMOV AL, 'Z'\nMOV BL, 1Fh\nMOV CX, 1\nINT 10h\n\
+MOV AH, 0Fh\nINT 10h\n\
+MOV [0200h], AL\n\
+MOV AX, 4C00h\nINT 21h\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(200);
+    let s = emu.screen();
+    assert_eq!(s.len(), 4000, "screen is 80x25x2 bytes");
+    assert_eq!(s[0], b'A', "TTY 'A' at cell (0,0)");
+    assert_eq!(s[1], 0x07, "TTY default attr");
+    let cell = (2 * 80 + 5) * 2;
+    assert_eq!(s[cell], b'Z', "AH=09 'Z' at (5,2)");
+    assert_eq!(s[cell + 1], 0x1F, "AH=09 attr = 1Fh");
+    assert_eq!(emu.mem_read(0x200, 1)[0], 0x03, "INT 10h 0F returns video mode 3");
+    // direct VRAM write is reflected in the framebuffer
+    emu.mem_write(0xB8000, &[b'H', 0x0F]);
+    let s2 = emu.screen();
+    assert_eq!(s2[0], b'H', "direct write to 0xB8000 shows on screen");
+
+    // snapshot/restore preserves the framebuffer
+    let snap = emu.snapshot();
+    emu.mem_write(0xB8000, &[b'X', 0x00]); // clobber
+    assert_eq!(emu.screen()[0], b'X');
+    emu.restore(&snap);
+    assert_eq!(emu.screen()[0], b'H', "screen restored from snapshot");
+}
+
+#[test]
+fn int10_scroll_8086() {
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "ORG 100h\nMOV AH, 00h\nMOV AL, 03h\nINT 10h\n\
+MOV AH, 0Eh\nMOV AL, 'Q'\nINT 10h\n\
+MOV AH, 06h\nMOV AL, 0\nMOV BH, 07h\nMOV CH, 0\nMOV CL, 0\nMOV DH, 24\nMOV DL, 79\nINT 10h\n\
+MOV AX, 4C00h\nINT 21h\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(200);
+    let s = emu.screen();
+    assert_eq!(s[0], b' ', "scroll-up (AL=0) clears the window");
+    assert_eq!(s[1], 0x07, "cleared cell uses BH fill attr");
+}

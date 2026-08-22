@@ -96,6 +96,23 @@ impl Emulator {
         self.cpu_ref().mem_read(addr, len)
     }
 
+    /// 8086 text-mode screen: 4000 bytes (80x25 cells of char, attr) from the
+    /// 0xB8000 text framebuffer. Empty for the other ISAs.
+    pub fn screen(&self) -> Vec<u8> {
+        match self {
+            Emulator::I8086(c) => c.mem_read(0xB8000, 80 * 25 * 2),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 8086 text-mode cursor (col, row); (0,0) for other ISAs.
+    pub fn cursor(&self) -> (u8, u8) {
+        match self {
+            Emulator::I8086(c) => c.text_cursor(),
+            _ => (0, 0),
+        }
+    }
+
     pub fn mem_write(&mut self, addr: u32, data: &[u8]) {
         self.cpu().mem_write(addr, data);
     }

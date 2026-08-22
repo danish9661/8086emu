@@ -45,6 +45,16 @@ export class Emulator {
         return v2;
     }
     /**
+     * 8086 text-mode cursor as a 2-byte vector [col, row]. Other ISAs: [0, 0].
+     * @returns {Uint8Array}
+     */
+    cursor() {
+        const ret = wasm.emulator_cursor(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
      * @returns {string[]}
      */
     flags() {
@@ -251,6 +261,17 @@ export class Emulator {
     run_to(target_pc, max_steps) {
         const ret = wasm.emulator_run_to(this.__wbg_ptr, target_pc, max_steps);
         return ret >>> 0;
+    }
+    /**
+     * 8086 text-mode screen: 4000 bytes (80x25 cells of char, attr). Other ISAs
+     * return an empty vector.
+     * @returns {Uint8Array}
+     */
+    screen() {
+        const ret = wasm.emulator_screen(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
     }
     /**
      * Inject a received serial byte into the 8051 (sets SBUF + RI).

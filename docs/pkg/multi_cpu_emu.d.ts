@@ -13,6 +13,10 @@ export class Emulator {
      * (one per source line, empty for lines that emit nothing).
      */
     assemble_info(source: string): string[];
+    /**
+     * 8086 text-mode cursor as a 2-byte vector [col, row]. Other ISAs: [0, 0].
+     */
+    cursor(): Uint8Array;
     flags(): string[];
     /**
      * Read a file back from the 8086 DOS virtual filesystem (empty if absent).
@@ -70,6 +74,11 @@ export class Emulator {
      */
     run_to(target_pc: number, max_steps: number): number;
     /**
+     * 8086 text-mode screen: 4000 bytes (80x25 cells of char, attr). Other ISAs
+     * return an empty vector.
+     */
+    screen(): Uint8Array;
+    /**
      * Inject a received serial byte into the 8051 (sets SBUF + RI).
      */
     serial_rx(ch: number): void;
@@ -107,6 +116,7 @@ export interface InitOutput {
     readonly __wbg_emulator_free: (a: number, b: number) => void;
     readonly emulator_assemble: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly emulator_cursor: (a: number) => [number, number];
     readonly emulator_flags: (a: number) => [number, number];
     readonly emulator_fs_get: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_fs_put: (a: number, b: number, c: number, d: number, e: number) => [number, number];
@@ -127,6 +137,7 @@ export interface InitOutput {
     readonly emulator_run: (a: number, b: number) => number;
     readonly emulator_run_bp: (a: number, b: number, c: number, d: number) => number;
     readonly emulator_run_to: (a: number, b: number, c: number) => number;
+    readonly emulator_screen: (a: number) => [number, number];
     readonly emulator_serial_rx: (a: number, b: number) => [number, number];
     readonly emulator_set_clock: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly emulator_set_pc: (a: number, b: number) => void;

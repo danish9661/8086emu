@@ -453,6 +453,9 @@ function refresh() {
   if (fresh) accumOut += fresh;
   outputBox.textContent = accumOut;
 
+  // --- text screen (8086 INT 10h / 0xB8000) ---
+  renderScreen();
+
   // --- ports ---
   renderPorts();
 
@@ -465,6 +468,28 @@ function refresh() {
   $('backBtn').disabled = runTimer || history.length === 0;
   $('runBtn').disabled = runTimer || emu.halted();
   $('stopBtn').disabled = !runTimer;
+}
+
+function renderScreen() {
+  const box = $('screen');
+  const panel = $('screenPanel');
+  if (!box || !panel) return;
+  if (isa !== '8086') { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  const buf = emu.screen();
+  const cur = emu.cursor();
+  let html = '';
+  for (let row = 0; row < 25; row++) {
+    let line = '';
+    for (let col = 0; col < 80; col++) {
+      const i = (row * 80 + col) * 2;
+      const ch = buf[i] || 0x20;
+      const c = (ch >= 32 && ch < 127) ? String.fromCharCode(ch) : '·';
+      line += (cur[0] === col && cur[1] === row) ? `<span class="cur">${c}</span>` : c;
+    }
+    html += line + '\n';
+  }
+  box.innerHTML = html;
 }
 
 function renderPorts() {

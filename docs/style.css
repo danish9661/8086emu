@@ -126,6 +126,8 @@ main {
 #memtools input { width: 110px; }
 #memtools .info { color: var(--muted); font-size: 12px; margin-left: auto; }
 #output { flex: 1; padding: 8px 12px; overflow: auto; white-space: pre-wrap; word-break: break-all; min-height: 80px; font-size: 13px; color: #e6edf3; }
+.screen { margin: 0; padding: 8px 10px; background: #000; color: #33ff66; font-family: var(--mono); font-size: 13px; line-height: 15px; white-space: pre; overflow: auto; min-height: 384px; letter-spacing: 1px; }
+.screen .cur { background: #33ff66; color: #000; }
 #errpop {
   display: none; position: fixed; right: 16px; bottom: 40px; max-width: 420px;
   background: #3d1d1d; border: 1px solid var(--red); border-radius: 8px;

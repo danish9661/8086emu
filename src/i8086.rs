@@ -94,6 +94,9 @@ pub struct Cpu8086 {
     fpu_status: u16, // condition codes / exceptions summary
     // DOS virtual filesystem + clock (host-supplied)
     dos: DosFs,
+    // text-mode screen state (framebuffer itself lives at 0xB8000 in `mem`)
+    cursor: (u8, u8), // (col, row); 80x25 colour text
+    video_mode: u8,
 }
 
 impl Default for Cpu8086 {
@@ -158,12 +161,19 @@ impl Cpu8086 {
             fpu_top: 0,
             fpu_status: 0,
             dos: DosFs::new(),
+            cursor: (0, 0),
+            video_mode: 3,
         };
         c.reset();
         c
     }
 
     pub fn last_error(&self) -> Option<String> { self.fault.clone() }
+
+    /// Text-mode screen cursor (col, row) and active video mode. The 80x25
+    /// character/attribute framebuffer itself lives at linear 0xB8000.
+    pub fn text_cursor(&self) -> (u8, u8) { self.cursor }
+    pub fn video_mode(&self) -> u8 { self.video_mode }
 
     fn phys(&self, seg: u16, off: u16) -> usize {
         (((seg as u32) << 4) + off as u32) as usize
@@ -496,6 +506,109 @@ impl Cpu8086 {
         }
     }
 
+    // ----- text-mode screen (framebuffer at 0xB8000: char,attr pairs) -----
+    const VRAM: usize = 0xB8000;
+    const COLS: usize = 80;
+    const ROWS: usize = 25;
+
+    fn mem_clear_text(&mut self) {
+        for a in Self::VRAM..Self::VRAM + Self::COLS * Self::ROWS * 2 {
+            self.mem.write(a, if (a & 1) == 1 { 0x07 } else { b' ' });
+        }
+    }
+
+    #[inline] fn cell_addr(&self, col: u8, row: u8) -> usize {
+        Self::VRAM + ((row as usize) * Self::COLS + (col as usize)) * 2
+    }
+
+    fn screen_putc(&mut self, ch: u8, attr: u8) {
+        let (mut col, mut row) = self.cursor;
+        if ch == 0x0D { col = 0; }            // CR
+        else if ch == 0x0A { row = (row + 1).min(Self::ROWS as u8 - 1); } // LF
+        else {
+            let a = self.cell_addr(col, row);
+            self.mem.write(a, ch);
+            self.mem.write(a + 1, attr);
+            col += 1;
+            if col as usize >= Self::COLS {
+                col = 0;
+                row += 1;
+            }
+        }
+        if row as usize >= Self::ROWS {
+            self.screen_scroll(0x07);
+            row = Self::ROWS as u8 - 1;
+            col = 0;
+        }
+        self.cursor = (col, row);
+    }
+
+    /// Scroll the whole screen up one line, filling the bottom row with `attr`.
+    fn screen_scroll(&mut self, attr: u8) {
+        for row in 0..Self::ROWS - 1 {
+            let src = self.cell_addr(0, row as u8 + 1);
+            let dst = self.cell_addr(0, row as u8);
+            for i in 0..Self::COLS * 2 {
+                self.mem.write(dst + i, self.mem.read(src + i));
+            }
+        }
+        let last = self.cell_addr(0, (Self::ROWS - 1) as u8);
+        for i in 0..Self::COLS {
+            self.mem.write(last + i * 2, b' ');
+            self.mem.write(last + i * 2 + 1, attr);
+        }
+    }
+
+    /// Scroll a window (top..=bottom rows, left..=right cols) up `lines` lines
+    /// (lines == 0 clears the whole window), filling freed lines with `attr`.
+    fn screen_scroll_window(&mut self, lines: u8, attr: u8, top: u8, left: u8, bottom: u8, right: u8) {
+        let (top, left, bottom, right) = (top as usize, left as usize, bottom as usize, right as usize);
+        if lines == 0 {
+            for r in top..=bottom {
+                let a = self.cell_addr(left as u8, r as u8);
+                for c in left..=right {
+                    self.mem.write(a + (c - left) * 2, b' ');
+                    self.mem.write(a + (c - left) * 2 + 1, attr);
+                }
+            }
+            return;
+        }
+        for _ in 0..lines {
+            for r in top..bottom {
+                let src = self.cell_addr(left as u8, (r + 1) as u8);
+                let dst = self.cell_addr(left as u8, r as u8);
+                for c in left..=right {
+                    self.mem.write(dst + (c - left) * 2, self.mem.read(src + (c - left) * 2));
+                    self.mem.write(dst + (c - left) * 2 + 1, self.mem.read(src + (c - left) * 2 + 1));
+                }
+            }
+            let a = self.cell_addr(left as u8, bottom as u8);
+            for c in left..=right {
+                self.mem.write(a + (c - left) * 2, b' ');
+                self.mem.write(a + (c - left) * 2 + 1, attr);
+            }
+        }
+    }
+
+    fn screen_scroll_down_window(&mut self, lines: u8, attr: u8, top: u8, left: u8, bottom: u8, right: u8) {
+        let (top, left, bottom, right) = (top as usize, left as usize, bottom as usize, right as usize);
+        for _ in 0..lines {
+            for r in (top + 1..=bottom).rev() {
+                let src = self.cell_addr(left as u8, (r - 1) as u8);
+                let dst = self.cell_addr(left as u8, r as u8);
+                for c in left..=right {
+                    self.mem.write(dst + (c - left) * 2, self.mem.read(src + (c - left) * 2));
+                    self.mem.write(dst + (c - left) * 2 + 1, self.mem.read(src + (c - left) * 2 + 1));
+                }
+            }
+            let a = self.cell_addr(left as u8, top as u8);
+            for c in left..=right {
+                self.mem.write(a + (c - left) * 2, b' ');
+                self.mem.write(a + (c - left) * 2 + 1, attr);
+            }
+        }
+    }
+
     fn int_service(&mut self, n: u8) {
         match (n, self.ah()) {
             (0x21, 0x01) => self.int_read(true),                 // read char, echo
@@ -523,8 +636,97 @@ impl Cpu8086 {
                 }
             }
             (0x21, 0x4C) => { self.halted = true; }
-            (0x10, 0x0E) => { self.out.put_char(self.al() as char); }
-            (0x10, 0x0F) => { self.set_ah(0x03); self.set_al(0x00); } // video mode
+            // ----- BIOS INT 10h (text-mode services) -----
+            (0x10, 0x00) => { // set video mode: clear screen, home cursor
+                self.video_mode = self.al();
+                self.mem_clear_text();
+                self.cursor = (0, 0);
+            }
+            (0x10, 0x01) => { /* set cursor shape: no-op for framebuffer */ }
+            (0x10, 0x02) => { // set cursor position (BH=page, DH=row, DL=col)
+                let page = self.bh();
+                if page == 0 { self.cursor = (self.dl(), self.dh()); }
+            }
+            (0x10, 0x03) => { // get cursor position
+                let (col, row) = self.cursor;
+                self.set_dh(row);
+                self.set_dl(col);
+                self.set_ch(0x0E);
+                self.set_cl(0x0F);
+            }
+            (0x10, 0x06) => { // scroll window up (AL lines, 0 = clear)
+                let lines = self.al();
+                self.screen_scroll_window(lines, self.bh(), self.ch(), self.cl(), self.dh(), self.dl());
+            }
+            (0x10, 0x07) => { // scroll window down
+                let lines = self.al();
+                self.screen_scroll_down_window(lines, self.bh(), self.ch(), self.cl(), self.dh(), self.dl());
+            }
+            (0x10, 0x08) => { // read char+attr at cursor
+                let (col, row) = self.cursor;
+                let a = self.cell_addr(col, row);
+                self.set_al(self.mem.read(a));
+                self.set_ah(self.mem.read(a + 1));
+            }
+            (0x10, 0x09) => { // write char+attr at cursor, CX times (no cursor move)
+                let ch = self.al();
+                let attr = self.bl();
+                let cnt = self.cx;
+                let (mut col, row) = self.cursor;
+                for _ in 0..cnt {
+                    let a = self.cell_addr(col, row);
+                    self.mem.write(a, ch);
+                    self.mem.write(a + 1, attr);
+                    col = col.wrapping_add(1);
+                    if col as usize >= Self::COLS { col = 0; /* stays in row */ }
+                }
+            }
+            (0x10, 0x0A) => { // write char at cursor, CX times (cursor moves)
+                let ch = self.al();
+                let cnt = self.cx;
+                let (mut col, mut row) = self.cursor;
+                for _ in 0..cnt {
+                    let a = self.cell_addr(col, row);
+                    self.mem.write(a, ch);
+                    self.mem.write(a + 1, self.mem.read(a + 1)); // keep existing attr
+                    col += 1;
+                    if col as usize >= Self::COLS { col = 0; row += 1; }
+                }
+                if row as usize >= Self::ROWS {
+                    row = Self::ROWS as u8 - 1; col = 0;
+                }
+                self.cursor = (col, row);
+            }
+            (0x10, 0x0E) => { // TTY write: char at cursor, advance, scroll at bottom
+                self.out.put_char(self.al() as char);
+                self.screen_putc(self.al(), 0x07);
+            }
+            (0x10, 0x0F) => { // get video mode
+                self.set_ah(Self::COLS as u8);
+                self.set_al(self.video_mode);
+                self.set_bh(0); // active page
+            }
+            (0x10, 0x13) => { // write string: ES:BP, CX len, DH/DL pos, AL=mode
+                let seg = self.es;
+                let off = self.bp;
+                let len = self.cx as usize;
+                let mode = self.al();
+                let attr = self.bl();
+                self.cursor = (self.dl(), self.dh());
+                let (mut col, mut row) = self.cursor;
+                for i in 0..len {
+                    let b = self.mem.read(self.phys(seg, (off + i as u16) & 0xFFFF));
+                    let (ch, at) = if mode & 2 != 0 { (b, self.mem.read(self.phys(seg, (off + i as u16 + 1) & 0xFFFF))) }
+                                  else { (b, attr) };
+                    let a = self.cell_addr(col, row);
+                    self.mem.write(a, ch);
+                    self.mem.write(a + 1, at);
+                    col += 1;
+                    if col as usize >= Self::COLS { col = 0; row += 1; }
+                    if row as usize >= Self::ROWS { row = Self::ROWS as u8 - 1; col = 0; }
+                }
+                if mode & 1 != 0 { self.cursor = (col, row); }
+            }
             // ----- DOS file / date-time services -----
             (0x21, 0x1A) => { self.dos.dta = self.phys(self.ds, self.dx); }
             (0x21, 0x3C) | (0x21, 0x3D) => { // create / open
@@ -684,6 +886,7 @@ impl Cpu8086 {
         }
     }
     #[inline] fn set_dx(&mut self, v: u16) { self.dx = v; }
+    #[inline] fn set_bh(&mut self, v: u8) { self.bx = (self.bx & 0x00FF) | (v as u16) << 8; }
     #[inline] fn set_ch(&mut self, v: u8) { self.cx = (self.cx & 0x00FF) | (v as u16) << 8; }
     #[inline] fn set_cl(&mut self, v: u8) { self.cx = (self.cx & 0xFF00) | v as u16; }
     #[inline] fn set_dh(&mut self, v: u8) { self.dx = (self.dx & 0x00FF) | (v as u16) << 8; }
@@ -692,6 +895,8 @@ impl Cpu8086 {
     #[inline] fn cl(&self) -> u8 { self.cx as u8 }
     #[inline] fn dh(&self) -> u8 { (self.dx >> 8) as u8 }
     #[inline] fn dl(&self) -> u8 { self.dx as u8 }
+    #[inline] fn bh(&self) -> u8 { (self.bx >> 8) as u8 }
+    #[inline] fn bl(&self) -> u8 { self.bx as u8 }
     fn dos_read_name(&self) -> String {
         let mut a = self.phys(self.ds, self.dx);
         let mut s = String::new();
@@ -1871,6 +2076,9 @@ impl Cpu for Cpu8086 {
         self.fpu_top = 0;
         self.fpu_status = 0;
         self.dos = DosFs::new();
+        self.cursor = (0, 0);
+        self.video_mode = 3;
+        self.mem_clear_text();
     }
 
     fn step(&mut self) -> bool {
@@ -1942,7 +2150,7 @@ impl Cpu for Cpu8086 {
 
     fn snapshot(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67);
-        v.push(5); // version
+        v.push(6); // version
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.fs, self.gs, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -1959,6 +2167,9 @@ impl Cpu for Cpu8086 {
         for f in self.fpu_st { v.extend_from_slice(&f.to_le_bytes()); }
         v.push(self.fpu_top);
         v.extend_from_slice(&self.fpu_status.to_le_bytes());
+        v.push(self.cursor.0);
+        v.push(self.cursor.1);
+        v.push(self.video_mode);
         v
     }
 
@@ -2002,8 +2213,8 @@ impl Cpu for Cpu8086 {
                 self.intr_vector = body.get(start + 2).copied().unwrap_or(0);
             }
             if ver >= 5 {
-                let tail = data.len() - 67;
-                if data.len() >= 67 {
+                let tail = data.len() - 70; // 64 fpu_st + 1 top + 2 status + 2 cursor + 1 mode
+                if data.len() >= 70 {
                     let mut st = [0.0f64; 8];
                     for (i, c) in data[tail..tail + 64].chunks_exact(8).enumerate() {
                         st[i] = f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
@@ -2011,6 +2222,8 @@ impl Cpu for Cpu8086 {
                     self.fpu_st = st;
                     self.fpu_top = data[tail + 64];
                     self.fpu_status = u16::from_le_bytes([data[tail + 65], data[tail + 66]]);
+                    self.cursor = (data[tail + 67], data[tail + 68]);
+                    self.video_mode = data[tail + 69];
                 }
             }
         }
