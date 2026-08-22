@@ -6,9 +6,10 @@
   --text: #c9d1d9;
   --muted: #8b949e;
   --accent: #58a6ff;
-  --green: #3fb950;
-  --red: #f85149;
-  --yellow: #d29922;
+   --green: #3fb950;
+   --red: #f85149;
+   --yellow: #d29922;
+   --amber: #e3a008;
   --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
 }
 * { box-sizing: border-box; }
@@ -63,6 +64,7 @@ main {
 #gutter div[data-addr] { cursor: pointer; }
 #gutter div[data-addr]:hover { background: rgba(80, 140, 255, .12); }
 #gutter div.bp { box-shadow: inset 3px 0 0 var(--red); }
+#gutter div.cbp { box-shadow: inset 3px 0 0 var(--amber, #e3a008); }
 #gutter .n[data-addr] { cursor: pointer; }
 #gutter .n[data-addr]:hover { color: var(--accent); }
 #gutter .n { color: #484f58; }
@@ -128,7 +130,8 @@ main {
  #disasmView .drow .dtext { color: #e6edf3; }
  #disasmView .drow.cur { background: rgba(63,185,80,.18); }
  #disasmView .drow.cur .daddr { color: var(--green); }
- #disasmView .drow.bp { box-shadow: inset 3px 0 0 var(--red); }
+  #disasmView .drow.bp { box-shadow: inset 3px 0 0 var(--red); }
+  #disasmView .drow.cbp { box-shadow: inset 3px 0 0 var(--amber, #e3a008); }
  #disasmView .drow:hover { background: #161b22; }
  #watchList { padding: 10px; font-size: 12px; }
  .watchrow { display: flex; justify-content: space-between; gap: 10px; padding: 3px 4px; border-bottom: 1px solid var(--border); }
@@ -148,6 +151,7 @@ main {
 #memview .addr { color: #484f58; }
 #memview .mb { cursor: pointer; border-radius: 2px; }
 #memview .mb:hover { background: rgba(88, 166, 255, .25); }
+#memview .mb.ch { background: var(--amber, #e3a008); color: #1b1f24; }
 #memtools { display: flex; gap: 6px; padding: 6px 10px; align-items: center; border-top: 1px solid var(--border); }
 #memtools input { width: 110px; }
 #memtools .info { color: var(--muted); font-size: 12px; margin-left: auto; }
@@ -203,3 +207,9 @@ kbd { background: #21262d; border: 1px solid var(--border); border-radius: 4px; 
 .rob.tr { background: #3a6ea5; }
 .rob.on { background: #ffd24d; box-shadow: 0 0 5px #ffd24d; }
 .modal-buttons button { flex: 1; }
+#ac { position: absolute; z-index: 50; background: #161b22; border: 1px solid #30363d; border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.45); max-height: 200px; overflow: auto; min-width: 150px; font-size: 12px; }
+#ac .aci { display: flex; justify-content: space-between; gap: 12px; padding: 3px 10px; cursor: pointer; }
+#ac .aci .w { color: #e6edf3; font-family: var(--mono); }
+#ac .aci .d { color: #8b95a8; }
+#ac .aci.sel, #ac .aci:hover { background: #1f6feb; }
+#ac .aci.sel .d, #ac .aci:hover .d { color: #dbe7ff; }

@@ -16,17 +16,27 @@
         <option value="8051">Intel 8051</option>
       </select>
     </label>
-    <button id="exampleBtn" title="Load a sample program">Example</button>
+    <button id="exampleBtn" title="Load a sample program" data-i18n="example">Example</button>
+    <label>Lang
+      <select id="lang">
+        <option value="en" selected>EN</option>
+        <option value="es">ES</option>
+        <option value="de">DE</option>
+        <option value="fr">FR</option>
+        <option value="hi">HI</option>
+      </select>
+    </label>
     <span class="spacer"></span>
-    <button id="asmBtn" class="primary" title="Assemble and load (F7)">Assemble</button>
-    <button id="stepBtn" title="Step one instruction (F8)" disabled>Step</button>
-    <button id="overBtn" title="Step over a CALL (F10): run the whole call in one step" disabled>Step-Over</button>
-    <button id="backBtn" title="Undo the last Step (snapshot restore)" disabled>Step-Back</button>
-    <button id="runBtn" title="Run until halt or Stop (F5)" disabled>Run</button>
-    <button id="stopBtn" title="Stop running" disabled>Stop</button>
-    <button id="resetBtn" title="Reset CPU">Reset</button>
-    <button id="saveBtn" title="Download a snapshot of the current CPU state">Save State</button>
-    <button id="loadBtn" title="Restore CPU state from a saved snapshot file">Load State</button>
+    <button id="asmBtn" class="primary" title="Assemble and load (F7)" data-i18n="assemble">Assemble</button>
+    <button id="stepBtn" title="Step one instruction (F8)" disabled data-i18n="step">Step</button>
+    <button id="overBtn" title="Step over a CALL (F10): run the whole call in one step" disabled data-i18n="stepOver">Step-Over</button>
+    <button id="backBtn" title="Undo the last Step (snapshot restore)" disabled data-i18n="stepBack">Step-Back</button>
+    <button id="runBtn" title="Run until halt or Stop (F5)" disabled data-i18n="run">Run</button>
+    <button id="stopBtn" title="Stop running" disabled data-i18n="stop">Stop</button>
+    <button id="resetBtn" title="Reset CPU" data-i18n="reset">Reset</button>
+    <button id="saveBtn" title="Download a snapshot of the current CPU state" data-i18n="saveState">Save State</button>
+    <button id="loadBtn" title="Restore CPU state from a saved snapshot file" data-i18n="loadState">Load State</button>
+    <button id="shareBtn" title="Copy a shareable link with the current source encoded in the URL" data-i18n="share">Share Link</button>
     <span id="intrBar85" style="display:none">
       <span style="color:var(--muted);font-size:11px">IRQ:</span>
       <button id="irqTrap" title="Non-maskable, works with DI">TRAP</button>
@@ -63,23 +73,23 @@
 
     <section class="right">
       <div class="panel">
-        <h2>Registers</h2>
+        <h2><span data-i18n="registers">Registers</span></h2>
         <div id="regs" class="rgrid"></div>
       </div>
       <div class="panel">
-        <h2>Flags</h2>
+        <h2><span data-i18n="flags">Flags</span></h2>
         <div id="flags"></div>
       </div>
       <div class="panel">
-        <h2>Disassembly <span class="hint">click a line to toggle a breakpoint</span></h2>
+        <h2><span data-i18n="disasm">Disassembly</span> <span class="hint">click a line to toggle a breakpoint</span></h2>
         <pre id="disasmView" class="mono"></pre>
       </div>
       <div class="panel">
-        <h2>Watch <span class="hint"><input id="watchInput" value="" spellcheck="false" placeholder="AX, [0x200], 100h, AL" size="20"><button id="watchAdd" title="Add watch">+</button></span></h2>
+        <h2><span data-i18n="watch">Watch</span> <span class="hint"><input id="watchInput" value="" spellcheck="false" placeholder="AX, [0x200], 100h, AL" size="20"><button id="watchAdd" title="Add watch">+</button></span></h2>
         <div id="watchList" class="mono"></div>
       </div>
       <div class="panel">
-        <h2>Memory</h2>
+        <h2><span data-i18n="memory">Memory</span></h2>
         <div id="memtools">
           <button id="mempgUp" title="Previous 256 bytes">&#9664;</button>
           <input id="memaddr" value="0" spellcheck="false" title="Base address (hex)">
@@ -89,7 +99,7 @@
         <div id="memview"></div>
       </div>
       <div class="panel">
-        <h2>Memory map</h2>
+        <h2><span data-i18n="memmap">Memory map</span></h2>
         <div id="memmap" class="mono"></div>
         <div id="romload">
           <label>ROM @ <input id="romaddr" value="0" spellcheck="false" size="6" title="ROM load address (hex)"></label>
@@ -97,15 +107,15 @@
         </div>
       </div>
       <div class="panel">
-        <h2>I/O Ports <span class="hint"><button id="portsClearBtn">Clear</button></span></h2>
+        <h2><span data-i18n="ports">I/O Ports</span> <span class="hint"><button id="portsClearBtn">Clear</button></span></h2>
         <div id="ports"></div>
       </div>
       <div class="panel">
-        <h2>Peripheral registers</h2>
+        <h2><span data-i18n="peripherals">Peripheral registers</span></h2>
         <div id="peripherals" class="chips"></div>
       </div>
       <div class="panel">
-        <h2>Program output <span class="hint"><button id="clearOutBtn">Clear</button></span></h2>
+        <h2><span data-i18n="output">Program output</span> <span class="hint"><button id="clearOutBtn">Clear</button></span></h2>
         <div id="output"></div>
       </div>
       <div class="panel" id="screenPanel" style="display:none">
@@ -142,6 +152,7 @@
     <span>Code <b id="sbCode">—</b></span>
   </footer>
 
+  <script src="./i18n.js"></script>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

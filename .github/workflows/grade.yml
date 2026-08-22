@@ -1,0 +1,25 @@
+name: grade
+
+# Headless autograder: assembles + runs each fixture in grade/*.asm against the
+# matching grade/*.spec and fails the build if any check fails.
+on: [push, pull_request]
+
+jobs:
+  grade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build grader
+        run: cargo build --example run --release
+      - name: Run grade specs
+        shell: bash
+        run: |
+          shopt -s nullglob
+          fail=0
+          for spec in grade/*.spec; do
+            asm="${spec%.spec}.asm"
+            echo "== grading $asm =="
+            ./target/release/examples/run --grade "$spec" "$asm" || fail=1
+          done
+          exit $fail

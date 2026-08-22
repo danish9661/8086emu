@@ -393,11 +393,12 @@ END
   ],
 };
 
-const ISA_DEFAULTS = {
-  '8086': EXAMPLES['8086'][0].src,
-  '8085': EXAMPLES['8085'][0].src,
-  '8051': EXAMPLES['8051'][0].src,
-};
+  const ISA_DEFAULTS = {
+    '8086': EXAMPLES['8086'][0].src,
+    '8085': EXAMPLES['8085'][0].src,
+    '8051': EXAMPLES['8051'][0].src,
+  };
+  const ISA_LIST = Object.keys(ISA_DEFAULTS);
 
 const ISA_INFO = {
   '8086': { origin: 0, entry: 0x100, pcLabel: (pc, regs) => {
@@ -428,7 +429,16 @@ let stopRequested = false;
 let accumOut = '';
 let errLine = -1;
 let codeMap = [];
-let breakpoints = new Set();   // per source line: "ADDR  BYTES" or ''
+let breakpoints = new Map();   // addr -> condition string ('' == unconditional)
+
+// breakpoint helpers (Map-backed: addr -> condition expr)
+function bpHas(addr) { return breakpoints.has(addr); }
+function bpAdd(addr, cond) { breakpoints.set(addr, cond || ''); }
+function bpDel(addr) { breakpoints.delete(addr); }
+function bpCond(addr) { return breakpoints.get(addr) || ''; }
+function bpAddrs() { return [...breakpoints.keys()]; }
+function bpUncondAddrs() { return bpAddrs().filter(a => !bpCond(a)); }
+function bpHit(addr) { return bpHas(addr) && (!bpCond(addr) || evalCond(bpCond(addr))); }
 let history = [];   // snapshots for Step-Back (time-travel debugger)
 const MAX_HISTORY = 200;        // bounded ring of CPU states
 let prevRegMap = {};            // previous register values for change highlighting
@@ -461,7 +471,7 @@ const editor = $('editor'), gutter = $('gutter'), hl = $('hl'), errorsBox = $('e
 
 function newEmulator() {
   emu = new Emulator(isa);
-  breakpoints = new Set();
+    breakpoints = new Map();
   steps = 0; accumOut = '';
   history = [];
   prevRegMap = {};
@@ -660,6 +670,8 @@ function chip(name, value, sub = null, isPc = false, changed = false) {
 
 // ---------- memory ----------
 let memBase = 0;
+let memPrev = null;            // previous memory page for diff highlighting
+let memPrevBase = 0;
 const PAGE = 256;
 
 function renderMem(pcPhys) {
@@ -670,17 +682,18 @@ function renderMem(pcPhys) {
   const bytes = new Uint8Array(emu.mem(memBase, len));
   const inRange = pcPhys >= memBase && pcPhys < memBase + len;
   const off = inRange ? pcPhys - memBase : -1;
-  let html = '';
-  for (let row = 0; row < len; row += 16) {
-    const addr = memBase + row;
-    html += `<span class="addr">${fmt(addr).padStart(6, '0')}</span>  `;
-    for (let c = 0; c < 16; c++) {
-      const i = row + c;
-      const b = bytes[i];
-      const isPc = i === off;
-      const cls = isPc ? 'hl' : 'mb';
-      html += `<span class="${cls}" data-addr="${memBase + i}" title="Click to edit [${fmt(memBase + i).padStart(6, '0')}]">${fmt(b, 2)}</span> `;
-    }
+   let html = '';
+   for (let row = 0; row < len; row += 16) {
+     const addr = memBase + row;
+     html += `<span class="addr">${fmt(addr).padStart(6, '0')}</span>  `;
+     for (let c = 0; c < 16; c++) {
+       const i = row + c;
+       const b = bytes[i];
+       const isPc = i === off;
+       const changed = memPrev && memPrevBase === memBase && memPrev[i] !== b;
+       const cls = isPc ? 'hl' : (changed ? 'mb ch' : 'mb');
+       html += `<span class="${cls}" data-addr="${memBase + i}" title="Click to edit [${fmt(memBase + i).padStart(6, '0')}]">${fmt(b, 2)}</span> `;
+     }
     html += ' |';
     for (let c = 0; c < 16; c++) {
       const b = bytes[row + c];
@@ -688,9 +701,11 @@ function renderMem(pcPhys) {
     }
     html += '|\n';
   }
-  memView.innerHTML = html;
-  $('meminfo').textContent = inRange
-    ? `PC highlighted (${fmt(pcPhys)})` : `PC ${fmt(pcPhys)} outside view`;
+   memView.innerHTML = html;
+   memPrev = bytes.slice();
+   memPrevBase = memBase;
+   $('meminfo').textContent = inRange
+     ? `PC highlighted (${fmt(pcPhys)})` : `PC ${fmt(pcPhys)} outside view`;
 }
 
 $('memview').addEventListener('click', (e) => {
@@ -756,10 +771,9 @@ function editWatch(i) {
 $('disasmView').addEventListener('click', (e) => {
   const row = e.target.closest('.drow');
   if (!row || !row.dataset.addr) return;
-  const addr = parseInt(row.dataset.addr, 16);
-  if (breakpoints.has(addr)) { breakpoints.delete(addr); toast('Breakpoint removed'); }
-  else { breakpoints.add(addr); toast('Breakpoint set at ' + fmt(addr).padStart(4, '0') + 'h'); }
-  renderDisasm(emu.pc());
+   const addr = parseInt(row.dataset.addr, 16);
+   toggleBreakpoint(addr, e.shiftKey);
+   renderDisasm(emu.pc());
 });
 // double-click a line to run-to-cursor
 $('disasmView').addEventListener('dblclick', (e) => {
@@ -799,9 +813,11 @@ function renderDisasm(pc) {
     if (!m) { html += `<div class="drow"><span class="dtext">${escHtml(ln)}</span></div>`; continue; }
     const addr = parseInt(m[1], 16);
     const cur = (addr === pc) ? ' cur' : '';
-    const bp = breakpoints.has(addr) ? ' bp' : '';
+    const bp = bpHas(addr) ? (bpCond(addr) ? ' cbp' : ' bp') : '';
+    const tip = (DESC[m[3].trim().split(/\s+/)[0].toUpperCase()] || '').replace(/"/g, '&quot;');
+    const titleAttr = tip ? ` title="${tip}"` : '';
     html += `<div class="drow${cur}${bp}" data-addr="${addr.toString(16)}">` +
-            `<span class="daddr">${m[1]}</span>  <span class="dbytes">${m[2]}</span>  <span class="dtext">${escHtml(m[3])}</span></div>`;
+            `<span class="daddr">${m[1]}</span>  <span class="dbytes">${m[2]}</span>  <span class="dtext"${titleAttr}>${escHtml(m[3])}</span></div>`;
   }
   view.innerHTML = html;
   // keep the current instruction in view
@@ -857,6 +873,26 @@ function evalWatch(expr, regs) {
     return { text: '[' + fmt(addr) + ']', value: fmt(v), num: v };
   }
   return { text: e, value: '?', num: NaN };
+}
+
+// conditional breakpoint expression: "LHS op RHS" (op: == != <= >= < >)
+function evalCond(expr) {
+  expr = expr.trim();
+  if (!expr) return true;
+  const m = expr.match(/^(.*?)\s*(==|!=|<=|>=|<|>)\s*(.*)$/);
+  if (!m) return true; // no comparison -> ignore condition
+  const l = evalWatch(m[1].trim(), emu.regs()).num;
+  const r = evalWatch(m[3].trim(), emu.regs()).num;
+  if (Number.isNaN(l) || Number.isNaN(r)) return false;
+  switch (m[2]) {
+    case '==': return l === r;
+    case '!=': return l !== r;
+    case '<':  return l < r;
+    case '>':  return l > r;
+    case '<=': return l <= r;
+    case '>=': return l >= r;
+  }
+  return false;
 }
 
 function renderWatch(regs) {
@@ -918,8 +954,8 @@ function buildGutter() {
   for (let i = 0; i < lines.length; i++) {
     const c = codeMap[i] || '';
     const addr = c ? parseInt(c, 16) : 0;
-    const bp = addr && breakpoints.has(addr) ? ' bp' : '';
-    html += `<div class="${i + 1 === errLine ? 'err' : ''}${bp}" ${addr ? `data-addr="${addr.toString(16)}"` : ''}><span class="n" ${addr ? `data-addr="${addr.toString(16)}"` : ''} title="${addr ? (breakpoints.has(addr) ? 'Remove breakpoint' : 'Toggle breakpoint') : ''}">${i + 1}</span>` +
+    const bp = addr && bpHas(addr) ? (bpCond(addr) ? ' cbp' : ' bp') : '';
+    html += `<div class="${i + 1 === errLine ? 'err' : ''}${bp}" ${addr ? `data-addr="${addr.toString(16)}"` : ''}><span class="n" ${addr ? `data-addr="${addr.toString(16)}"` : ''} title="${addr ? (bpHas(addr) ? 'Breakpoint (Shift-click: edit condition)' : 'Toggle breakpoint (Shift-click: condition)') : ''}">${i + 1}</span>` +
             (c ? `<span class="c">${c}</span>` : '') + '</div>';
   }
   gutter.innerHTML = html;
@@ -927,20 +963,34 @@ function buildGutter() {
 gutter.addEventListener('click', (e) => {
   const el = e.target.closest('[data-addr]');
   if (!el || el.closest('.err')) return;
-  const addr = parseInt(el.dataset.addr, 16);
-  if (el.classList.contains('n')) toggleBreakpoint(addr);
-  else runToLine(addr);
+   const addr = parseInt(el.dataset.addr, 16);
+   if (el.classList.contains('n')) toggleBreakpoint(addr, e.shiftKey);
+   else runToLine(addr);
 });
 
-function toggleBreakpoint(addr) {
-  if (breakpoints.has(addr)) { breakpoints.delete(addr); toast('Breakpoint removed'); }
-  else { breakpoints.add(addr); toast('Breakpoint set at ' + fmt(addr).padStart(4, '0') + 'h'); }
+function toggleBreakpoint(addr, shift) {
+  if (shift) {
+    const cur = bpCond(addr);
+    const c = prompt('Breakpoint condition (e.g. CX==0, mem[0x200]==5, AX>10). Empty = unconditional:', cur);
+    if (c === null) return; // cancelled
+    if (c.trim() === '') { bpDel(addr); toast('Breakpoint removed'); }
+    else { bpAdd(addr, c.trim()); toast('Conditional breakpoint @' + fmt(addr).padStart(4, '0') + 'h: ' + c.trim()); }
+    renderSource(); return;
+  }
+  if (bpHas(addr)) { bpDel(addr); toast('Breakpoint removed'); }
+  else { bpAdd(addr, ''); toast('Breakpoint set @' + fmt(addr).padStart(4, '0') + 'h'); }
   renderSource();
 }
 function renderSource() { buildGutter(); renderHl(); }
-editor.oninput = () => { renderSource(); saveSource(); };
-editor.onscroll = () => { gutter.scrollTop = editor.scrollTop; hl.scrollTop = editor.scrollTop; hl.scrollLeft = editor.scrollLeft; };
+editor.oninput = () => { renderSource(); saveSource(); updateAc(); };
+editor.onscroll = () => { gutter.scrollTop = editor.scrollTop; hl.scrollTop = editor.scrollTop; hl.scrollLeft = editor.scrollLeft; hideAc(); };
 editor.onkeydown = (e) => {
+  if (acEl && acEl.style.display !== 'none' && acMatches.length) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); acIdx = (acIdx + 1) % acMatches.length; refreshAcSel(); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); acIdx = (acIdx - 1 + acMatches.length) % acMatches.length; refreshAcSel(); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applyAc(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); hideAc(); return; }
+  }
   if (e.key === 'Tab') {
     e.preventDefault();
     const s = editor.selectionStart;
@@ -948,6 +998,106 @@ editor.onkeydown = (e) => {
     renderSource();
   }
 };
+editor.addEventListener('blur', () => setTimeout(hideAc, 150));
+/*AC*/
+const ISA_MNEM = {
+  8086: ['MOV','ADD','ADC','SUB','SBB','AND','OR','XOR','CMP','INC','DEC','MUL','IMUL','DIV','IDIV','NOT','NEG','TEST','XCHG','LEA','PUSH','POP','PUSHA','POPA','CALL','RET','RETF','JMP','JE','JZ','JNE','JNZ','JC','JB','JNC','JNB','JA','JAE','JBE','JG','JGE','JL','JLE','JO','JNO','JS','JNS','JP','JPE','JNP','JPO','LOOP','LOOPZ','LOOPNZ','JCXZ','INT','IRET','INT3','INTO','CLC','STC','CMC','CLI','STI','CLD','STD','NOP','HLT','SHL','SHR','SAL','SAR','ROL','ROR','RCL','RCR','CBW','CWD','DAA','DAS','AAA','AAS','AAM','AAD','LAHF','SAHF','MOVS','LODS','STOS','CMPS','SCAS','IN','OUT'],
+  8085: ['MOV','MVI','LXI','LDA','STA','LHLD','SHLD','LDAX','STAX','XCHG','ADD','ADC','SUB','SBB','ANA','XRA','ORA','CMP','ADI','ACI','SUI','SBI','ANI','XRI','ORI','CPI','INR','DCR','INX','DCX','DAD','RLC','RRC','RAL','RAR','CMA','CMC','STC','DAA','JMP','JZ','JNZ','JC','JNC','JP','JM','JPE','JPO','CALL','CC','CNC','CZ','CNZ','CP','CM','CPE','CPO','RET','RNZ','RZ','RNC','RP','RM','RPE','RPO','RST','PUSH','POP','XTHL','SPHL','PCHL','EI','DI','SIM','RIM','IN','OUT','NOP','HLT'],
+  8051: ['MOV','MOVC','MOVX','PUSH','POP','XCH','XCHD','SWAP','ADD','ADDC','SUBB','INC','DEC','MUL','DIV','DA','ANL','ORL','XRL','CLR','CPL','RL','RR','RLC','RRC','SETB','SJMP','AJMP','LJMP','JZ','JNZ','JC','JNC','JB','JNB','JBC','CJNE','DJNZ','ACALL','LCALL','RET','RETI','NOP'],
+};
+const REG_WORDS = {
+  8086: ['AX','BX','CX','DX','AH','AL','BH','BL','CH','CL','DH','DL','SI','DI','BP','SP','CS','DS','ES','SS','IP','FLAGS'],
+  8085: ['A','B','C','D','E','H','L','PSW','SP','PC'],
+  8051: ['A','B','R0','R1','R2','R3','R4','R5','R6','R7','DPTR','PSW','SP','PC','ACC','DPH','DPL'],
+};
+const DESC = {
+  MOV:'Move data', ADD:'Add', ADC:'Add with carry', SUB:'Subtract', SBB:'Subtract with borrow',
+  AND:'Logical AND', OR:'Logical OR', XOR:'Logical XOR', CMP:'Compare (sets flags only)', INC:'Increment', DEC:'Decrement',
+  MUL:'Unsigned multiply', IMUL:'Signed multiply', DIV:'Unsigned divide', IDIV:'Signed divide',
+  NOT:'Ones complement', NEG:'Twos complement', TEST:'Bitwise test (flags only)', XCHG:'Exchange',
+  LEA:'Load effective address', PUSH:'Push onto stack', POP:'Pop from stack', CALL:'Call subroutine', RET:'Return from subroutine',
+  JMP:'Unconditional jump', JE:'Jump if equal', JZ:'Jump if zero', JNE:'Jump if not equal', JNZ:'Jump if not zero',
+  JC:'Jump if carry', JNC:'Jump if no carry', LOOP:'Loop CX times', INT:'Software interrupt', IRET:'Return from interrupt',
+  NOP:'No operation', HLT:'Halt', SHL:'Shift left', SHR:'Shift right', SAR:'Arithmetic shift right',
+  ROL:'Rotate left', ROR:'Rotate right', CLC:'Clear carry', STC:'Set carry', CLI:'Clear interrupt flag', STI:'Set interrupt flag',
+  LXI:'Load immediate pair', LDA:'Load A from address', STA:'Store A to address', MVI:'Move immediate',
+  INR:'Increment register', DCR:'Decrement register', DAD:'Add pair to HL', RLC:'Rotate A left', RRC:'Rotate A right',
+  RAL:'Rotate A left through carry', RAR:'Rotate A right through carry', DAA:'Decimal adjust A', EI:'Enable interrupts', DI:'Disable interrupts',
+  MOVX:'External data move', MOVC:'Code memory move', ANL:'Logical AND', ORL:'Logical OR', XRL:'Logical XOR',
+  CLR:'Clear bit/register', SETB:'Set bit', SJMP:'Short jump', AJMP:'Absolute jump', LJMP:'Long jump',
+  JB:'Jump if bit set', JNB:'Jump if bit clear', JBC:'Jump if bit set and clear',
+  CJNE:'Compare and jump if not equal', DJNZ:'Decrement and jump if not zero', ACALL:'Absolute call', LCALL:'Long call', RETI:'Return from interrupt',
+};
+let acEl = null, acMatches = [], acTok = null, acIdx = -1;
+(function () {
+  acEl = document.createElement('div');
+  acEl.id = 'ac';
+  acEl.style.display = 'none';
+  document.body.appendChild(acEl);
+  acEl.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const item = e.target.closest('.aci');
+    if (!item) return;
+    acIdx = parseInt(item.dataset.i, 10);
+    applyAc();
+  });
+})();
+function acWordsFor() {
+  return (ISA_MNEM[isa] || []).concat(REG_WORDS[isa] || [], ['ORG', 'DB', 'DW', 'EQU', 'END']);
+}
+function currentToken() {
+  const v = editor.value, pos = editor.selectionStart;
+  let s = pos; while (s > 0 && /[A-Za-z0-9_@.]/.test(v[s - 1])) s--;
+  let e = pos; while (e < v.length && /[A-Za-z0-9_@.]/.test(v[e])) e++;
+  return { start: s, end: e, text: v.slice(s, e) };
+}
+function updateAc() {
+  const tok = currentToken();
+  if (tok.text.length < 1) { hideAc(); return; }
+  const prefix = tok.text.toUpperCase();
+  const matches = acWordsFor().filter(w => w.startsWith(prefix) && w !== prefix);
+  if (matches.length === 0) { hideAc(); return; }
+  acMatches = matches; acTok = tok; acIdx = 0;
+  acEl.innerHTML = matches.slice(0, 10).map((w, i) => {
+    const d = DESC[w] || '';
+    return `<div class="aci${i === 0 ? ' sel' : ''}" data-i="${i}"><span class="w">${w}</span>${d ? `<span class="d">${d}</span>` : ''}</div>`;
+  }).join('');
+  const c = getCaretCoordinates(editor);
+  const r = editor.getBoundingClientRect();
+  acEl.style.left = (r.left + window.scrollX + c.left) + 'px';
+  acEl.style.top = (r.top + window.scrollY + c.top + c.height) + 'px';
+  acEl.style.display = 'block';
+}
+function refreshAcSel() {
+  [...acEl.querySelectorAll('.aci')].forEach((el, i) => el.classList.toggle('sel', i === acIdx));
+  const sel = acEl.querySelector('.aci.sel');
+  if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+function hideAc() { if (acEl) acEl.style.display = 'none'; acMatches = []; acIdx = -1; }
+function applyAc() {
+  if (acIdx < 0 || !acMatches[acIdx]) return;
+  const w = acMatches[acIdx];
+  editor.setRangeText(w, acTok.start, acTok.end, 'end');
+  hideAc(); renderSource(); saveSource();
+}
+function getCaretCoordinates(el) {
+  const div = document.createElement('div');
+  const cs = getComputedStyle(el);
+  const props = ['boxSizing','width','height','overflowX','overflowY','borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','paddingTop','paddingRight','paddingBottom','paddingLeft','fontStyle','fontVariant','fontWeight','fontStretch','fontSize','fontFamily','lineHeight','textAlign','textTransform','textIndent','letterSpacing','wordSpacing','tabSize'];
+  props.forEach(p => div.style[p] = cs[p]);
+  div.style.position = 'absolute'; div.style.visibility = 'hidden';
+  div.style.whiteSpace = 'pre-wrap'; div.style.wordWrap = 'break-word';
+  div.textContent = el.value.substring(0, el.selectionStart);
+  const span = document.createElement('span');
+  span.textContent = el.value.substring(el.selectionStart) || '.';
+  div.appendChild(span);
+  document.body.appendChild(div);
+  const top = span.offsetTop + parseInt(cs.borderTopWidth || '0', 10);
+  const left = span.offsetLeft + parseInt(cs.borderLeftWidth || '0', 10);
+  const height = parseInt(cs.lineHeight || '16', 10);
+  document.body.removeChild(div);
+  return { top, left, height };
+}
 
 function showErrors(msg) {
   const m = /line (\d+): (.*)/.exec(msg || '');
@@ -1051,12 +1201,12 @@ function stepOver() {
     maybePromptInput();
     return;
   }
-  const active = [...breakpoints].filter(a => a !== emu.pc());
+  const active = bpUncondAddrs().filter(a => a !== emu.pc());
   const n = emu.run_bp(100000, active.concat([ret]));
   steps += n;
   refresh();
   maybePromptInput();
-  if (!emu.halted() && !emu.waiting_input() && breakpoints.has(emu.pc()) && emu.pc() !== ret) {
+  if (!emu.halted() && !emu.waiting_input() && bpHit(emu.pc()) && emu.pc() !== ret) {
     toast('Breakpoint at ' + fmt(emu.pc()).padStart(4, '0') + 'h');
   }
 }
@@ -1066,13 +1216,13 @@ function runToLine(addr) {
   history.push({ snap: emu.snapshot(), steps });
   if (history.length > MAX_HISTORY) history.shift();
   if (addr === emu.pc()) return;
-  const active = [...breakpoints].filter(a => a !== emu.pc());
+  const active = bpUncondAddrs().filter(a => a !== emu.pc());
   const n = emu.run_bp(100000, active.concat([addr]));
   steps += n;
   refresh();
   maybePromptInput();
   if (!emu.halted() && !emu.waiting_input()) {
-    if (breakpoints.has(emu.pc()) && emu.pc() !== addr) toast('Breakpoint at ' + fmt(emu.pc()).padStart(4, '0') + 'h');
+    if (bpHit(emu.pc()) && emu.pc() !== addr) toast('Breakpoint at ' + fmt(emu.pc()).padStart(4, '0') + 'h');
     else if (emu.pc() !== addr) toast('Never reached that line (jumped over it?)');
   }
 }
@@ -1083,17 +1233,29 @@ function startRun() {
   // Snapshot the pre-run state so Step-Back can undo the whole run (time-travel).
   history.push({ snap: emu.snapshot(), steps });
   if (history.length > MAX_HISTORY) history.shift();
-  const active = [...breakpoints].filter(a => a !== emu.pc()); // continue past the bp we are stopped at
+  const condBps = bpAddrs().filter(a => bpCond(a));
+  const active = bpUncondAddrs().filter(a => a !== emu.pc()); // continue past the bp we are stopped at
   runTimer = setInterval(() => {
-    const n = emu.run_bp(30000, active);
-    steps += n;
-    refresh();
-    if (emu.waiting_input()) { stopRun(); maybePromptInput(); }
-    else if (n < 30000 && !stopRequested && breakpoints.has(emu.pc())) {
-      stopRun();
-      toast('Breakpoint at ' + fmt(emu.pc()).padStart(4, '0') + 'h');
+    if (condBps.length > 0) {
+      // stepping mode so conditional breakpoints are tested every instruction
+      let n = 0;
+      while (n < 30000 && !emu.halted() && !stopRequested) {
+        emu.step(); n++;
+        if (emu.waiting_input() || bpHit(emu.pc())) break;
+      }
+      steps += n;
+      refresh();
+      if (emu.waiting_input()) { stopRun(); maybePromptInput(); return; }
+      if (n < 30000 && !stopRequested && bpHit(emu.pc())) { stopRun(); toast('Breakpoint @' + fmt(emu.pc()).padStart(4, '0') + 'h'); return; }
+      if (emu.halted() || stopRequested) { stopRun(); return; }
+    } else {
+      const n = emu.run_bp(30000, active);
+      steps += n;
+      refresh();
+      if (emu.waiting_input()) { stopRun(); maybePromptInput(); return; }
+      if (n < 30000 && !stopRequested && bpHit(emu.pc())) { stopRun(); toast('Breakpoint @' + fmt(emu.pc()).padStart(4, '0') + 'h'); return; }
+      if (emu.halted() || stopRequested) { stopRun(); return; }
     }
-    if (emu.halted() || stopRequested) stopRun();
   }, 16);
   $('stopBtn').disabled = false;
   refresh();
@@ -1196,9 +1358,35 @@ function loadSource() {
   codeMap = [];
   renderSource();
 }
-function saveSource() {
-  localStorage.setItem('mcu_src_' + isa, editor.value);
-}
+ function saveSource() {
+   localStorage.setItem('mcu_src_' + isa, editor.value);
+ }
+
+ // share-by-URL: encode the current source in the location fragment
+ let hashApplied = false;
+ function applyHash() {
+   if (hashApplied) return;
+   const p = new URLSearchParams(location.hash.replace(/^#/, ''));
+   if (!p.has('src')) return;
+   hashApplied = true;
+   const wantIsa = p.get('isa');
+   if (wantIsa && ISA_LIST.includes(wantIsa) && wantIsa !== isa) {
+     isa = wantIsa; $('isa').value = isa; newEmulator();
+   }
+   try { editor.value = decodeURIComponent(p.get('src')); }
+   catch { editor.value = p.get('src'); }
+   errLine = -1; codeMap = []; renderSource(); saveSource();
+ }
+ $('shareBtn').onclick = () => {
+   const full = location.href.split('#')[0] + '#isa=' + isa + '&src=' + encodeURIComponent(editor.value);
+   history.replaceState(null, '', '#isa=' + isa + '&src=' + encodeURIComponent(editor.value));
+   const done = () => toast('Share link copied to clipboard');
+   if (navigator.clipboard && navigator.clipboard.writeText) {
+     navigator.clipboard.writeText(full).then(done, () => prompt('Copy this share link:', full));
+   } else {
+     prompt('Copy this share link:', full);
+   }
+ };
 
 $('isa').onchange = () => {
   isa = $('isa').value;
@@ -1243,10 +1431,12 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-newEmulator();
-loadSource();
-$('intrBar85').style.display = 'none';
+ newEmulator();
+ loadSource();
+ applyHash();
+ $('intrBar85').style.display = 'none';
 $('intrBar51').style.display = 'none';
 $('intrBar86').style.display = '';   // default ISA is 8086
-$('romaddr').value = isa === '8086' ? 'F0000' : '0';
-refresh();
+ $('romaddr').value = isa === '8086' ? 'F0000' : '0';
+ if (window.applyI18n) window.applyI18n();
+ refresh();

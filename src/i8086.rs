@@ -112,6 +112,7 @@ pub struct Cpu8086 {
     // keyboard input: INT 21h AH=01/06/07/08/0C pop from here
     keybuf: VecDeque<u8>,
     input_pending: bool, // INT 21h read with empty buffer: IP re-pointed, CPU blocked
+    line_buf: Vec<u8>,   // accumulation buffer for INT 21h AH=0A line input
     /// I/O port space (256 ports); OUT to port 01h also prints AL.
     pub ports: [u8; 256],
     // hardware interrupts (latched, serviced at the end of step())
@@ -195,6 +196,7 @@ impl Cpu8086 {
             rep: None,
             seg_ov: None,
             keybuf: VecDeque::new(),
+            line_buf: Vec::new(),
             ports: [0; 256],
             pending_nmi: false,
             pending_intr: false,
@@ -590,6 +592,30 @@ impl Cpu8086 {
         }
     }
 
+    /// INT 21h AH=0A buffered line input. DS:DX -> [maxlen, count, ...chars].
+    /// Accumulates into `line_buf` and blocks (re-executes) until Enter.
+    fn int_read_line(&mut self) {
+        let mut done = false;
+        while let Some(k) = self.keybuf.pop_front() {
+            if k == b'\r' || k == b'\n' { done = true; break; }
+            self.line_buf.push(k);
+            self.out.put_char(k as char);
+        }
+        if !done {
+            self.input_pending = true;
+            self.ip = self.ip.wrapping_sub(2);
+            return;
+        }
+        let base = self.phys(self.ds, self.dx);
+        let max = self.mem.read(base) as usize;
+        let cnt = self.line_buf.len().min(max);
+        self.mem.write(base + 1, cnt as u8);
+        for i in 0..cnt {
+            self.mem.write(base + 2 + i, self.line_buf[i]);
+        }
+        self.line_buf.clear();
+    }
+
     // ----- text-mode screen (framebuffer at 0xB8000: char,attr pairs) -----
     const VRAM: usize = 0xB8000;
     const COLS: usize = 80;
@@ -720,6 +746,21 @@ impl Cpu8086 {
                 }
             }
             (0x21, 0x4C) => { self.halted = true; }
+            (0x21, 0x0A) => self.int_read_line(),   // buffered keyboard line input
+            // ----- BIOS INT 16h (keyboard services) -----
+            (0x16, 0x00) | (0x16, 0x10) => {        // read key (block)
+                match self.key_read() {
+                    Some(k) => { self.set_al(k); self.set_ah(0); }
+                    None => { self.input_pending = true; self.ip = self.ip.wrapping_sub(2); }
+                }
+            }
+            (0x16, 0x01) | (0x16, 0x11) => {        // peek key (ZF set if none)
+                match self.keybuf.front() {
+                    Some(k) => { self.set_al(*k); self.set_ah(0); self.set_flag(ZF, false); }
+                    None => { self.set_flag(ZF, true); }
+                }
+            }
+            (0x16, 0x02) | (0x16, 0x12) => { self.set_al(0); } // shift-state flags
             // ----- BIOS INT 10h (text-mode services) -----
             (0x10, 0x00) => { // set video mode: clear screen, home cursor
                 self.video_mode = self.al();

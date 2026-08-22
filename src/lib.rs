@@ -362,7 +362,9 @@ impl Emulator {
         match self {
             Emulator::I8086(c) => disasm8086::disasm(&c.mem, start, count),
             Emulator::I8085(c) => disasm8085::disasm(&c.mem, start, count),
-            Emulator::Mcs51(c) => disasm8051::disasm(&c.code, start, count),
+            // 8051 fetches code from internal `code` when EA=1, and from
+            // external XDATA (the loaded ROM) when EA=0.
+            Emulator::Mcs51(c) => disasm8051::disasm(if c.ea { &c.code } else { &c.xdata }, start, count),
         }
     }
 
@@ -388,5 +390,42 @@ impl Emulator {
             Emulator::I8085(c) => &mut c.as_mut().out,
             Emulator::Mcs51(c) => &mut c.as_mut().out,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has(regs: &[Reg], name: &str, val: u32) -> bool {
+        regs.iter().any(|r| r.name == name && r.value == val)
+    }
+
+    #[test]
+    fn set_reg_round_trips() {
+        // 8086
+        let mut e = make_emulator("8086").unwrap();
+        e.set_reg("AX", 0x1234);
+        e.set_reg("IP", 0x0100);
+        assert!(has(&e.regs(), "AX", 0x1234));
+        assert!(has(&e.regs(), "IP", 0x0100));
+        e.set_reg("BX", 0x00FF);
+        assert!(has(&e.regs(), "BX", 0x00FF));
+
+        // 8085
+        let mut e = make_emulator("8085").unwrap();
+        e.set_reg("A", 0x42);
+        e.set_reg("PC", 0x1234);
+        assert!(has(&e.regs(), "A", 0x42));
+        assert!(has(&e.regs(), "PC", 0x1234));
+
+        // 8051
+        let mut e = make_emulator("8051").unwrap();
+        e.set_reg("A", 0x11);
+        e.set_reg("R0", 0x55);
+        e.set_reg("DPTR", 0x1234);
+        assert!(has(&e.regs(), "A", 0x11));
+        assert!(has(&e.regs(), "R0", 0x55));
+        assert!(has(&e.regs(), "DPTR", 0x1234));
     }
 }
