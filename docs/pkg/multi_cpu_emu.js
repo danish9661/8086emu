@@ -54,6 +54,40 @@ export class Emulator {
         return v1;
     }
     /**
+     * Read a file back from the 8086 DOS virtual filesystem (empty if absent).
+     * @param {string} name
+     * @returns {Uint8Array | undefined}
+     */
+    fs_get(name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.emulator_fs_get(this.__wbg_ptr, ptr0, len0);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        let v2;
+        if (ret[0] !== 0) {
+            v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v2;
+    }
+    /**
+     * Preload a file into the 8086 DOS virtual filesystem.
+     * @param {string} name
+     * @param {Uint8Array} data
+     */
+    fs_put(name, data) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.emulator_fs_put(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * @returns {boolean}
      */
     halted() {
@@ -224,6 +258,21 @@ export class Emulator {
      */
     serial_rx(ch) {
         const ret = wasm.emulator_serial_rx(this.__wbg_ptr, ch);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Set the emulated DOS/BIOS date-time clock (INT 21h 2Ah/2Ch, INT 1Ah).
+     * @param {number} year
+     * @param {number} month
+     * @param {number} day
+     * @param {number} hour
+     * @param {number} min
+     * @param {number} sec
+     */
+    set_clock(year, month, day, hour, min, sec) {
+        const ret = wasm.emulator_set_clock(this.__wbg_ptr, year, month, day, hour, min, sec);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }

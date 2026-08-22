@@ -33,6 +33,7 @@ pub enum Stmt {
     Org(u32),
     Db(Vec<String>),
     Dw(Vec<String>),
+    Dq(Vec<String>),
     Equ(String, String),
     End,
     Instr { mnemonic: String, ops: Vec<String> },
@@ -201,12 +202,14 @@ if let Some(v) = parse_number(o) {
                     errs.push(AsmErr::new(ln, "ORG needs an address"));
                 }
             }
-            "DB" | "DW" => {
+            "DB" | "DW" | "DQ" => {
                 if let Some(l) = pending_label.take() {
                     stmts.push((ln, Stmt::Equ(l, "$".to_string())));
                 }
                 let items = split_data_items(&ops.join(","));
-                if mnem == "DB" { stmts.push((ln, Stmt::Db(items))); } else { stmts.push((ln, Stmt::Dw(items))); }
+                if mnem == "DB" { stmts.push((ln, Stmt::Db(items))); }
+                else if mnem == "DW" { stmts.push((ln, Stmt::Dw(items))); }
+                else { stmts.push((ln, Stmt::Dq(items))); }
             }
             "EQU" => {
                 if let Some(l) = pending_label {

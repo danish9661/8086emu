@@ -173,4 +173,17 @@ impl Emulator {
     pub fn restore(&mut self, data: &[u8]) {
         self.inner.restore(data);
     }
+
+    /// Preload a file into the 8086 DOS virtual filesystem.
+    pub fn fs_put(&mut self, name: &str, data: &[u8]) -> Result<(), JsValue> {
+        to_js(self.inner.fs_put(name, data))
+    }
+    /// Read a file back from the 8086 DOS virtual filesystem (empty if absent).
+    pub fn fs_get(&self, name: &str) -> Result<Option<Vec<u8>>, JsValue> {
+        to_js(self.inner.fs_get(name))
+    }
+    /// Set the emulated DOS/BIOS date-time clock (INT 21h 2Ah/2Ch, INT 1Ah).
+    pub fn set_clock(&mut self, year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8) -> Result<(), JsValue> {
+        to_js(self.inner.set_clock(year, month, day, hour, min, sec))
+    }
 }

@@ -192,6 +192,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                 }
             }
             Stmt::Dw(items) => addr += items.len() as u32 * 2,
+            Stmt::Dq(items) => addr += items.len() as u32 * 8,
             Stmt::Instr { mnemonic, ops } => {
                 match enc(mnemonic, ops, &syms, addr, origin) {
                     Ok(b) => addr += b.len() as u32,
@@ -245,6 +246,18 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                         Ok(v) => { code.extend_from_slice(&(v as u16).to_le_bytes()); addr += 2; }
                         Err(e) => errs.push(AsmErr::new(*ln, e)),
                     }
+                }
+                info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
+            }
+            Stmt::Dq(items) => {
+                let start = addr;
+                for it in items {
+                    let raw: [u8; 8] = if it.contains('.') || it.contains("e") || it.contains("E") {
+                        match it.trim().parse::<f64>() { Ok(f) => f.to_le_bytes(), Err(e) => { errs.push(AsmErr::new(*ln, format!("bad float '{it}': {e}"))); continue; } }
+                    } else {
+                        match parse_expr(it, &syms2, addr, origin) { Ok(v) => (v as u64).to_le_bytes(), Err(e) => { errs.push(AsmErr::new(*ln, e)); continue; } }
+                    };
+                    code.extend_from_slice(&raw); addr += 8;
                 }
                 info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
             }

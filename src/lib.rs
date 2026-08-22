@@ -153,6 +153,29 @@ impl Emulator {
         }
     }
 
+    /// Preload a file into the 8086 DOS virtual filesystem (name matched
+    /// case-insensitively; '@' not required). 8086 only.
+    pub fn fs_put(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
+        match self {
+            Emulator::I8086(c) => { c.fs_put(name, data); Ok(()) }
+            _ => Err("fs_put: 8086 only".into()),
+        }
+    }
+    /// Read a file's bytes back from the 8086 DOS virtual filesystem.
+    pub fn fs_get(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        match self {
+            Emulator::I8086(c) => Ok(c.fs_get(name)),
+            _ => Err("fs_get: 8086 only".into()),
+        }
+    }
+    /// Set the emulated DOS/BIOS date-time clock (INT 21h 2Ah/2Ch, INT 1Ah).
+    pub fn set_clock(&mut self, year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8) -> Result<(), String> {
+        match self {
+            Emulator::I8086(c) => { c.set_clock(year, month, day, hour, min, sec); Ok(()) }
+            _ => Err("set_clock: 8086 only".into()),
+        }
+    }
+
     /// Inject a received serial byte into the 8051 (sets SBUF + RI).
     pub fn serial_rx(&mut self, ch: u8) -> Result<(), String> {
         match self {

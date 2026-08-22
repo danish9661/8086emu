@@ -147,12 +147,14 @@ fn enc(
             else { return Err("MOVC needs A,@A+DPTR or A,@A+PC".into()); }
         }
         "MOVX" => {
-            let s = ops[0].to_ascii_uppercase();
-            match s.as_str() {
-                "A,@R0" => o.push(0xE2), "A,@R1" => o.push(0xE3),
-                "A,@DPTR" => o.push(0xE0),
-                "@R0,A" => o.push(0xF2), "@R1,A" => o.push(0xF3),
-                "@DPTR,A" => o.push(0xF0),
+            if ops.len() != 2 { return Err("MOVX needs 2 operands".into()); }
+            let d = ops[0].to_ascii_uppercase();
+            let s = ops[1].to_ascii_uppercase();
+            match (d.as_str(), s.as_str()) {
+                ("A", "@R0") => o.push(0xE2), ("A", "@R1") => o.push(0xE3),
+                ("A", "@DPTR") => o.push(0xE0),
+                ("@R0", "A") => o.push(0xF2), ("@R1", "A") => o.push(0xF3),
+                ("@DPTR", "A") => o.push(0xF0),
                 _ => return Err("MOVX: unsupported form".into()),
             }
         }
@@ -206,7 +208,10 @@ fn enc(
             let su = s.to_ascii_uppercase();
             if su.starts_with('R') && du == "A" { o.push(base + 0x08 + is_rn(&su).ok_or("bad Rn")?); }
             else if su.starts_with('@') && du == "A" { o.push(base + 0x06 + is_ri(&su).ok_or("bad @Ri")?); }
-            else if let Some(v) = su.strip_prefix('#') { if du == "A" { o.push(base + 0x04); o.push(imm(v)?); } else { return Err(format!("{mnemonic}: bad operand order")); } }
+            else if let Some(v) = su.strip_prefix('#') {
+                if du == "A" { o.push(base + 0x04); o.push(imm(v)?); }
+                else { o.push(base + 0x03); o.push(direct(d)?); o.push(imm(v)?); } // dir, #imm
+            }
             else if su == "A" { if let Some(v) = du.strip_prefix('#') { o.push(base + 0x02); o.push(direct(v)?); } else { o.push(base + 0x02); o.push(direct(d)?); } }
             else if let Some(v) = su.strip_prefix('#') { o.push(base + 0x03); o.push(direct(d)?); o.push(imm(v)?); }
             else if du == "A" { o.push(base + 0x05); o.push(direct(s)?); }
@@ -338,6 +343,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                 }
             }
             Stmt::Dw(items) => addr += items.len() as u32 * 2,
+            Stmt::Dq(items) => addr += items.len() as u32 * 8,
             Stmt::Instr { mnemonic, ops } => {
                 match enc(mnemonic, ops, &syms, addr, origin) {
                     Ok((b, _)) => addr += b.len() as u32,
@@ -390,6 +396,18 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                         Ok(v) => { code.extend_from_slice(&(v as u16).to_be_bytes()); addr += 2; }
                         Err(e) => errs.push(AsmErr::new(*ln, e)),
                     }
+                }
+                info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
+            }
+            Stmt::Dq(items) => {
+                let start = addr;
+                for it in items {
+                    let raw: [u8; 8] = if it.contains('.') || it.contains("e") || it.contains("E") {
+                        match it.trim().parse::<f64>() { Ok(f) => f.to_be_bytes(), Err(e) => { errs.push(AsmErr::new(*ln, format!("bad float '{it}': {e}"))); continue; } }
+                    } else {
+                        match parse_expr(it, &syms2, addr, origin) { Ok(v) => (v as u64).to_be_bytes(), Err(e) => { errs.push(AsmErr::new(*ln, e)); continue; } }
+                    };
+                    code.extend_from_slice(&raw); addr += 8;
                 }
                 info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
             }

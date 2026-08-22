@@ -4,9 +4,54 @@
 //! service subset so classic lab programs (INT 21h AH=09 string print,
 //! AH=02 char print, AH=4C exit, INT 10h AH=0Eh) run headlessly.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg, RunResult};
+
+// ----- DOS virtual filesystem / clock (host-supplied, emulated services) -----
+struct DosFile { name: String, data: Vec<u8>, pos: usize }
+
+#[derive(Clone)]
+struct DosClock { year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8 }
+
+struct DosFs {
+    files: Vec<DosFile>,
+    handles: HashMap<u16, usize>, // handle -> index into files
+    next_handle: u16,
+    dta: usize,                    // DTA linear address
+    clock: DosClock,
+}
+
+impl DosFs {
+    fn new() -> Self {
+        DosFs {
+            files: Vec::new(),
+            handles: HashMap::new(),
+            next_handle: 5, // DOS reserves 0..4 for std streams
+            dta: 0x80,      // default DTA at PSP:0080h
+            clock: DosClock { year: 2025, month: 1, day: 1, hour: 0, min: 0, sec: 0 },
+        }
+    }
+    fn find(&self, name: &str) -> Option<usize> {
+        let n = name.to_ascii_uppercase();
+        self.files.iter().position(|f| f.name.to_ascii_uppercase() == n)
+    }
+    fn open_handle(&mut self, id: usize) -> u16 {
+        let h = self.next_handle;
+        self.next_handle += 1;
+        self.handles.insert(h, id);
+        h
+    }
+}
+
+fn to_bcd(v: u8) -> u8 { ((v / 10) << 4) | (v % 10) }
+fn from_bcd(v: u8) -> u8 { (v >> 4) * 10 + (v & 0x0F) }
+// Sakamoto's algorithm: 0 = Sunday .. 6 = Saturday (matches DOS AL for INT 21h/2Ah)
+fn weekday(y: u16, m: u8, d: u8) -> u8 {
+    let t = [0u16, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if m < 3 { y - 1 } else { y };
+    ((y as u32 + y as u32 / 4 - y as u32 / 100 + y as u32 / 400 + t[(m - 1) as usize] as u32 + d as u32) % 7) as u8
+}
 
 const MEM_SIZE: usize = 1 << 20; // 1 MiB
 
@@ -24,6 +69,7 @@ pub struct Cpu8086 {
     pub ax: u16, pub bx: u16, pub cx: u16, pub dx: u16,
     pub si: u16, pub di: u16, pub bp: u16, pub sp: u16,
     pub cs: u16, pub ds: u16, pub es: u16, pub ss: u16,
+    pub fs: u16, pub gs: u16, // 286+ segment registers (present for compatibility)
     pub ip: u16,
     pub flags: u16,
     pub mem: Mem,
@@ -42,6 +88,12 @@ pub struct Cpu8086 {
     pending_nmi: bool,   // NMI pin: non-maskable, vector 02h
     pending_intr: bool,  // INTR pin: maskable via IF, device-supplied vector
     intr_vector: u8,
+    // x87 FPU (best-effort: 80-bit values modelled as f64; no exceptions)
+    fpu_st: [f64; 8],
+    fpu_top: u8,
+    fpu_status: u16, // condition codes / exceptions summary
+    // DOS virtual filesystem + clock (host-supplied)
+    dos: DosFs,
 }
 
 impl Default for Cpu8086 {
@@ -88,7 +140,7 @@ impl Cpu8086 {
         let mut c = Cpu8086 {
             ax: 0, bx: 0, cx: 0, dx: 0,
             si: 0, di: 0, bp: 0, sp: 0xFFFF,
-            cs: 0, ds: 0, es: 0, ss: 0,
+            cs: 0, ds: 0, es: 0, ss: 0, fs: 0, gs: 0,
             ip: 0, flags: 0x0002, // bit 1 always set
             mem: Mem::new(MEM_SIZE),
             out: Output::default(),
@@ -102,6 +154,10 @@ impl Cpu8086 {
             pending_intr: false,
             intr_vector: 0,
             input_pending: false,
+            fpu_st: [0.0; 8],
+            fpu_top: 0,
+            fpu_status: 0,
+            dos: DosFs::new(),
         };
         c.reset();
         c
@@ -469,13 +525,174 @@ impl Cpu8086 {
             (0x21, 0x4C) => { self.halted = true; }
             (0x10, 0x0E) => { self.out.put_char(self.al() as char); }
             (0x10, 0x0F) => { self.set_ah(0x03); self.set_al(0x00); } // video mode
+            // ----- DOS file / date-time services -----
+            (0x21, 0x1A) => { self.dos.dta = self.phys(self.ds, self.dx); }
+            (0x21, 0x3C) | (0x21, 0x3D) => { // create / open
+                let name = self.dos_read_name();
+                let id = if let Some(i) = self.dos.find(&name) { i }
+                         else if self.ah() == 0x3C { // create
+                             self.dos.files.push(DosFile { name: name.clone(), data: Vec::new(), pos: 0 });
+                             self.dos.files.len() - 1
+                         } else { // open missing -> error
+                             self.set_flag(CF, true); self.ax = 2; return;
+                         };
+                let h = self.dos.open_handle(id);
+                self.set_flag(CF, false); self.ax = h;
+            }
+            (0x21, 0x3E) => { // close
+                let h = self.bx;
+                if self.dos.handles.remove(&h).is_some() { self.set_flag(CF, false); self.ax = 0; }
+                else { self.set_flag(CF, true); self.ax = 6; }
+            }
+            (0x21, 0x3F) => { // read
+                let h = self.bx;
+                let cnt = self.cx as usize;
+                let id = self.dos.handles.get(&h).copied();
+                match id {
+                    None => { self.set_flag(CF, true); self.ax = 6; }
+                    Some(id) => {
+                        let (avail, pos) = { let f = &self.dos.files[id]; (f.data.len().saturating_sub(f.pos), f.pos) };
+                        let n = cnt.min(avail);
+                        let base = self.phys(self.ds, self.dx);
+                        for i in 0..n {
+                            let b = self.dos.files[id].data[pos + i];
+                            self.mem.write(base + i, b);
+                        }
+                        self.dos.files[id].pos = pos + n;
+                        self.set_flag(CF, false); self.ax = n as u16;
+                    }
+                }
+            }
+            (0x21, 0x40) => { // write
+                let h = self.bx;
+                let cnt = self.cx as usize;
+                let id = self.dos.handles.get(&h).copied();
+                match id {
+                    None => { self.set_flag(CF, true); self.ax = 6; }
+                    Some(id) => {
+                        let base = self.phys(self.ds, self.dx);
+                        let mut buf = Vec::with_capacity(cnt);
+                        for i in 0..cnt { buf.push(self.mem.read(base + i)); }
+                        let f = &mut self.dos.files[id];
+                        if f.pos + cnt > f.data.len() { f.data.resize(f.pos + cnt, 0); }
+                        f.data[f.pos..f.pos + cnt].copy_from_slice(&buf);
+                        f.pos += cnt;
+                        self.set_flag(CF, false); self.ax = cnt as u16;
+                    }
+                }
+            }
+            (0x21, 0x41) => { // unlink (delete)
+                let name = self.dos_read_name();
+                if let Some(i) = self.dos.find(&name) {
+                    self.dos.files.remove(i);
+                    // drop handles pointing at the removed file
+                    self.dos.handles.retain(|_, v| *v != i);
+                    self.set_flag(CF, false); self.ax = 0;
+                } else { self.set_flag(CF, true); self.ax = 2; }
+            }
+            (0x21, 0x42) => { // lseek
+                let h = self.bx;
+                let off = ((self.cx as u32) << 16) | self.dx as u32;
+                let id = self.dos.handles.get(&h).copied();
+                match id {
+                    None => { self.set_flag(CF, true); self.ax = 6; }
+                    Some(id) => {
+                        let newpos: i64 = {
+                            let f = &self.dos.files[id];
+                            match self.al() {
+                                0 => off as i64,
+                                1 => f.pos as i64 + off as i64,
+                                _ => f.data.len() as i64 + off as i64,
+                            }
+                        };
+                        let np = newpos.clamp(0, (self.dos.files[id].data.len() as i64).max(0)) as u32;
+                        self.dos.files[id].pos = np as usize;
+                        self.set_flag(CF, false); self.ax = (np & 0xFFFF) as u16; self.set_dx((np >> 16) as u16);
+                    }
+                }
+            }
+            (0x21, 0x2A) => { // get date: CX=year, DX=month:day (BCD-free binary)
+                let (y, mo, d) = { let c = &self.dos.clock; (c.year, c.month, c.day) };
+                self.cx = y;
+                self.set_dx(((mo as u16) << 8) | d as u16);
+                self.set_al(weekday(y, mo, d));
+            }
+            (0x21, 0x2C) => { // get time: CX=hour:min, DX=sec:centi
+                let (h, mi, s) = { let c = &self.dos.clock; (c.hour, c.min, c.sec) };
+                self.cx = ((h as u16) << 8) | mi as u16;
+                self.set_dx((s as u16) << 8);
+                self.set_al(0);
+            }
+            (0x21, 0x2D) => { // set date
+                let (y, mo, d) = (self.ax, (self.dx >> 8) as u8, (self.dx & 0xFF) as u8);
+                let c = &mut self.dos.clock; c.year = y; c.month = mo; c.day = d;
+            }
+            (0x21, 0x2B) => { // set time
+                let (h, mi, s) = ((self.ax >> 8) as u8, (self.ax & 0xFF) as u8, (self.dx >> 8) as u8);
+                let c = &mut self.dos.clock; c.hour = h; c.min = mi; c.sec = s;
+            }
+            // ----- BIOS INT 1Ah real-time clock -----
+            (0x1A, 0x00) => { // read RTC time (BCD)
+                let (h, mi, s) = { let c = &self.dos.clock; (c.hour, c.min, c.sec) };
+                self.set_ch(to_bcd(h)); self.set_cl(to_bcd(mi));
+                self.set_dh(to_bcd(s)); self.set_dl(0);
+                self.set_flag(CF, false);
+            }
+            (0x1A, 0x01) => { // set RTC time
+                let (h, mi, s) = (from_bcd(self.ch()), from_bcd(self.cl()), from_bcd(self.dh()));
+                let c = &mut self.dos.clock; c.hour = h; c.min = mi; c.sec = s;
+            }
+            (0x1A, 0x04) => { // read RTC date (BCD)
+                let (y, mo, d) = { let c = &self.dos.clock; (c.year, c.month, c.day) };
+                self.set_ch(to_bcd((y / 100) as u8)); self.set_cl(to_bcd((y % 100) as u8));
+                self.set_dh(to_bcd(mo)); self.set_dl(to_bcd(d));
+            }
+            (0x1A, 0x05) => { // set RTC date
+                let (chv, clv, dhv, dlv) = (self.ch(), self.cl(), self.dh(), self.dl());
+                let y = from_bcd(clv) as u16 + (from_bcd(chv) as u16) * 100;
+                let c = &mut self.dos.clock; c.year = y; c.month = from_bcd(dhv); c.day = from_bcd(dlv);
+            }
             _ => {} // other services: silently ignored
         }
+    }
+    #[inline] fn set_dx(&mut self, v: u16) { self.dx = v; }
+    #[inline] fn set_ch(&mut self, v: u8) { self.cx = (self.cx & 0x00FF) | (v as u16) << 8; }
+    #[inline] fn set_cl(&mut self, v: u8) { self.cx = (self.cx & 0xFF00) | v as u16; }
+    #[inline] fn set_dh(&mut self, v: u8) { self.dx = (self.dx & 0x00FF) | (v as u16) << 8; }
+    #[inline] fn set_dl(&mut self, v: u8) { self.dx = (self.dx & 0xFF00) | v as u16; }
+    #[inline] fn ch(&self) -> u8 { (self.cx >> 8) as u8 }
+    #[inline] fn cl(&self) -> u8 { self.cx as u8 }
+    #[inline] fn dh(&self) -> u8 { (self.dx >> 8) as u8 }
+    #[inline] fn dl(&self) -> u8 { self.dx as u8 }
+    fn dos_read_name(&self) -> String {
+        let mut a = self.phys(self.ds, self.dx);
+        let mut s = String::new();
+        loop {
+            let c = self.mem.read(a);
+            if c == 0 { break; }
+            s.push(c as char);
+            a += 1;
+        }
+        s
+    }
+
+    // ----- public DOS FS / clock accessors (used by Emulator API) -----
+    pub fn fs_put(&mut self, name: &str, data: &[u8]) {
+        if let Some(i) = self.dos.find(name) {
+            self.dos.files[i].data = data.to_vec();
+        } else {
+            self.dos.files.push(DosFile { name: name.to_string(), data: data.to_vec(), pos: 0 });
+        }
+    }
+    pub fn fs_get(&self, name: &str) -> Option<Vec<u8>> {
+        self.dos.find(name).map(|i| self.dos.files[i].data.clone())
+    }
+    pub fn set_clock(&mut self, year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8) {
+        self.dos.clock = DosClock { year, month, day, hour, min, sec };
     }
     #[inline] fn al(&self) -> u8 { self.ax as u8 }
     #[inline] fn set_al(&mut self, v: u8) { self.ax = (self.ax & 0xFF00) | v as u16; }
     #[inline] fn ah(&self) -> u8 { (self.ax >> 8) as u8 }
-    #[inline] fn dl(&self) -> u8 { self.dx as u8 }
     #[inline] fn set_ah(&mut self, v: u8) { self.ax = (self.ax & 0x00FF) | ((v as u16) << 8); }
 
     // ----- one instruction -----
@@ -490,6 +707,8 @@ impl Cpu8086 {
                 0x2E => { self.seg_ov = Some(self.cs); self.ip = self.ip.wrapping_add(1); }
                 0x36 => { self.seg_ov = Some(self.ss); self.ip = self.ip.wrapping_add(1); }
                 0x3E => { self.seg_ov = Some(self.ds); self.ip = self.ip.wrapping_add(1); }
+                0x64 => { self.seg_ov = Some(self.fs); self.ip = self.ip.wrapping_add(1); }
+                0x65 => { self.seg_ov = Some(self.gs); self.ip = self.ip.wrapping_add(1); }
                 0xF3 => { self.rep = Some(true); self.ip = self.ip.wrapping_add(1); }
                 0xF2 => { self.rep = Some(false); self.ip = self.ip.wrapping_add(1); }
                 _ => break,
@@ -570,6 +789,24 @@ impl Cpu8086 {
                     }
                 }
             }
+            0x63 => { // ARPL r/m16, r16 (286+): raise dest RPL to src RPL
+                let (m, reg, rm) = self.modrm();
+                let src = self.reg16(reg);
+                let rpl_src = src & 3;
+                if m == 3 {
+                    let dest = self.reg16(rm);
+                    let rpl_dest = dest & 3;
+                    self.set_flag(ZF, rpl_dest < rpl_src);
+                    if rpl_dest < rpl_src { self.set_reg16(rm, (dest & !3) | rpl_src); }
+                } else {
+                    let (seg, off) = self.ea(m, rm, self.ds);
+                    let addr = self.phys(seg, off);
+                    let dest = self.mem.read16(addr);
+                    let rpl_dest = dest & 3;
+                    self.set_flag(ZF, rpl_dest < rpl_src);
+                    if rpl_dest < rpl_src { self.mem.write16(addr, (dest & !3) | rpl_src); }
+                }
+            }
             0x68 => { let v = self.fetch16(); self.push16(v); }
             0x69 => { // IMUL r16,r/m16,imm16
                 let (m, _, rm) = self.modrm();
@@ -602,7 +839,8 @@ impl Cpu8086 {
             0x8C => { // MOV r/m16,seg
                 let (m, r, rm) = self.modrm();
                 let (seg, off) = self.ea(m, rm, self.ds);
-                let v = match r { 0 => self.es, 1 => self.cs, 2 => self.ss, _ => self.ds };
+                let v = match r { 0 => self.es, 1 => self.cs, 2 => self.ss, 3 => self.ds,
+                                 4 => self.fs, 5 => self.gs, _ => self.ds };
                 self.write_rm16(m, rm, seg, off, v);
             }
             0x8D => { // LEA
@@ -615,7 +853,13 @@ impl Cpu8086 {
                 let (seg, off) = self.ea(m, rm, self.ds);
                 let v = self.rm16(m, rm, seg, off);
                 match r {
-                    0 => self.es = v, 1 => self.cs = v, 2 => self.ss = v, _ => self.ds = v,
+                    0 => self.es = v,
+                    1 => self.cs = v,
+                    2 => self.ss = v,
+                    3 => self.ds = v,
+                    4 => self.fs = v,
+                    5 => self.gs = v,
+                    _ => self.ds = v,
                 }
             }
             0x8F => { // POP r/m16
@@ -747,7 +991,7 @@ impl Cpu8086 {
                 let v = self.read_ea8(self.ds, off);
                 self.set_al(v);
             }
-            0xD8..=0xDF => {} // ESC: no-op
+            0xD8..=0xDF => self.exec_fpu(op),
             0xE0..=0xE3 => { // LOOP/LOOPZ/LOOPNZ/JCXZ rel8
                 let d = self.fetch8() as i8 as i16;
                 let cx = self.cx;
@@ -816,8 +1060,322 @@ impl Cpu8086 {
         self.halted
     }
 
+    // ----- x87 FPU (best-effort: 80-bit values modelled as f64; no exceptions) -----
+    #[inline] fn fst(&self, i: usize) -> f64 { self.fpu_st[(self.fpu_top.wrapping_add(i as u8) & 7) as usize] }
+    #[inline] fn set_fst(&mut self, i: usize, v: f64) { self.fpu_st[(self.fpu_top.wrapping_add(i as u8) & 7) as usize] = v; }
+    fn fpu_push(&mut self, v: f64) {
+        self.fpu_top = self.fpu_top.wrapping_sub(1) & 7;
+        self.fpu_st[self.fpu_top as usize] = v;
+    }
+    fn fpu_pop(&mut self) -> f64 {
+        let v = self.fpu_st[self.fpu_top as usize];
+        self.fpu_top = (self.fpu_top + 1) & 7;
+        v
+    }
+    fn fpu_set_cc(&mut self, c0: u8, c2: u8, c3: u8) {
+        self.fpu_status &= !(1 << 8 | 1 << 10 | 1 << 14);
+        if c0 != 0 { self.fpu_status |= 1 << 8; }
+        if c2 != 0 { self.fpu_status |= 1 << 10; }
+        if c3 != 0 { self.fpu_status |= 1 << 14; }
+    }
+    fn fpu_compare(&mut self, a: f64, b: f64) {
+        if a.is_nan() || b.is_nan() { self.fpu_set_cc(1, 1, 1); }
+        else if a > b { self.fpu_set_cc(0, 0, 1); }
+        else if a < b { self.fpu_set_cc(1, 0, 0); }
+        else { self.fpu_set_cc(0, 0, 1); }
+    }
+    fn fpu_rmem(&mut self, m: u8, rm: u8) -> usize {
+        let (seg, off) = self.ea(m, rm, self.ds);
+        self.phys(seg, off)
+    }
+    fn fpu_read_f32(&self, addr: usize) -> f64 {
+        let b = [self.mem.read(addr), self.mem.read(addr + 1), self.mem.read(addr + 2), self.mem.read(addr + 3)];
+        f32::from_le_bytes(b) as f64
+    }
+    fn fpu_read_f64(&self, addr: usize) -> f64 {
+        let mut b = [0u8; 8];
+        for i in 0..8 { b[i] = self.mem.read(addr + i); }
+        f64::from_le_bytes(b)
+    }
+    fn fpu_write_f32(&mut self, addr: usize, v: f64) {
+        let b = (v as f32).to_le_bytes();
+        for i in 0..4 { self.mem.write(addr + i, b[i]); }
+    }
+    fn fpu_write_f64(&mut self, addr: usize, v: f64) {
+        let b = v.to_le_bytes();
+        for i in 0..8 { self.mem.write(addr + i, b[i]); }
+    }
+    fn fpu_read_i16(&self, addr: usize) -> f64 {
+        let v = (self.mem.read(addr) as u16 | ((self.mem.read(addr + 1) as u16) << 8)) as i16;
+        v as f64
+    }
+    fn fpu_read_i32(&self, addr: usize) -> f64 {
+        let mut b = [0u8; 4];
+        for i in 0..4 { b[i] = self.mem.read(addr + i); }
+        i32::from_le_bytes(b) as f64
+    }
+    fn fpu_write_i16(&mut self, addr: usize, v: f64) {
+        let w = (v as i16).to_le_bytes();
+        for i in 0..2 { self.mem.write(addr + i, w[i]); }
+    }
+    fn fpu_write_i32(&mut self, addr: usize, v: f64) {
+        let w = (v as i32).to_le_bytes();
+        for i in 0..4 { self.mem.write(addr + i, w[i]); }
+    }
+    fn fpu_read_f80(&self, addr: usize) -> f64 {
+        let mut b = [0u8; 10];
+        for i in 0..10 { b[i] = self.mem.read(addr + i); }
+        let sign = (b[9] & 0x80) != 0;
+        let exp = ((b[9] as u32 & 0x7F) << 8) | b[8] as u32;
+        let mut mant = [0u8; 8];
+        mant[0] = b[7]; mant[1] = b[6]; mant[2] = b[5]; mant[3] = b[4];
+        mant[4] = b[3]; mant[5] = b[2]; mant[6] = b[1]; mant[7] = b[0];
+        let m = u64::from_le_bytes(mant);
+        if exp == 0 && m == 0 { return if sign { -0.0 } else { 0.0 }; }
+        if exp == 0x7FFF { return if sign { f64::NEG_INFINITY } else { f64::INFINITY }; }
+        let implicit = if exp == 0 { 0u64 } else { 1u64 << 63 };
+        let m64 = (implicit | m) as f64; // approximate (loses low 11 bits of mantissa)
+        let e = (exp as f64 - 16383.0) + 63.0; // scale to f64 exponent range (approx)
+        let val = m64 * 2f64.powf(e - 63.0);
+        if sign { -val } else { val }
+    }
+    fn fpu_write_f80(&mut self, addr: usize, v: f64) {
+        // Best-effort: store as 64-bit mantissa + 15-bit exponent, dropping precision.
+        let bits = v.to_bits();
+        let sign = (bits >> 63) as u8;
+        let e = ((bits >> 52) & 0x7FF) as i32;
+        let m = bits & 0x000F_FFFF_FFFF_FFFF;
+        let (exp80, mant) = if e == 0 { (0u32, m << 11) } else {
+            // normalize: f64 implicit bit (bit52) -> f80 implicit bit (bit63)
+            let full = (1u64 << 52) | m;
+            let exp80 = (e as i32 + 16383 - 1023) as u32;
+            (exp80, full << 11)
+        };
+        let mut b = [0u8; 10];
+        b[0] = mant as u8; b[1] = (mant >> 8) as u8; b[2] = (mant >> 16) as u8; b[3] = (mant >> 24) as u8;
+        b[4] = (mant >> 32) as u8; b[5] = (mant >> 40) as u8; b[6] = (mant >> 48) as u8; b[7] = (mant >> 56) as u8;
+        b[8] = exp80 as u8;
+        b[9] = ((exp80 >> 8) as u8 & 0x7F) | (sign << 7);
+        for i in 0..10 { self.mem.write(addr + i, b[i]); }
+    }
+    fn exec_fpu(&mut self, op: u8) {
+        let (m, reg, rm) = self.modrm();
+        match op {
+            0xD8 => { // FADD..FDIVR (mem32 or ST(i))
+                if m == 3 {
+                    let st0 = self.fst(0);
+                    let sti = self.fst(rm as usize);
+                    match reg {
+                        0 => self.set_fst(0, st0 + sti),
+                        1 => self.set_fst(0, st0 * sti),
+                        2 => self.fpu_compare(st0, sti),
+                        3 => { self.fpu_compare(st0, sti); self.fpu_pop(); }
+                        4 => self.set_fst(0, st0 - sti),
+                        5 => self.set_fst(0, sti - st0),
+                        6 => self.set_fst(0, st0 / sti),
+                        7 => self.set_fst(0, sti / st0),
+                        _ => {}
+                    }
+                } else {
+                    let a = self.fpu_rmem(m, rm);
+                    let v = self.fpu_read_f32(a);
+                    let st0 = self.fst(0);
+                    match reg {
+                        0 => self.set_fst(0, st0 + v),
+                        1 => self.set_fst(0, st0 * v),
+                        2 => self.fpu_compare(st0, v),
+                        3 => { self.fpu_compare(st0, v); self.fpu_pop(); }
+                        4 => self.set_fst(0, st0 - v),
+                        5 => self.set_fst(0, v - st0),
+                        6 => self.set_fst(0, st0 / v),
+                        7 => self.set_fst(0, v / st0),
+                        _ => {}
+                    }
+                }
+            }
+            0xD9 => {
+                if m == 3 {
+                    match reg {
+                        0 => { let v = self.fst(rm as usize); self.fpu_push(v); } // FLD ST(i)
+                        1 => { // FXCH ST(i)
+                            let a = self.fst(0); let b = self.fst(rm as usize);
+                            self.set_fst(0, b); self.set_fst(rm as usize, a);
+                        }
+                        2 => {} // FNOP (D9 D0)
+                        3 => { let v = self.fst(0); self.set_fst(rm as usize, v); self.fpu_pop(); } // FSTP ST(i)
+                        4 => match rm { // FCHS/FABS/FTST
+                            0 => self.set_fst(0, -self.fst(0)),
+                            1 => self.set_fst(0, self.fst(0).abs()),
+                            4 => self.fpu_compare(self.fst(0), 0.0), // FTST
+                            _ => {}
+                        },
+                        5 => match rm { // constants (D9 E8..EF)
+                            0 => self.fpu_push(1.0),        // FLD1
+                            1 => self.fpu_push(10f64.log2()), // FLDL2T
+                            2 => self.fpu_push(std::f64::consts::E.log2()), // FLDL2E
+                            3 => self.fpu_push(std::f64::consts::PI), // FLDPI
+                            4 => self.fpu_push(2f64.log10()), // FLDLG2
+                            5 => self.fpu_push(2f64.ln()),    // FLDLN2
+                            6 => self.fpu_push(0.0),          // FLDZ
+                            _ => self.fpu_push(f64::INFINITY), // FLDINF
+                        },
+                        _ => {}
+                    }
+                } else {
+                    let a = self.fpu_rmem(m, rm);
+                    match reg {
+                        0 => { let v = self.fpu_read_f32(a); self.fpu_push(v); } // FLD mem32
+                        2 => self.fpu_write_f32(a, self.fst(0)), // FST mem32
+                        3 => { self.fpu_write_f32(a, self.fst(0)); self.fpu_pop(); } // FSTP mem32
+                        7 => { self.mem.write(a, self.fpu_status as u8); self.mem.write(a + 1, (self.fpu_status >> 8) as u8); } // FSTCW
+                        _ => {}
+                    }
+                }
+            }
+            0xDA => { // FIADD..FIDIVR (int mem) + FCMOV (skip)
+                if m != 3 {
+                    let a = self.fpu_rmem(m, rm);
+                    let v = self.fpu_read_i32(a);
+                    let st0 = self.fst(0);
+                    match reg {
+                        0 => self.set_fst(0, st0 + v),
+                        1 => self.set_fst(0, st0 * v),
+                        2 => self.fpu_compare(st0, v),
+                        3 => { self.fpu_compare(st0, v); self.fpu_pop(); }
+                        4 => self.set_fst(0, st0 - v),
+                        5 => self.set_fst(0, v - st0),
+                        6 => self.set_fst(0, st0 / v),
+                        7 => self.set_fst(0, v / st0),
+                        _ => {}
+                    }
+                }
+            }
+            0xDB => {
+                if m == 3 {
+                    match reg {
+                        3 => { // FINIT (DB E3) / FCLEX (DB E2)
+                            self.fpu_top = 0;
+                            self.fpu_status = 0;
+                            self.fpu_st = [0.0; 8];
+                        }
+                        _ => {} // FCMOVxx (skip)
+                    }
+                } else {
+                    let a = self.fpu_rmem(m, rm);
+                    match reg {
+                        0 => { let v = self.fpu_read_i32(a); self.fpu_push(v); } // FILD mem32
+                        2 => self.fpu_write_i32(a, self.fst(0)), // FIST mem32
+                        3 => { self.fpu_write_i32(a, self.fst(0)); self.fpu_pop(); } // FISTP mem32
+                        5 => { let v = self.fpu_read_f80(a); self.fpu_push(v); } // FLD mem80
+                        7 => { let v = self.fpu_pop(); self.fpu_write_f80(a, v); } // FSTP mem80
+                        _ => {}
+                    }
+                }
+            }
+            0xDC => { // FADD..FDIVR (mem64 or ST(i), pop variants)
+                if m == 3 {
+                    let st0 = self.fst(0);
+                    let sti = self.fst(rm as usize);
+                    match reg {
+                        0 => { self.set_fst(0, st0 + sti); self.fpu_pop(); } // FADDP
+                        1 => { self.set_fst(0, st0 * sti); self.fpu_pop(); } // FMULP
+                        2 => self.fpu_compare(st0, sti),
+                        3 => { self.fpu_compare(st0, sti); self.fpu_pop(); } // FCOMP
+                        4 => { self.set_fst(0, sti - st0); self.fpu_pop(); } // FSUBRP
+                        5 => { self.set_fst(0, st0 - sti); self.fpu_pop(); } // FSUBP
+                        6 => { self.set_fst(0, sti / st0); self.fpu_pop(); } // FDIVRP
+                        7 => { self.set_fst(0, st0 / sti); self.fpu_pop(); } // FDIVP
+                        _ => {}
+                    }
+                } else {
+                    let a = self.fpu_rmem(m, rm);
+                    let v = self.fpu_read_f64(a);
+                    let st0 = self.fst(0);
+                    match reg {
+                        0 => self.set_fst(0, st0 + v),
+                        1 => self.set_fst(0, st0 * v),
+                        2 => self.fpu_compare(st0, v),
+                        3 => { self.fpu_compare(st0, v); self.fpu_pop(); }
+                        4 => self.set_fst(0, st0 - v),
+                        5 => self.set_fst(0, v - st0),
+                        6 => self.set_fst(0, st0 / v),
+                        7 => self.set_fst(0, v / st0),
+                        _ => {}
+                    }
+                }
+            }
+            0xDD => {
+                if m == 3 {
+                    match reg {
+                        0 => {} // FFREE (no-op for our model)
+                        2 => { let v = self.fst(0); self.set_fst(rm as usize, v); } // FST ST(i)
+                        3 => { let v = self.fst(0); self.set_fst(rm as usize, v); self.fpu_pop(); } // FSTP ST(i)
+                        _ => {}
+                    }
+                } else {
+                    let a = self.fpu_rmem(m, rm);
+                    match reg {
+                        0 => { let v = self.fpu_read_f64(a); self.fpu_push(v); } // FLD mem64
+                        2 => self.fpu_write_f64(a, self.fst(0)), // FST mem64
+                        3 => { self.fpu_write_f64(a, self.fst(0)); self.fpu_pop(); } // FSTP mem64
+                        7 => { self.mem.write(a, self.fpu_status as u8); self.mem.write(a + 1, (self.fpu_status >> 8) as u8); } // FSTSW mem
+                        _ => {}
+                    }
+                }
+            }
+            0xDE => { // FIADD..FIDIVR (int16 mem) + FADDP..FDIVP
+                if m == 3 {
+                    let st0 = self.fst(0);
+                    let sti = self.fst(rm as usize);
+                    match reg {
+                        0 => { self.set_fst(0, st0 + sti); self.fpu_pop(); }
+                        1 => { self.set_fst(0, st0 * sti); self.fpu_pop(); }
+                        2 => self.fpu_compare(st0, sti),
+                        3 => { self.fpu_compare(st0, sti); self.fpu_pop(); }
+                        4 => { self.set_fst(0, sti - st0); self.fpu_pop(); }
+                        5 => { self.set_fst(0, st0 - sti); self.fpu_pop(); }
+                        6 => { self.set_fst(0, sti / st0); self.fpu_pop(); }
+                        7 => { self.set_fst(0, st0 / sti); self.fpu_pop(); }
+                        _ => {}
+                    }
+                } else {
+                    let a = self.fpu_rmem(m, rm);
+                    let v = self.fpu_read_i16(a);
+                    let st0 = self.fst(0);
+                    match reg {
+                        0 => self.set_fst(0, st0 + v),
+                        1 => self.set_fst(0, st0 * v),
+                        2 => self.fpu_compare(st0, v),
+                        3 => { self.fpu_compare(st0, v); self.fpu_pop(); }
+                        4 => self.set_fst(0, st0 - v),
+                        5 => self.set_fst(0, v - st0),
+                        6 => self.set_fst(0, st0 / v),
+                        7 => self.set_fst(0, v / st0),
+                        _ => {}
+                    }
+                }
+            }
+            0xDF => {
+                if m == 3 {
+                    if reg == 0 { self.ax = self.fpu_status; } // FSTSW AX (DF E0; WAIT prefix ignored)
+                } else {
+                    let a = self.fpu_rmem(m, rm);
+                    match reg {
+                        0 => { let v = self.fpu_read_i16(a); self.fpu_push(v); } // FILD mem16
+                        2 => self.fpu_write_i16(a, self.fst(0)), // FIST mem16
+                        3 => { self.fpu_write_i16(a, self.fst(0)); self.fpu_pop(); } // FISTP mem16
+                        5 => { let v = self.fpu_read_f64(a); self.fpu_push(v); } // FILD mem64
+                        7 => { let v = self.fpu_pop(); self.fpu_write_f64(a, v); } // FSTP mem64
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn int_vec(&mut self, n: u8) {
-        if n == 0x21 || n == 0x10 {
+        if n == 0x21 || n == 0x10 || n == 0x1A {
             self.int_service(n);
             return;
         }
@@ -1269,6 +1827,7 @@ impl Cpu for Cpu8086 {
         self.ax = 0; self.bx = 0; self.cx = 0; self.dx = 0;
         self.si = 0; self.di = 0; self.bp = 0; self.sp = 0xFFFF;
         self.cs = 0; self.ds = 0; self.es = 0; self.ss = 0;
+        self.fs = 0; self.gs = 0;
         self.ip = 0;
         self.flags = 0x0002;
         self.halted = false;
@@ -1280,6 +1839,10 @@ impl Cpu for Cpu8086 {
         self.pending_nmi = false;
         self.pending_intr = false;
         self.intr_vector = 0;
+        self.fpu_st = [0.0; 8];
+        self.fpu_top = 0;
+        self.fpu_status = 0;
+        self.dos = DosFs::new();
     }
 
     fn step(&mut self) -> bool {
@@ -1319,6 +1882,8 @@ impl Cpu for Cpu8086 {
             Reg::new("DS", self.ds as u32),
             Reg::new("ES", self.es as u32),
             Reg::new("SS", self.ss as u32),
+            Reg::new("FS", self.fs as u32),
+            Reg::new("GS", self.gs as u32),
             Reg::new("IP", self.ip as u32),
         ]
     }
@@ -1348,10 +1913,10 @@ impl Cpu for Cpu8086 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256);
-        v.push(3); // version
+        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67);
+        v.push(5); // version
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
-                  self.cs, self.ds, self.es, self.ss, self.ip, self.flags] {
+                  self.cs, self.ds, self.es, self.ss, self.fs, self.gs, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
         }
         v.push(self.halted as u8);
@@ -1363,13 +1928,16 @@ impl Cpu for Cpu8086 {
         v.push(self.pending_nmi as u8);
         v.push(self.pending_intr as u8);
         v.push(self.intr_vector);
+        for f in self.fpu_st { v.extend_from_slice(&f.to_le_bytes()); }
+        v.push(self.fpu_top);
+        v.extend_from_slice(&self.fpu_status.to_le_bytes());
         v
     }
 
     fn restore(&mut self, data: &[u8]) {
         if data.is_empty() { return; }
         let ver = data[0];
-        if data.len() < 30 { return; }
+        if data.len() < 34 { return; }
         let mut it = data.iter().copied().skip(1);
         let mut rd = || -> u16 {
             let lo = it.next().unwrap_or(0) as u16;
@@ -1379,10 +1947,12 @@ impl Cpu for Cpu8086 {
         self.ax = rd(); self.bx = rd(); self.cx = rd(); self.dx = rd();
         self.si = rd(); self.di = rd(); self.bp = rd(); self.sp = rd();
         self.cs = rd(); self.ds = rd(); self.es = rd(); self.ss = rd();
+        self.fs = rd(); self.gs = rd();
         self.ip = rd(); self.flags = rd();
-        self.halted = data.get(29).is_some_and(|b| *b != 0);
-        self.input_pending = data.get(30).is_some_and(|b| *b != 0);
-        let body = &data[31..];
+        self.halted = it.next().is_some_and(|b| b != 0);
+        self.input_pending = it.next().is_some_and(|b| b != 0);
+        // body offset = 1 (ver) + 16 regs*2 + halted + input = 35
+        let body = &data[35..];
         let n = body.len().min(MEM_SIZE);
         self.mem.data[..n].copy_from_slice(&body[..n]);
         self.keybuf.clear();
@@ -1402,6 +1972,18 @@ impl Cpu for Cpu8086 {
                 self.pending_nmi = body.get(start).is_some_and(|b| *b != 0);
                 self.pending_intr = body.get(start + 1).is_some_and(|b| *b != 0);
                 self.intr_vector = body.get(start + 2).copied().unwrap_or(0);
+            }
+            if ver >= 5 {
+                let tail = data.len() - 67;
+                if data.len() >= 67 {
+                    let mut st = [0.0f64; 8];
+                    for (i, c) in data[tail..tail + 64].chunks_exact(8).enumerate() {
+                        st[i] = f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
+                    }
+                    self.fpu_st = st;
+                    self.fpu_top = data[tail + 64];
+                    self.fpu_status = u16::from_le_bytes([data[tail + 65], data[tail + 66]]);
+                }
             }
         }
         self.rep = None;

@@ -14,6 +14,14 @@ export class Emulator {
      */
     assemble_info(source: string): string[];
     flags(): string[];
+    /**
+     * Read a file back from the 8086 DOS virtual filesystem (empty if absent).
+     */
+    fs_get(name: string): Uint8Array | undefined;
+    /**
+     * Preload a file into the 8086 DOS virtual filesystem.
+     */
+    fs_put(name: string, data: Uint8Array): void;
     halted(): boolean;
     /**
      * Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
@@ -66,6 +74,10 @@ export class Emulator {
      */
     serial_rx(ch: number): void;
     /**
+     * Set the emulated DOS/BIOS date-time clock (INT 21h 2Ah/2Ch, INT 1Ah).
+     */
+    set_clock(year: number, month: number, day: number, hour: number, min: number, sec: number): void;
+    /**
      * Set the program counter (entry point after load).
      */
     set_pc(addr: number): void;
@@ -96,6 +108,8 @@ export interface InitOutput {
     readonly emulator_assemble: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_flags: (a: number) => [number, number];
+    readonly emulator_fs_get: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly emulator_fs_put: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly emulator_halted: (a: number) => number;
     readonly emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];
     readonly emulator_load: (a: number, b: number, c: number, d: number) => void;
@@ -114,6 +128,7 @@ export interface InitOutput {
     readonly emulator_run_bp: (a: number, b: number, c: number, d: number) => number;
     readonly emulator_run_to: (a: number, b: number, c: number) => number;
     readonly emulator_serial_rx: (a: number, b: number) => [number, number];
+    readonly emulator_set_clock: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly emulator_set_pc: (a: number, b: number) => void;
     readonly emulator_set_sid: (a: number, b: number) => void;
     readonly emulator_snapshot: (a: number) => [number, number];

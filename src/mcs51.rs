@@ -7,12 +7,13 @@
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg};
 
 const CODE_SIZE: usize = 64 * 1024;
-const XDATA_SIZE: usize = 64 * 1024;
+const XDATA_SIZE: usize = 256 * 1024; // banked external RAM (0x00000..0x3FFFF)
 
 // SFR indices (offset within the 128-byte SFR array)
 const S_SP: usize = 0x01;
 const S_DPL: usize = 0x02;
 const S_DPH: usize = 0x03;
+const S_PCON: usize = 0x07; // 0x87: IDL(b0), PD(b1), SMOD(b7)
 const S_TCON: usize = 0x08;
 const S_TMOD: usize = 0x09;
 const S_TL0: usize = 0x0A;
@@ -21,6 +22,7 @@ const S_TH0: usize = 0x0C;
 const S_TH1: usize = 0x0D;
 const S_SCON: usize = 0x18;
 const S_SBUF: usize = 0x19;
+const S_XPAGE: usize = 0x78; // 0xF8: external RAM bank (extension for >64 KiB XDATA)
 const S_IP: usize = 0x38;
 const S_IE: usize = 0x28;
 const S_PSW: usize = 0x50;
@@ -45,6 +47,12 @@ pub struct Cpu8051 {
     /// interrupt re-asserts after service until the line is released.
     ext_int0_held: bool,
     ext_int1_held: bool,
+    /// External RAM bank for MOVX @DPTR/@Ri (extension beyond 64 KiB XDATA).
+    xdata_bank: u8,
+    /// Serial transmit in progress: steps remaining until TI is set and the
+    /// character is emitted to Output (baud-rate modelled from Timer 1 / SMOD).
+    tx_countdown: u32,
+    tx_char: u8,
 }
 
 impl Default for Cpu8051 {
@@ -67,6 +75,9 @@ impl Cpu8051 {
             in_svc_high: false,
             ext_int0_held: false,
             ext_int1_held: false,
+            xdata_bank: 0,
+            tx_countdown: 0,
+            tx_char: 0,
         };
         c.reset();
         c
@@ -85,6 +96,9 @@ impl Cpu8051 {
         self.in_svc_high = false;
         self.ext_int0_held = false;
         self.ext_int1_held = false;
+        self.xdata_bank = 0;
+        self.tx_countdown = 0;
+        self.tx_char = 0;
     }
 
     // ----- helpers -----
@@ -135,7 +149,9 @@ impl Cpu8051 {
         } else {
             let idx = addr as usize - 0x80;
             match idx {
-                S_SBUF => { self.out.put_char(v as char); self.sfr[idx] = v; self.sfr[S_SCON] |= 0x02; } // TI on transmit complete
+                S_SBUF => { self.start_tx(v); } // schedule transmit (TI fires after baud delay)
+                S_PCON => { self.sfr[idx] = v; } // IDL/PD/SMOD latched; effects read in step()
+                S_XPAGE => { self.xdata_bank = v; self.sfr[idx] = v; }
                 S_ACC => self.set_acc(v),
                 S_PSW => self.set_psw(v),
                 _ => self.sfr[idx] = v,
@@ -157,6 +173,36 @@ impl Cpu8051 {
     pub fn serial_rx(&mut self, ch: u8) {
         self.sfr[S_SBUF] = ch;
         self.sfr[S_SCON] |= 0x01;
+    }
+    /// Begin a serial transmit. If Timer 1 is running as a baud-rate generator
+    /// (mode 1/2), TI and the emitted character are deferred by the frame time
+    /// derived from the timer period and SMOD; otherwise TI is set immediately
+    /// (legacy behaviour, e.g. inside a serial ISR before TR1 is started).
+    fn start_tx(&mut self, v: u8) {
+        self.sfr[S_SBUF] = v;
+        let tcon = self.sfr[S_TCON];
+        let tmod = self.sfr[S_TMOD];
+        let pcon = self.sfr[S_PCON];
+        let tx_delay = if tcon & 0x40 != 0 { // TR1 running
+            let mode = (tmod >> 4) & 3;
+            let period: u32 = match mode {
+                2 => 256u32.wrapping_sub(self.sfr[S_TH1] as u32),
+                1 => 65536u32.wrapping_sub(((self.sfr[S_TH1] as u32) << 8) | self.sfr[S_TL1] as u32),
+                0 => 8192u32.wrapping_sub(((self.sfr[S_TH1] as u32 & 0x1F) << 8) | self.sfr[S_TL1] as u32),
+                _ => 0,
+            };
+            if period == 0 { 0 } else {
+                let smod = if pcon & 0x80 != 0 { 16 } else { 32 };
+                (10u32 * smod * period).min(200_000)
+            }
+        } else { 0 };
+        if tx_delay == 0 {
+            self.out.put_char(v as char);
+            self.sfr[S_SCON] |= 0x02; // TI
+        } else {
+            self.tx_char = v;
+            self.tx_countdown = tx_delay;
+        }
     }
 
     fn bit_location(bit: u8) -> (u8, u8) {
@@ -200,6 +246,11 @@ impl Cpu8051 {
     }
 
     // ----- timers -----
+    /// Effective external-RAM address: XDATA bank in the high 8 bits, so
+    /// MOVX @DPTR/@Ri can reach up to 256 KiB when a bank is selected.
+    #[inline] fn xdata_addr(&self, off: u32) -> usize {
+        (((self.xdata_bank as u32) << 16) | off) as usize & (XDATA_SIZE - 1)
+    }
     fn tick_timers(&mut self) {
         let tcon = self.sfr[S_TCON];
         let tmod = self.sfr[S_TMOD];
@@ -253,6 +304,15 @@ impl Cpu8051 {
             } else {
                 self.sfr[S_TH1] = (nv >> 8) as u8;
                 self.sfr[S_TL1] = nv as u8;
+            }
+        }
+        // serial transmit baud-rate countdown: when it elapses, emit the char
+        // and set TI (transmit-complete) — the serial ISR must clear TI.
+        if self.tx_countdown > 0 {
+            self.tx_countdown -= 1;
+            if self.tx_countdown == 0 {
+                self.out.put_char(self.tx_char as char);
+                self.sfr[S_SCON] |= 0x02;
             }
         }
     }
@@ -342,10 +402,10 @@ impl Cpu8051 {
                 let v = self.code.read(addr as usize);
                 self.set_acc(v);
             }
-            0xE2 | 0xE3 => { let a = self.ri(op & 1) as usize; let v = self.xdata.read(a); self.set_acc(v); }
-            0xE0 => { let a = self.dptr() as usize; let v = self.xdata.read(a); self.set_acc(v); }
-            0xF2 | 0xF3 => { let a = self.ri(op & 1) as usize; let v = self.acc(); self.xdata.write(a, v); }
-            0xF0 => { let a = self.dptr() as usize; let v = self.acc(); self.xdata.write(a, v); }
+            0xE2 | 0xE3 => { let a = self.xdata_addr(self.ri(op & 1) as u32); let v = self.xdata.read(a); self.set_acc(v); }
+            0xE0 => { let a = self.xdata_addr(self.dptr() as u32); let v = self.xdata.read(a); self.set_acc(v); }
+            0xF2 | 0xF3 => { let a = self.xdata_addr(self.ri(op & 1) as u32); let v = self.acc(); self.xdata.write(a, v); }
+            0xF0 => { let a = self.xdata_addr(self.dptr() as u32); let v = self.acc(); self.xdata.write(a, v); }
             // ----- stack -----
             0xC0 => { let d = self.fetch8(); let v = self.read_direct(d); self.push(v); }
             0xD0 => { let d = self.fetch8(); let v = self.pop(); self.write_direct(d, v); }
@@ -599,6 +659,7 @@ impl Cpu8051 {
             self.push(pcl);
             self.push(pch);
             if high { self.in_svc_high = true; } else { self.in_svc_low = true; }
+            self.sfr[S_PCON] &= !0x01; // hardware clears IDL on interrupt entry
             self.pc = vector;
             return;
         }
@@ -615,6 +676,15 @@ impl Cpu for Cpu8051 {
 
     fn step(&mut self) -> bool {
         if self.halted { return false; }
+        let pcon = self.sfr[S_PCON];
+        if pcon & 0x02 != 0 { // PD (power-down): oscillator stopped, frozen
+            return true; // only reset wakes it; not "halted"
+        }
+        if pcon & 0x01 != 0 { // IDL (idle): CPU sleeps, peripherals keep running
+            self.tick_timers();
+            if !self.halted { self.service_interrupts(); } // an interrupt wakes it (clears IDL)
+            return true; // no user instruction executed this step
+        }
         self.tick_timers();
         self.exec();
         if !self.halted {
@@ -673,13 +743,14 @@ impl Cpu for Cpu8051 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(5 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 2);
-        v.push(4);
+        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 2);
+        v.push(5);
         v.push(self.halted as u8);
-        v.push((self.pc >> 8) as u8);
-        v.push(self.pc as u8);
+        v.extend_from_slice(&self.pc.to_le_bytes());
         v.push(self.in_svc_low as u8);
         v.push(self.in_svc_high as u8);
+        v.push(self.xdata_bank);
+        v.extend_from_slice(&self.tx_countdown.to_le_bytes());
         v.extend_from_slice(&self.iram);
         v.extend_from_slice(&self.sfr);
         v.extend_from_slice(&self.xdata.data);
@@ -696,7 +767,16 @@ impl Cpu for Cpu8051 {
         self.pc = ((data[2] as u16) << 8) | data[3] as u16;
         self.in_svc_low = data.get(4).is_some_and(|b| *b != 0);
         self.in_svc_high = data.get(5).is_some_and(|b| *b != 0);
-        let mut off = if data[0] >= 2 { 6 } else { 4 };
+        let mut start = if data[0] >= 2 { 6 } else { 4 };
+        if data[0] >= 5 {
+            self.xdata_bank = data.get(6).copied().unwrap_or(0);
+            self.tx_countdown = u32::from_le_bytes([data[7], data[8], data[9], data[10]]);
+            start = 11;
+        } else {
+            self.xdata_bank = 0;
+            self.tx_countdown = 0;
+        }
+        let mut off = start;
         let mut take = |n: usize, dst: &mut [u8]| {
             let n = n.min(dst.len()).min(data.len().saturating_sub(off));
             dst[..n].copy_from_slice(&data[off..off + n]);

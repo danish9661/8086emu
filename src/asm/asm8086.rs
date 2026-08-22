@@ -30,7 +30,8 @@ impl Operand {
 fn reg16(name: &str) -> Option<u8> { R16.iter().position(|r| *r == name).map(|i| i as u8) }
 fn reg8(name: &str) -> Option<u8> { R8.iter().position(|r| *r == name).map(|i| i as u8) }
 fn seg_reg(name: &str) -> Option<u8> {
-    match name { "ES" => Some(0), "CS" => Some(1), "SS" => Some(2), "DS" => Some(3), _ => None }
+    match name { "ES" => Some(0), "CS" => Some(1), "SS" => Some(2), "DS" => Some(3),
+                 "FS" => Some(4), "GS" => Some(5), _ => None }
 }
 
 /// Parse one operand (with symbols available).
@@ -58,7 +59,7 @@ fn parse_operand(
         }
     }
 
-    // memory operand: optional size ptr, then [expr]
+    // memory operand: optional size ptr, then [expr] (optionally SEG:[expr])
     let (size, rest) = if let Some(r) = up.strip_prefix("BYTE PTR") {
         (Some(false), r.trim())
     } else if let Some(r) = up.strip_prefix("WORD PTR") {
@@ -66,11 +67,19 @@ fn parse_operand(
     } else {
         (None, up.as_str())
     };
-    if let Some(inner) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-        // segment override prefix like DS:[...]
-        let mut seg_ov = None;
+    // SEG:[...] prefix, e.g. FS:[0200h] or ES:[BX+SI]
+    let mut seg_ov = None;
+    let body = if let Some((seg, after)) = rest.split_once(':') {
+        if after.trim_start().starts_with('[') {
+                if let Some(s) = seg_reg(seg.trim()) {
+                seg_ov = Some(s);
+                after.trim_start()
+            } else { rest }
+        } else { rest }
+    } else { rest };
+    if let Some(inner) = body.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
         let inner = if let Some((seg, rest)) = inner.split_once(":") {
-            seg_ov = seg_reg(seg.trim());
+            seg_ov = seg_ov.or(seg_reg(seg.trim()));
             rest.trim()
         } else {
             inner
@@ -167,7 +176,237 @@ fn emit_modrm(out: &mut Vec<u8>, disp: i32, base_byte: u8) {
 }
 
 fn seg_prefix(seg: u8) -> Option<u8> {
-    match seg { 0 => Some(0x26), 1 => Some(0x2E), 2 => Some(0x36), _ => Some(0x3E) }
+    match seg { 0 => Some(0x26), 1 => Some(0x2E), 2 => Some(0x36), 3 => Some(0x3E),
+                4 => Some(0x64), 5 => Some(0x65), _ => None }
+}
+
+// ----- x87 FPU assembler -----
+const FPU_MNEMONICS: &[&str] = &[
+    "FINIT", "FNINIT", "FNOP", "FWAIT", "WAIT", "FCHS", "FABS", "FTST", "FINCSTP", "FDECSTP",
+    "FLD1", "FLDZ", "FLDPI", "FLDL2T", "FLDL2E", "FLDLG2", "FLDLN2",
+    "FLD", "FST", "FSTP", "FXCH", "FSTSW", "FLDCW", "FSTCW",
+    "FADD", "FMUL", "FSUB", "FSUBR", "FDIV", "FDIVR",
+    "FADDP", "FMULP", "FSUBRP", "FSUBP", "FDIVRP", "FDIVP",
+    "FCOM", "FCOMP", "FCOMPP", "FUCOM", "FUCOMP", "FUCOMPP",
+    "FILD", "FIST", "FISTP", "FBLD", "FBSTP", "FFREE", "FSAVE", "FRSTOR",
+];
+
+fn is_fpu_mnemonic(m: &str) -> bool { FPU_MNEMONICS.contains(&m) }
+
+fn fpu_st_index(s: &str) -> Option<u8> {
+    let s = s.trim().to_ascii_uppercase();
+    if s == "ST" { return Some(0); }
+    if let Some(inner) = s.strip_prefix("ST(") {
+        let inner = inner.strip_suffix(')').unwrap_or(inner);
+        if let Ok(i) = inner.trim().parse::<u8>() { return Some(i); }
+    }
+    None
+}
+
+fn fpu_strip_size(s: &str) -> String {
+    let mut u = s.to_ascii_uppercase();
+    for kw in ["QWORD PTR ", "TBYTE PTR ", "DWORD PTR ", "REAL8 PTR ", "REAL10 PTR ", "REAL4 PTR "] {
+        u = u.replace(kw, "");
+    }
+    u
+}
+
+// 0 = single(32), 1 = double(64), 2 = tbyte(80)
+fn fpu_real_bits(s: &str) -> u8 {
+    let u = s.to_ascii_uppercase();
+    if u.contains("QWORD PTR") || u.contains("REAL8") { 1 }
+    else if u.contains("TBYTE PTR") || u.contains("REAL10") { 2 }
+    else { 0 }
+}
+// 0 = word(16), 1 = dword(32), 2 = qword(64)
+fn fpu_int_bits(s: &str) -> u8 {
+    let u = s.to_ascii_uppercase();
+    if u.contains("DWORD PTR") || u.contains("REAL4") { 1 }
+    else if u.contains("QWORD PTR") || u.contains("REAL8") { 2 }
+    else { 0 }
+}
+
+fn fpu_memcode(
+    opcode: u8, reg: u8, raw: &str, syms: &HashMap<String, u32>, cur: u32, origin: u32,
+) -> Result<Vec<u8>, String> {
+    let cleaned = fpu_strip_size(raw);
+    let m = parse_operand(&cleaned, syms, cur, origin)?;
+    let mut pre = Vec::new();
+    if let Operand::Mem { seg_ov: Some(s), .. } = &m {
+        if let Some(p) = seg_prefix(*s) { pre.push(p); }
+    }
+    pre.push(opcode);
+    pre.extend(encode_mem(&m, reg)?);
+    Ok(pre)
+}
+
+fn encode_fpu(
+    mnemonic: &str,
+    ops: &[String],
+    syms: &HashMap<String, u32>,
+    cur: u32,
+    origin: u32,
+) -> Result<Vec<u8>, String> {
+    let up = mnemonic.to_ascii_uppercase();
+    let mut o = Vec::new();
+    let op = |i: usize| ops.get(i).map(|s| s.as_str()).unwrap_or("");
+    // no-operand mnemonics
+    match up.as_str() {
+        "FINIT" | "FNINIT" => { o.push(0xDB); o.push(0xE3); return Ok(o); }
+        "FNOP" => { o.push(0xD9); o.push(0xD0); return Ok(o); }
+        "FWAIT" | "WAIT" => { o.push(0x9B); return Ok(o); }
+        "FCHS" => { o.push(0xD9); o.push(0xE0); return Ok(o); }
+        "FABS" => { o.push(0xD9); o.push(0xE1); return Ok(o); }
+        "FTST" => { o.push(0xD9); o.push(0xE4); return Ok(o); }
+        "FLD1" => { o.push(0xD9); o.push(0xE8); return Ok(o); }
+        "FLDZ" => { o.push(0xD9); o.push(0xEE); return Ok(o); }
+        "FLDPI" => { o.push(0xD9); o.push(0xEB); return Ok(o); }
+        "FLDL2T" => { o.push(0xD9); o.push(0xE9); return Ok(o); }
+        "FLDL2E" => { o.push(0xD9); o.push(0xEA); return Ok(o); }
+        "FLDLG2" => { o.push(0xD9); o.push(0xEC); return Ok(o); }
+        "FLDLN2" => { o.push(0xD9); o.push(0xED); return Ok(o); }
+        "FINCSTP" => { o.push(0xD9); o.push(0xF7); return Ok(o); }
+        "FDECSTP" => { o.push(0xD9); o.push(0xF6); return Ok(o); }
+        _ => {}
+    }
+    let n = ops.len();
+    match up.as_str() {
+        "FSTSW" => {
+            if n == 0 { return Err("FSTSW needs an operand".into()); }
+            if op(0).trim().eq_ignore_ascii_case("AX")
+                || fpu_st_index(op(0)).is_some() {
+                o.push(0xDF); o.push(0xE0);
+            } else {
+                o.extend(fpu_memcode(0xDD, 7, op(0), syms, cur, origin)?);
+            }
+            return Ok(o);
+        }
+        "FLDCW" | "FSTCW" => {
+            if n == 0 { return Err(format!("{up} needs a memory operand").into()); }
+            let opc = if up == "FLDCW" { 0xD9 } else { 0xD9 };
+            o.extend(fpu_memcode(opc, if up == "FLDCW" { 5 } else { 7 }, op(0), syms, cur, origin)?);
+            return Ok(o);
+        }
+        "FLD" => {
+            if n == 0 { return Err("FLD needs an operand".into()); }
+            if let Some(i) = fpu_st_index(op(0)) {
+                o.push(0xD9); o.push(0xC0 | i);
+            } else {
+                let b = fpu_real_bits(op(0));
+                let (opc, reg) = match b { 2 => (0xDB, 5), 1 => (0xDD, 0), _ => (0xD9, 0) };
+                o.extend(fpu_memcode(opc, reg, op(0), syms, cur, origin)?);
+            }
+            return Ok(o);
+        }
+        "FST" => {
+            if n == 0 { return Err("FST needs an operand".into()); }
+            if let Some(i) = fpu_st_index(op(0)) {
+                o.push(0xDD); o.push(0xD0 | i);
+            } else {
+                let b = fpu_real_bits(op(0));
+                let (opc, reg) = if b == 1 { (0xDD, 2) } else { (0xD9, 2) };
+                o.extend(fpu_memcode(opc, reg, op(0), syms, cur, origin)?);
+            }
+            return Ok(o);
+        }
+        "FSTP" => {
+            if n == 0 { return Err("FSTP needs an operand".into()); }
+            if let Some(i) = fpu_st_index(op(0)) {
+                o.push(0xDD); o.push(0xD8 | i);
+            } else {
+                let b = fpu_real_bits(op(0));
+                let (opc, reg) = match b { 2 => (0xDB, 7), 1 => (0xDD, 3), _ => (0xD9, 3) };
+                o.extend(fpu_memcode(opc, reg, op(0), syms, cur, origin)?);
+            }
+            return Ok(o);
+        }
+        "FXCH" => {
+            let i = if n == 0 { 1 } else { fpu_st_index(op(0)).ok_or("FXCH needs ST(i)")? };
+            o.push(0xD9); o.push(0xC8 | i);
+            return Ok(o);
+        }
+        "FFREE" => {
+            if n == 0 { return Err("FFREE needs ST(i)".into()); }
+            let i = fpu_st_index(op(0)).ok_or("FFREE needs ST(i)")?;
+            o.push(0xDD); o.push(0xC0 | i);
+            return Ok(o);
+        }
+        "FCOM" | "FCOMP" | "FUCOM" | "FUCOMP" | "FCOMPP" | "FUCOMPP" => {
+            let comp = up.contains("COMP");
+            if n == 0 {
+                // implicit ST(1)
+                o.push(0xD8);
+                o.push(if comp { 0xD9 } else { 0xD1 });
+                // FCOMPP = D8 D9? actually FCOMPP = DF D9
+                if up == "FCOMPP" { o.clear(); o.push(0xDF); o.push(0xD9); }
+                if up == "FUCOMPP" { o.clear(); o.push(0xDF); o.push(0xE9); }
+                return Ok(o);
+            }
+            let reg = if comp { 3 } else { 2 };
+            if let Some(i) = fpu_st_index(op(0)) {
+                o.push(0xD8); o.push(modrm_byte(3, reg, i));
+            } else {
+                let b = fpu_real_bits(op(0));
+                let opc = if b == 1 { 0xDC } else { 0xD8 };
+                o.extend(fpu_memcode(opc, reg, op(0), syms, cur, origin)?);
+            }
+            return Ok(o);
+        }
+        "FILD" | "FIST" | "FISTP" | "FBLD" | "FBSTP" => {
+            if n == 0 { return Err(format!("{up} needs a memory operand").into()); }
+            let bits = fpu_int_bits(op(0));
+            // FBLD/FBSTP are 80-bit BCD: DB 28 / DF 38
+            if up == "FBLD" { o.extend(fpu_memcode(0xDF, 4, op(0), syms, cur, origin)?); return Ok(o); }
+            if up == "FBSTP" { o.extend(fpu_memcode(0xDF, 6, op(0), syms, cur, origin)?); return Ok(o); }
+            let (opc, reg) = match up.as_str() {
+                "FILD" => (if bits == 2 { 0xDF } else if bits == 1 { 0xDB } else { 0xDF },
+                           if bits == 2 { 5 } else { 0 }),
+                "FIST" => (if bits == 1 { 0xDB } else { 0xDF }, 2),
+                _ => (if bits == 2 { 0xDF } else if bits == 1 { 0xDB } else { 0xDF },
+                      if bits == 2 { 7 } else { 3 }),
+            };
+            o.extend(fpu_memcode(opc, reg, op(0), syms, cur, origin)?);
+            return Ok(o);
+        }
+        "FADD" | "FMUL" | "FSUB" | "FSUBR" | "FDIV" | "FDIVR" => {
+            let reg: u8 = match up.as_str() { "FADD" => 0, "FMUL" => 1, "FSUB" => 4,
+                "FSUBR" => 5, "FDIV" => 6, "FDIVR" => 7, _ => 0 };
+            if n == 0 {
+                // implicit: FADD => FADD ST(0), ST(1)
+                o.push(0xD8); o.push(modrm_byte(3, reg, 1));
+                return Ok(o);
+            }
+            if n == 2 {
+                // FADD dst, src  (ST(0),ST(i) or ST(i),ST(0))
+                let (d, s) = (op(0), op(1));
+                let di = fpu_st_index(d);
+                let si = fpu_st_index(s);
+                match (di, si) {
+                    (Some(0), Some(i)) => { o.push(0xD8); o.push(modrm_byte(3, reg, i)); }
+                    (Some(i), Some(0)) => { o.push(0xDC); o.push(modrm_byte(3, reg, i)); }
+                    _ => return Err(format!("{up}: unsupported operand combination").into()),
+                }
+                return Ok(o);
+            }
+            // single operand: ST(i) or memory
+            if let Some(i) = fpu_st_index(op(0)) {
+                o.push(0xD8); o.push(modrm_byte(3, reg, i));
+            } else {
+                let b = fpu_real_bits(op(0));
+                let opc = if b == 1 { 0xDC } else { 0xD8 };
+                o.extend(fpu_memcode(opc, reg, op(0), syms, cur, origin)?);
+            }
+            return Ok(o);
+        }
+        "FADDP" | "FMULP" | "FSUBRP" | "FSUBP" | "FDIVRP" | "FDIVP" => {
+            let reg: u8 = match up.as_str() { "FADDP" => 0, "FMULP" => 1, "FSUBRP" => 4,
+                "FSUBP" => 5, "FDIVRP" => 6, "FDIVP" => 7, _ => 0 };
+            let i = if n == 0 { 1 } else { fpu_st_index(op(0)).ok_or("needs ST(i)")? };
+            o.push(0xDE); o.push(modrm_byte(3, reg, i));
+            return Ok(o);
+        }
+        _ => return Err(format!("unsupported FPU instruction: {mnemonic}").into()),
+    }
 }
 
 /// Encode one instruction. `cur` is the address of this instruction,
@@ -188,6 +427,10 @@ fn encode_instr(
         o.extend(inner);
         return Ok(o);
     }
+    let up_mn = mnemonic.to_ascii_uppercase();
+    if is_fpu_mnemonic(&up_mn) {
+        return encode_fpu(mnemonic, ops, syms, cur, origin);
+    }
     let parsed: Vec<Operand> = ops
         .iter()
         .map(|p| parse_operand(p, syms, cur, origin))
@@ -203,9 +446,10 @@ fn encode_instr(
     };
 
     macro_rules! memcode {
-        ($op:expr, $reg:expr) => {{
-            let op = &$op;
+        ($op:expr, $m:expr, $reg:expr) => {{
+            let op = &$m;
             let mut pre = seg_ov_bytes(op);
+            pre.push($op);
             let body = encode_mem(op, $reg)?;
             pre.extend(body);
             pre
@@ -235,30 +479,29 @@ fn encode_instr(
                     o.push(0x8E); o.push(modrm_byte(3, *s, *r));
                 }
                 (Some(Operand::Seg(s)), Some(m @ Operand::Mem { .. })) => {
-                    o.push(0x8E); o.extend(memcode!(m, *s));
+                    o.extend(memcode!(0x8E, m, *s));
                 }
                 (Some(Operand::Reg16(r)), Some(Operand::Seg(s))) => {
                     o.push(0x8C); o.push(modrm_byte(3, *s, *r));
                 }
                 (Some(m @ Operand::Mem { .. }), Some(Operand::Seg(s))) => {
-                    o.push(0x8C); o.extend(memcode!(m, *s));
+                    o.extend(memcode!(0x8C, m, *s));
                 }
                 (Some(m @ Operand::Mem { .. }), Some(Operand::Reg16(r))) => {
-                    o.push(0x89); o.extend(memcode!(m, *r));
+                    o.extend(memcode!(0x89, m, *r));
                 }
                 (Some(m @ Operand::Mem { .. }), Some(Operand::Reg8(r))) => {
-                    o.push(0x88); o.extend(memcode!(m, *r));
+                    o.extend(memcode!(0x88, m, *r));
                 }
                 (Some(Operand::Reg16(r)), Some(m @ Operand::Mem { .. })) => {
-                    o.push(0x8B); o.extend(memcode!(m, *r));
+                    o.extend(memcode!(0x8B, m, *r));
                 }
                 (Some(Operand::Reg8(r)), Some(m @ Operand::Mem { .. })) => {
-                    o.push(0x8A); o.extend(memcode!(m, *r));
+                    o.extend(memcode!(0x8A, m, *r));
                 }
                 (Some(m @ Operand::Mem { .. }), Some(Operand::Imm(v))) => {
                     let word = m.word();
-                    o.push(if word { 0xC7 } else { 0xC6 });
-                    o.extend(memcode!(m, 0));
+                    o.extend(memcode!(if word { 0xC7 } else { 0xC6 }, m, 0));
                     if word { o.extend_from_slice(&(*v as u16).to_le_bytes()); } else { o.push(*v as u8); }
                 }
                 (Some(Operand::Imm(_)), Some(Operand::Imm(_))) | (None, _) | (Some(_), None) => {
@@ -284,13 +527,13 @@ fn encode_instr(
                     o.push(0x68); o.extend_from_slice(&(*v as u16).to_le_bytes());
                 }
             }
-            Some(m @ Operand::Mem { .. }) => { o.push(0xFF); o.extend(memcode!(m, 6)); }
+            Some(m @ Operand::Mem { .. }) => { o.extend(memcode!(0xFF, m, 6)); }
             _ => return Err("PUSH: bad operand".into()),
         },
         "POP" => match a {
             Some(Operand::Reg16(r)) => o.push(0x58 + *r),
             Some(Operand::Seg(s)) => o.push(match s { 0 => 0x07, 1 => 0x0F, 2 => 0x17, _ => 0x1F }),
-            Some(m @ Operand::Mem { .. }) => { o.push(0x8F); o.extend(memcode!(m, 0)); }
+            Some(m @ Operand::Mem { .. }) => { o.extend(memcode!(0x8F, m, 0)); }
             _ => return Err("POP: bad operand".into()),
         },
         // ---------------- arithmetic group ----------------
@@ -314,16 +557,16 @@ fn encode_instr(
             }
             match (d, s) {
                 (Some(m @ Operand::Mem { .. }), Some(Operand::Reg16(r))) => {
-                    o.push(base + 1); o.extend(memcode!(m, *r));
+                    o.extend(memcode!(base + 1, m, *r));
                 }
                 (Some(m @ Operand::Mem { .. }), Some(Operand::Reg8(r))) => {
-                    o.push(base); o.extend(memcode!(m, *r));
+                    o.extend(memcode!(base, m, *r));
                 }
                 (Some(Operand::Reg16(r)), Some(m @ Operand::Mem { .. })) => {
-                    o.push(base + 3); o.extend(memcode!(m, *r));
+                    o.extend(memcode!(base + 3, m, *r));
                 }
                 (Some(Operand::Reg8(r)), Some(m @ Operand::Mem { .. })) => {
-                    o.push(base + 2); o.extend(memcode!(m, *r));
+                    o.extend(memcode!(base + 2, m, *r));
                 }
                 (Some(Operand::Reg16(r)), Some(Operand::Reg16(sr))) => {
                     o.push(base + 1); o.push(modrm_byte(3, *sr, *r));
@@ -336,8 +579,7 @@ fn encode_instr(
                     let op_byte = if word { 0x81 } else { 0x80 };
                     let fits8 = (*v as i8 as u32) == *v || !word && *v <= 0xFF;
                     let b = if word && fits8 { 0x83 } else { op_byte };
-                    o.push(b);
-                    o.extend(memcode!(m, imm_ext));
+                    o.extend(memcode!(b, m, imm_ext));
                     if b == 0x83 { o.push(*v as u8); }
                     else if word { o.extend_from_slice(&(*v as u16).to_le_bytes()); }
                     else { o.push(*v as u8); }
@@ -366,13 +608,12 @@ fn encode_instr(
             } else if let (Some(Operand::Reg16(r)), Some(Operand::Reg16(sr))) = (d, s) {
                 o.push(0x85); o.push(modrm_byte(3, *sr, *r));
             } else if let (Some(m @ Operand::Mem { .. }), Some(Operand::Reg8(r))) = (d, s) {
-                o.push(0x84); o.extend(memcode!(m, *r));
+                o.extend(memcode!(0x84, m, *r));
             } else if let (Some(m @ Operand::Mem { .. }), Some(Operand::Reg16(r))) = (d, s) {
-                o.push(0x85); o.extend(memcode!(m, *r));
+                o.extend(memcode!(0x85, m, *r));
             } else if let (Some(m @ Operand::Mem { .. }), Some(Operand::Imm(v))) = (d, s) {
                 let word = m.word();
-                o.push(if word { 0xF7 } else { 0xF6 });
-                o.extend(memcode!(m, 0));
+                o.extend(memcode!(if word { 0xF7 } else { 0xF6 }, m, 0));
                 if word { o.extend_from_slice(&(*v as u16).to_le_bytes()); } else { o.push(*v as u8); }
             } else if let (Some(Operand::Reg16(r)), Some(Operand::Imm(v))) = (d, s) {
                 o.push(0xF7); o.push(modrm_byte(3, 0, *r)); o.extend_from_slice(&(*v as u16).to_le_bytes());
@@ -391,16 +632,16 @@ fn encode_instr(
                 }
                 (Some(Operand::Reg16(r)), Some(Operand::Reg16(sr))) => { o.push(0x87); o.push(modrm_byte(3, *r, *sr)); }
                 (Some(Operand::Reg8(r)), Some(Operand::Reg8(sr))) => { o.push(0x86); o.push(modrm_byte(3, *r, *sr)); }
-                (Some(m @ Operand::Mem { .. }), Some(Operand::Reg16(r))) => { o.push(0x87); o.extend(memcode!(m, *r)); }
-                (Some(m @ Operand::Mem { .. }), Some(Operand::Reg8(r))) => { o.push(0x86); o.extend(memcode!(m, *r)); }
-                (Some(Operand::Reg16(r)), Some(m @ Operand::Mem { .. })) => { o.push(0x87); o.extend(memcode!(m, *r)); }
-                (Some(Operand::Reg8(r)), Some(m @ Operand::Mem { .. })) => { o.push(0x86); o.extend(memcode!(m, *r)); }
+                (Some(m @ Operand::Mem { .. }), Some(Operand::Reg16(r))) => { o.extend(memcode!(0x87, m, *r)); }
+                (Some(m @ Operand::Mem { .. }), Some(Operand::Reg8(r))) => { o.extend(memcode!(0x86, m, *r)); }
+                (Some(Operand::Reg16(r)), Some(m @ Operand::Mem { .. })) => { o.extend(memcode!(0x87, m, *r)); }
+                (Some(Operand::Reg8(r)), Some(m @ Operand::Mem { .. })) => { o.extend(memcode!(0x86, m, *r)); }
                 _ => return Err("XCHG: bad operands".into()),
             }
         }
         "LEA" => {
             if let (Some(Operand::Reg16(r)), Some(m @ Operand::Mem { .. })) = (a, b) {
-                o.push(0x8D); o.extend(memcode!(m, *r));
+                o.extend(memcode!(0x8D, m, *r));
             } else {
                 return Err("LEA: needs reg16, mem".into());
             }
@@ -429,8 +670,8 @@ fn encode_instr(
             Some(Operand::Reg16(r)) => o.push(0x40 + *r),
             Some(Operand::Reg8(r)) => { o.push(0xFE); o.push(modrm_byte(3, 0, *r)); }
             Some(m @ Operand::Mem { .. }) => {
-                if m.word() { o.push(0xFF); o.extend(memcode!(m, 0)); }
-                else { o.push(0xFE); o.extend(memcode!(m, 0)); }
+                if m.word() { o.extend(memcode!(0xFF, m, 0)); }
+                else { o.extend(memcode!(0xFE, m, 0)); }
             }
             _ => return Err("INC: bad operand".into()),
         },
@@ -438,19 +679,19 @@ fn encode_instr(
             Some(Operand::Reg16(r)) => o.push(0x48 + *r),
             Some(Operand::Reg8(r)) => { o.push(0xFE); o.push(modrm_byte(3, 1, *r)); }
             Some(m @ Operand::Mem { .. }) => {
-                if m.word() { o.push(0xFF); o.extend(memcode!(m, 1)); }
-                else { o.push(0xFE); o.extend(memcode!(m, 1)); }
+                if m.word() { o.extend(memcode!(0xFF, m, 1)); }
+                else { o.extend(memcode!(0xFE, m, 1)); }
             }
             _ => return Err("DEC: bad operand".into()),
         },
         "NEG" => match a {
-            Some(m @ Operand::Mem { .. }) => { o.push(if m.word() { 0xF7 } else { 0xF6 }); o.extend(memcode!(m, 3)); }
+            Some(m @ Operand::Mem { .. }) => { o.extend(memcode!(if m.word() { 0xF7 } else { 0xF6 }, m, 3)); }
             Some(Operand::Reg16(r)) => { o.push(0xF7); o.push(modrm_byte(3, 3, *r)); }
             Some(Operand::Reg8(r)) => { o.push(0xF6); o.push(modrm_byte(3, 3, *r)); }
             _ => return Err("NEG: bad operand".into()),
         },
         "NOT" => match a {
-            Some(m @ Operand::Mem { .. }) => { o.push(if m.word() { 0xF7 } else { 0xF6 }); o.extend(memcode!(m, 2)); }
+            Some(m @ Operand::Mem { .. }) => { o.extend(memcode!(if m.word() { 0xF7 } else { 0xF6 }, m, 2)); }
             Some(Operand::Reg16(r)) => { o.push(0xF7); o.push(modrm_byte(3, 2, *r)); }
             Some(Operand::Reg8(r)) => { o.push(0xF6); o.push(modrm_byte(3, 2, *r)); }
             _ => return Err("NOT: bad operand".into()),
@@ -461,8 +702,7 @@ fn encode_instr(
                 Some(Operand::Reg16(r)) => { o.push(0xF7); o.push(modrm_byte(3, ext, *r)); }
                 Some(Operand::Reg8(r)) => { o.push(0xF6); o.push(modrm_byte(3, ext, *r)); }
                 Some(m @ Operand::Mem { .. }) => {
-                    o.push(if m.word() { 0xF7 } else { 0xF6 });
-                    o.extend(memcode!(m, ext));
+                    o.extend(memcode!(if m.word() { 0xF7 } else { 0xF6 }, m, ext));
                 }
                 _ => return Err(format!("{mnemonic}: bad operand")),
             }
@@ -477,33 +717,32 @@ fn encode_instr(
                 (Some(Operand::Reg16(1)), _) => if word { 0xD1 } else { 0xD0 },
                 (Some(Operand::Reg16(4)), _) => if word { 0xD3 } else { 0xD2 }, // CL
                 (Some(Operand::Imm(n)), _) => {
-                    o.push(if word { 0xC1 } else { 0xC0 });
                     if let Some(Operand::Reg16(r)) = target {
+                        o.push(if word { 0xC1 } else { 0xC0 });
                         o.push(modrm_byte(3, ext, *r));
                     } else if let Some(m @ Operand::Mem { .. }) = target {
-                        o.extend(memcode!(m, ext));
+                        o.extend(memcode!(if word { 0xC1 } else { 0xC0 }, m, ext));
                     }
                     o.push(*n as u8);
                     return Ok(o);
                 }
                 _ => return Err("shift: bad count".into()),
             };
-            o.push(op_byte);
             match target {
                 Some(Operand::Reg16(r)) => o.push(modrm_byte(3, ext, *r)),
                 Some(Operand::Reg8(r)) => o.push(modrm_byte(3, ext, *r)),
-                Some(m @ Operand::Mem { .. }) => o.extend(memcode!(m, ext)),
+                Some(m @ Operand::Mem { .. }) => o.extend(memcode!(op_byte, m, ext)),
                 _ => return Err("shift: bad target".into()),
             }
         }
         // ---------------- jumps / calls ----------------
         "JMP" => match a {
             Some(Operand::FarPtr(seg, off)) => { o.push(0xEA); o.extend_from_slice(&off.to_le_bytes()); o.extend_from_slice(&seg.to_le_bytes()); }
-            Some(Operand::Mem { .. }) => {
+                Some(Operand::Mem { .. }) => {
                 let m = parsed[0].clone();
                 let far = m.word() && matches!(ops.first().map(|s| s.to_ascii_uppercase().contains("FAR")), Some(true));
                 let _ = far;
-                o.push(0xFF); o.extend(memcode!(m, 4));
+                o.extend(memcode!(0xFF, m, 4));
             }
             Some(Operand::Imm(target)) => {
                 let disp = (*target as i32) - (cur as i32 + 2);
@@ -518,7 +757,7 @@ fn encode_instr(
         },
         "CALL" => match a {
             Some(Operand::FarPtr(seg, off)) => { o.push(0x9A); o.extend_from_slice(&off.to_le_bytes()); o.extend_from_slice(&seg.to_le_bytes()); }
-            Some(m @ Operand::Mem { .. }) => { o.push(0xFF); o.extend(memcode!(m, 2)); }
+            Some(m @ Operand::Mem { .. }) => { o.extend(memcode!(0xFF, m, 2)); }
             Some(Operand::Reg16(r)) => { o.push(0xFF); o.push(modrm_byte(3, 2, *r)); }
             Some(Operand::Imm(target)) => {
                 let d = (*target as i32) - (cur as i32 + 3);
@@ -585,10 +824,20 @@ fn encode_instr(
         "BOUND" => {
             match (a, b) {
                 (Some(Operand::Reg16(r)), Some(m @ Operand::Mem { .. })) => {
-                    o.push(0x62);
-                    o.extend(memcode!(m, *r));
+                    o.extend(memcode!(0x62, m, *r));
                 }
                 _ => return Err("BOUND needs r16, m16".into()),
+            }
+        }
+        "ARPL" => {
+            match (a, b) {
+                (Some(m @ Operand::Mem { .. }), Some(Operand::Reg16(r))) => {
+                    o.extend(memcode!(0x63, m, *r));
+                }
+                (Some(Operand::Reg16(rd)), Some(Operand::Reg16(rs))) => {
+                    o.push(0x63); o.push(modrm_byte(3, *rs, *rd));
+                }
+                _ => return Err("ARPL needs r/m16, r16".into()),
             }
         }
         "REP" | "REPE" | "REPZ" | "REPNE" | "REPNZ" => {
@@ -675,6 +924,24 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                             }
                             Err(e) => { errs.push(AsmErr::new(*ln, e)); line_err = true; }
                         }
+                    }
+                    cur_info.push(LineInfo { line: *ln as u32, addr: start, bytes: cur_code[start as usize..addr as usize].to_vec() });
+                }
+                Stmt::Dq(items) => {
+                    let start = addr;
+                    for it in items {
+                        let raw: [u8; 8] = if it.contains('.') || it.contains("e") || it.contains("E") {
+                            match it.trim().parse::<f64>() {
+                                Ok(f) => f.to_le_bytes(),
+                                Err(e) => { errs.push(AsmErr::new(*ln, format!("bad float '{it}': {e}"))); line_err = true; continue; }
+                            }
+                        } else {
+                            match parse_expr(it, &labels, addr, origin) {
+                                Ok(v) => (v as u64).to_le_bytes(),
+                                Err(e) => { errs.push(AsmErr::new(*ln, e)); line_err = true; continue; }
+                            }
+                        };
+                        cur_code.extend_from_slice(&raw); addr += 8;
                     }
                     cur_info.push(LineInfo { line: *ln as u32, addr: start, bytes: cur_code[start as usize..addr as usize].to_vec() });
                 }

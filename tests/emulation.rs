@@ -1275,6 +1275,103 @@ fn serial_rx_8051() {
 }
 
 #[test]
+fn xdata_banking_8051() {
+    // XDATA bank (SFR 0xF8) extends MOVX @DPTR beyond 64 KiB: a write to
+    // bank 1 does not disturb bank 0 at the same DPTR offset.
+    let src = "ORG 0\n\
+        MOV DPTR, #1234h\n\
+        MOV A, #0AAh\n\
+        MOV 0F8h, #1\n\
+        MOVX @DPTR, A\n\
+        MOV 0F8h, #0\n\
+        MOVX A, @DPTR\n\
+        MOV R0, A\n\
+        MOV 0F8h, #1\n\
+        MOVX A, @DPTR\n\
+        MOV R1, A\n\
+        SJMP $\n\
+        END";
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "R0"), 0, "bank 0 is untouched by the bank-1 write");
+    assert_eq!(reg(&emu.regs(), "R1"), 0xAA, "bank 1 received the MOVX write");
+    assert_eq!(emu.sfr(0xF8), 1, "XPAGE SFR still selects bank 1");
+}
+
+#[test]
+fn pcon_powerdown_freezes_8051() {
+    // PD (PCON.1): oscillator stopped, so timers do NOT tick even with TRx set.
+    let src = "ORG 0\n\
+        MOV TMOD, #01h\n\
+        MOV TH0, #0FEh\n\
+        MOV TL0, #0FFh\n\
+        SETB TR0\n\
+        ORL 87h, #2\n\
+        SJMP $\n\
+        END";
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.run(200);
+    assert_eq!(emu.sfr(0x88) & 0x20, 0, "TF0 must not set while in power-down");
+}
+
+#[test]
+fn pcon_idle_ticks_timers_8051() {
+    // IDL (PCON.0): core gated but peripherals run, so Timer 0 still overflows.
+    let src = "ORG 0\n\
+        MOV TMOD, #01h\n\
+        MOV TH0, #0FFh\n\
+        MOV TL0, #0FFh\n\
+        SETB TR0\n\
+        ORL 87h, #1\n\
+        SJMP $\n\
+        END";
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.run(100);
+    assert_ne!(emu.sfr(0x88) & 0x20, 0, "TF0 sets during idle (peripherals keep running)");
+}
+
+#[test]
+fn pcon_idle_wakes_on_intr_8051() {
+    // An enabled interrupt wakes the idle CPU (IDL cleared on entry) and runs.
+    let src = "ORG 0\nSJMP main\nORG 0Bh\nINC R7\nRETI\nORG 30h\nmain:\n\
+        MOV R7, #0\nMOV TMOD, #01h\nMOV TH0, #0FFh\nMOV TL0, #0FFh\n\
+        SETB TR0\nMOV IE, #82h\nORL 87h, #1\nSJMP $\nEND";
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.run(200);
+    assert!(reg(&emu.regs(), "R7") > 0, "timer interrupt fires and wakes idle mode");
+}
+
+#[test]
+fn serial_baud_delay_8051() {
+    // With Timer 1 running as the baud generator, TI (and the emitted char) is
+    // deferred by the frame time rather than set instantly.
+    let src = "ORG 0\n\
+        MOV TMOD, #22h\n\
+        MOV TH1, #0FDh\n\
+        SETB TR1\n\
+        MOV SBUF, #'H'\n\
+        MOV R0, SCON\n\
+        SJMP $\n\
+        END";
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.run(5); // fewer steps than the full frame, so TX not yet complete
+    assert_eq!(reg(&emu.regs(), "R0") & 0x02, 0, "TI still pending mid-frame");
+    assert_eq!(emu.take_output(), "", "char not emitted before the frame finishes");
+    emu.run(2000); // let the frame finish
+    assert_eq!(emu.take_output(), "H", "char emitted after TX frame completes");
+}
+
+#[test]
 fn pusha_popa_8086() {
     // All GP registers pushed, scrambled, then restored by POPA (SP excluded).
     let src = r#"
@@ -1311,6 +1408,39 @@ fn pusha_popa_8086() {
 }
 
 #[test]
+fn fs_gs_arpl_8086() {
+    // FS/GS segment overrides populate the right physical address.
+    let src = r#"
+        ORG 100h
+        MOV AX, 1000h
+        MOV FS, AX
+        MOV AX, 2000h
+        MOV GS, AX
+        MOV AX, 0ABCDh
+        MOV FS:[0200h], AX
+        MOV BX, GS:[0200h]   ; GS:0200 = 20200, different page from FS:0200
+        MOV CX, FS:[0200h]
+        HLT
+    END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 1000);
+    assert_eq!(reg(&regs, "CX"), 0xABCD, "FS: override wrote the right physical byte");
+    assert_ne!(reg(&regs, "BX"), 0xABCD, "GS: uses a different segment");
+    assert_eq!(reg(&regs, "FS"), 0x1000);
+    assert_eq!(reg(&regs, "GS"), 0x2000);
+
+    // ARPL raises the dest RPL to the source RPL and sets ZF.
+    let src2 = r#"
+        ORG 100h
+        MOV AX, 0003h     ; source RPL = 3
+        MOV BX, 0001h     ; dest RPL = 1
+        ARPL BX, AX       ; dest RPL raised to 3
+        HLT
+    END
+    "#;
+    let (regs, _, _) = run_asm("8086", src2, 1000);
+    assert_eq!(reg(&regs, "BX"), 0x0003, "ARPL raised dest RPL to source RPL");
+}#[test]
 fn int0_edge_8051_fires_once() {
     // Edge-triggered (IT0=1 set before IE enables): one request -> one
     // service, IE0 latch cleared. If IT0 were still 0 (level) the held line
@@ -1380,4 +1510,127 @@ fn sid_sod_8085() {
     emu.run(100);
     assert_eq!(reg(&emu.regs(), "A"), 0x80, "RIM reads the SID pin into bit 7");
     assert_eq!(emu.sod(), 1, "SIM with SOD bit set drives the SOD output pin");
+}
+
+#[test]
+fn fpu_basic_8086() {
+    // x87: FLD1, FADD (ST0,ST1), FSTP to memory; FCOM equality via FSTSW AX.
+    let mut emu = make_emulator("8086").unwrap();
+    let src = r#"
+        ORG 100h
+        FINIT
+        FLD1                 ; ST0 = 1.0
+        FLD1                 ; ST0 = 1.0, ST1 = 1.0
+        FADD                 ; ST0 = ST0 + ST1 = 2.0
+        FSTP QWORD PTR [0200h] ; store 2.0 (double) to memory
+        FLD1                 ; ST0 = 1.0
+        FLDZ                 ; ST0 = 0.0, ST1 = 1.0
+        FCOM                 ; compare ST0 (0.0) with ST1 (1.0)
+        FSTSW AX             ; AX = status word (C0 set => ST0 < ST1)
+        MOV AX, 4C00h
+        INT 21h
+        END
+    "#;
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(200);
+    let bytes = emu.mem_read(0x200, 8);
+    let d = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]);
+    assert!((d - 2.0).abs() < 1e-9, "FADD+FLD1 produced 2.0 (got {d})");
+}
+
+#[test]
+fn fpu_math_8086() {
+    // FLD mem, FMUL, FSUBR, FDIV, FCOM + pop -> verify ordering of condition codes.
+    let mut emu = make_emulator("8086").unwrap();
+    let src = r#"
+        ORG 100h
+        FINIT
+        FLD QWORD PTR [0300h]  ; x = 6.0
+        FLD QWORD PTR [0308h]  ; y = 2.0  -> ST0=2, ST1=6
+        FDIVR                  ; ST0 = ST1 / ST0 = 6 / 2 = 3.0
+        FSTP QWORD PTR [0310h] ; store 3.0
+        ; compare 5.0 (ST0 after FLD) with 3.0
+        FLD QWORD PTR [0318h]  ; 5.0
+        FLD QWORD PTR [0310h]  ; 3.0  -> ST0=3, ST1=5
+        FCOM
+        FSTSW AX
+        MOV AX, 4C00h
+        INT 21h
+        ORG 0300h
+        DQ 6.0
+        DQ 2.0
+        DQ 5.0
+        END
+    "#;
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(200);
+    let bytes = emu.mem_read(0x310, 8);
+    let d = f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]);
+    assert!((d - 3.0).abs() < 1e-9, "FDIVR produced 3.0 (got {d})");
+}
+
+#[test]
+fn dos_file_write_read_8086() {
+    // INT 21h 3Ch/40h/3Eh write a file; 3Dh/3Fh read it back.
+    let mut emu = make_emulator("8086").unwrap();
+    emu.fs_put("OUT.TXT", b"").unwrap();
+    let src = "ORG 100h\nMOV AH, 3Ch\nMOV CX, 0\nMOV DX, 0300h\nINT 21h\nMOV BX, AX\nMOV AH, 40h\nMOV CX, 2\nMOV DX, 0308h\nINT 21h\nMOV AH, 3Eh\nINT 21h\nMOV AX, 4C00h\nINT 21h\nORG 300h\nfname: DB 'OUT.TXT', 0\nbuf: DB 'HI', 0\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(emu.fs_get("OUT.TXT").unwrap().unwrap(), b"HI", "file written via INT 21h 3Ch/40h");
+
+    // read a preloaded file (fresh state)
+    let mut emu = make_emulator("8086").unwrap();
+    emu.fs_put("IN.TXT", b"RD").unwrap();
+    let src2 = "ORG 100h\nMOV AH, 3Dh\nMOV AL, 0\nMOV DX, 0300h\nINT 21h\nMOV BX, AX\nMOV AH, 3Fh\nMOV CX, 2\nMOV DX, 0308h\nINT 21h\nMOV AX, 4C00h\nINT 21h\nORG 300h\nfname: DB 'IN.TXT', 0\ndst: DB 0, 0\nEND";
+    let code2 = emu.assemble(src2).unwrap();
+    emu.mem_write(0, &code2);
+    emu.set_pc(0x100);
+    emu.run(100);
+    let bytes = emu.mem_read(0x308, 2);
+    assert_eq!(bytes, vec![b'R', b'D'], "file read via INT 21h 3Dh/3Fh");
+}
+
+#[test]
+fn dos_clock_and_rtc_8086() {
+    let mut emu = make_emulator("8086").unwrap();
+    emu.set_clock(2025, 6, 15, 13, 30, 45).unwrap();
+
+    // INT 21h 2Ah get date
+    let code = emu.assemble("ORG 100h\nMOV AH, 2Ah\nINT 21h\nMOV AX, 4C00h\nINT 21h\nEND").unwrap();
+    emu.mem_write(0, &code); emu.set_pc(0x100); emu.run(100);
+    assert_eq!(reg(&emu.regs(), "CX"), 2025, "INT 21h 2Ah year");
+    let dx = reg(&emu.regs(), "DX");
+    assert_eq!((dx >> 8) as u8, 6, "month");
+    assert_eq!((dx & 0xFF) as u8, 15, "day");
+
+    // INT 21h 2Ch get time
+    emu.reset(); emu.set_clock(2025, 6, 15, 13, 30, 45).unwrap();
+    let code = emu.assemble("ORG 100h\nMOV AH, 2Ch\nINT 21h\nMOV AX, 4C00h\nINT 21h\nEND").unwrap();
+    emu.mem_write(0, &code); emu.set_pc(0x100); emu.run(100);
+    assert_eq!(reg(&emu.regs(), "CX"), (13u32 << 8) | 30, "INT 21h 2Ch hour:min");
+    assert_eq!(reg(&emu.regs(), "DX") >> 8, 45, "INT 21h 2Ch sec");
+
+    // INT 1Ah 00 read RTC time (BCD)
+    emu.reset(); emu.set_clock(2025, 6, 15, 13, 30, 45).unwrap();
+    let code = emu.assemble("ORG 100h\nMOV AH, 00h\nINT 1Ah\nMOV AX, 4C00h\nINT 21h\nEND").unwrap();
+    emu.mem_write(0, &code); emu.set_pc(0x100); emu.run(100);
+    assert_eq!((reg(&emu.regs(), "CX") >> 8) as u8, 0x13, "RTC hour BCD");
+    assert_eq!((reg(&emu.regs(), "CX") & 0xFF) as u8, 0x30, "RTC min BCD");
+    assert_eq!((reg(&emu.regs(), "DX") >> 8) as u8, 0x45, "RTC sec BCD");
+
+    // INT 1Ah 04 read RTC date (BCD)
+    emu.reset(); emu.set_clock(2025, 6, 15, 13, 30, 45).unwrap();
+    let code = emu.assemble("ORG 100h\nMOV AH, 04h\nINT 1Ah\nMOV AX, 4C00h\nINT 21h\nEND").unwrap();
+    emu.mem_write(0, &code); emu.set_pc(0x100); emu.run(100);
+    assert_eq!((reg(&emu.regs(), "CX") >> 8) as u8, 0x20, "RTC century BCD");
+    assert_eq!((reg(&emu.regs(), "CX") & 0xFF) as u8, 0x25, "RTC year BCD");
+    assert_eq!((reg(&emu.regs(), "DX") >> 8) as u8, 0x06, "RTC month BCD");
+    assert_eq!((reg(&emu.regs(), "DX") & 0xFF) as u8, 0x15, "RTC day BCD");
 }
