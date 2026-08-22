@@ -146,6 +146,14 @@ impl Emulator {
         }
     }
 
+    /// 8086 current video mode number (0 when not 8086).
+    pub fn video_mode(&self) -> u8 {
+        match self {
+            Emulator::I8086(c) => c.video_mode(),
+            _ => 0,
+        }
+    }
+
     pub fn mem_write(&mut self, addr: u32, data: &[u8]) {
         self.cpu().mem_write(addr, data);
     }
@@ -181,7 +189,7 @@ impl Emulator {
             Emulator::Mcs51(c) => c.request_interrupt(kind),
             Emulator::I8086(c) => c.request_interrupt(kind, data),
             Emulator::Rv32(_) => Err("request_interrupt: rv32 has no interrupt model".into()),
-            Emulator::M6502(_) => Err("request_interrupt: 6502 has no interrupt model".into()),
+            Emulator::M6502(c) => { if kind.eq_ignore_ascii_case("NMI") { c.request_nmi(); } else { c.request_irq(); } Ok(()) }
             Emulator::Z80(c) => { if kind.eq_ignore_ascii_case("NMI") { c.request_nmi(); } else { c.request_int(); } Ok(()) }
         }
     }

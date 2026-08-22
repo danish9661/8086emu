@@ -745,8 +745,17 @@ function refresh() {
   renderMemMap(emu, isa);
   renderPeripherals(emu, isa);
 
-  // --- ports ---
+   // --- ports ---
   renderPorts();
+
+  // --- 8085 SOD output pin ---
+  if (isa === '8085') {
+    try {
+      const sod = emu.sod();
+      const el = $('sodLed');
+      if (el) { el.textContent = 'SOD:' + sod; el.classList.toggle('on', sod !== 0); }
+    } catch (e) {}
+  }
 
   // --- disassembly (8086) + watch window ---
   renderDisasm(pc);
@@ -777,12 +786,22 @@ function renderScreen() {
     for (let col = 0; col < 80; col++) {
       const i = (row * 80 + col) * 2;
       const ch = buf[i] || 0x20;
+      const attr = buf[i + 1] || 0x07;
+      const fg = VGA16(attr & 0x0F), bg = VGA16((attr >> 4) & 0x0F);
       const c = (ch >= 32 && ch < 127) ? String.fromCharCode(ch) : '·';
-      line += (cur[0] === col && cur[1] === row) ? `<span class="cur">${c}</span>` : c;
+      const atCur = (cur[0] === col && cur[1] === row);
+      const style = `color:${fg};background:${bg}`;
+      line += atCur ? `<span class="cur" style="${style}">${c}</span>` : `<span style="${style}">${c}</span>`;
     }
     html += line + '\n';
   }
    box.innerHTML = html;
+}
+
+// VGA 16-colour text palette (matches the mode-13h base16).
+function VGA16(n) {
+  const p = ['#000','#0000aa','#00aa00','#00aaaa','#aa0000','#aa00aa','#aa5500','#aaaaaa','#555555','#5555ff','#55ff55','#55ffff','#ff5555','#ff55ff','#ffff55','#ffffff'];
+  return p[n & 15];
 }
 
 // Standard VGA 256-colour palette (mode 13h)
@@ -813,6 +832,7 @@ function renderGfx() {
   }
   ctx.putImageData(img, 0, 0);
 }
+function renderPorts() {
   const box = $('ports');
   if (isa === '8051') {
     box.innerHTML = ['P0', 'P1', 'P2', 'P3'].map((n, i) =>
@@ -1602,6 +1622,8 @@ $('isa').onchange = () => {
   $('intrBar51').style.display = isa === '8051' ? '' : 'none';
   $('intrBar86').style.display = isa === '8086' ? '' : 'none';
   $('intrBarZ80').style.display = isa === 'Z80' ? '' : 'none';
+  $('z80memPanel').style.display = isa === 'Z80' ? '' : 'none';
+  if (isa === 'Z80') z80Dump();
   renderSource();
   refresh();
 };
@@ -1618,6 +1640,53 @@ $('irqIntr86').onclick = () => { emu.interrupt('INTR', 0x08); refresh(); };
 $('irqNmiZ80').onclick = () => { emu.interrupt('NMI', 0); refresh(); };
 $('irqIntZ80').onclick = () => { emu.interrupt('INT', 0); refresh(); };
 $('z80im').onchange = () => { const m = parseInt($('z80im').value, 10) || 0; try { emu.set_interrupt_mode(m); } catch (e) {} refresh(); };
+
+// ---------- 8085 SID/SOD ----------
+let sidState = false;
+$('sidBtn').onclick = () => {
+  sidState = !sidState;
+  try { emu.set_sid(sidState); } catch (e) {}
+  $('sidBtn').classList.toggle('on', sidState);
+  refresh();
+};
+
+// ---------- 8051 serial RX injector ----------
+$('serSend').onclick = () => {
+  const t = $('serIn').value || '';
+  if (t.length === 0) return;
+  try { emu.serial_rx(t.charCodeAt(0) & 0xFF); } catch (e) {}
+  $('serIn').value = '';
+  refresh();
+};
+
+// ---------- Z80 memory hex editor ----------
+$('z80memPanel').style.display = 'none';
+function z80Dump() {
+  const base = (parseInt($('z80memBase').value, 16) || 0) & 0xFFFF;
+  const bytes = new Uint8Array(emu.mem(base, 256));
+  let out = '';
+  for (let row = 0; row < 16; row++) {
+    let line = fmt(base + row * 16, 4) + ': ';
+    for (let i = 0; i < 16; i++) line += fmt(bytes[row * 16 + i], 2) + ' ';
+    out += line.trimEnd() + '\n';
+  }
+  $('z80mem').value = out;
+}
+$('z80memDump').onclick = () => { z80Dump(); };
+$('z80memApply').onclick = () => {
+  const base = (parseInt($('z80memBase').value, 16) || 0) & 0xFFFF;
+  const lines = $('z80mem').value.split('\n');
+  let off = 0;
+  for (const ln of lines) {
+    const parts = ln.trim().split(/\s+/).filter(s => /^[0-9a-fA-F]{1,2}$/.test(s));
+    for (const h of parts) {
+      emu.mem_write((base + off) & 0xFFFF, [parseInt(h, 16)]);
+      off++;
+    }
+  }
+  toast('Wrote ' + off + ' bytes @ ' + fmt(base, 4));
+  refresh();
+};
 
 // ---------- keys ----------
 document.addEventListener('keydown', (e) => {

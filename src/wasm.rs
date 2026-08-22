@@ -124,6 +124,22 @@ impl Emulator {
         self.inner.gfx_framebuffer().map(|(b, w, h)| GfxInfo { base: b, w, h })
     }
 
+    /// Current 8086 video mode (0 when not 8086 / unknown). MR=13h -> pixel graphics.
+    pub fn video_mode(&self) -> u8 {
+        self.inner.video_mode()
+    }
+
+    /// 8086 text-mode framebuffer (80x25 char/attr pairs at 0xB8000); [] otherwise.
+    pub fn screen(&self) -> Vec<u8> {
+        self.inner.screen()
+    }
+
+    /// 8086 text cursor as [col, row]; [0,0] otherwise.
+    pub fn cursor(&self) -> Vec<u8> {
+        let (c, r) = self.inner.cursor();
+        vec![c, r]
+    }
+
     pub fn mem(&self, addr: u32, len: u32) -> Vec<u8> {
         self.inner.mem_read(addr, len as usize)
     }
@@ -282,16 +298,5 @@ impl Emulator {
     /// Set the emulated DOS/BIOS date-time clock (INT 21h 2Ah/2Ch, INT 1Ah).
     pub fn set_clock(&mut self, year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8) -> Result<(), JsValue> {
         to_js(self.inner.set_clock(year, month, day, hour, min, sec))
-    }
-
-    /// 8086 text-mode screen: 4000 bytes (80x25 cells of char, attr). Other ISAs
-    /// return an empty vector.
-    pub fn screen(&self) -> Vec<u8> {
-        self.inner.screen()
-    }
-    /// 8086 text-mode cursor as a 2-byte vector [col, row]. Other ISAs: [0, 0].
-    pub fn cursor(&self) -> Vec<u8> {
-        let (c, r) = self.inner.cursor();
-        vec![c, r]
     }
 }

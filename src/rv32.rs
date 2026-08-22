@@ -122,16 +122,23 @@ impl CpuRv32 {
             }
             0x33 => {
                 let sub = f7 == 0x20;
-                let t = match f3 {
-                    0 => if sub { "sub" } else { "add" },
-                    1 => "sll",
-                    2 => "slt",
-                    3 => "sltu",
-                    4 => "xor",
-                    5 => if sub { "sra" } else { "srl" },
-                    6 => "or",
-                    7 => "and",
-                    _ => "op?",
+                let t = if f7 == 0x01 {
+                    match f3 {
+                        0 => "mul", 1 => "mulh", 2 => "mulhsu", 3 => "mulhu",
+                        4 => "div", 5 => "divu", 6 => "rem", 7 => "remu", _ => "op?",
+                    }
+                } else {
+                    match f3 {
+                        0 => if sub { "sub" } else { "add" },
+                        1 => "sll",
+                        2 => "slt",
+                        3 => "sltu",
+                        4 => "xor",
+                        5 => if sub { "sra" } else { "srl" },
+                        6 => "or",
+                        7 => "and",
+                        _ => "op?",
+                    }
                 };
                 format!("{t}     {},{},{}", r(rd), r(rs1), r(rs2))
             }
@@ -280,19 +287,34 @@ impl Cpu for CpuRv32 {
             0x33 => {
                 let a = self.rd(rs1);
                 let b = self.rd(rs2);
-                let v = match f3 {
-                    0 => if f7 == 0x20 { a.wrapping_sub(b) } else { a.wrapping_add(b) },
-                    1 => a << (b & 0x1f),
-                    2 => if (a as i32) < (b as i32) { 1 } else { 0 },
-                    3 => if a < b { 1 } else { 0 },
-                    4 => a ^ b,
-                    5 => {
-                        if f7 == 0x20 { ((a as i32) >> (b & 0x1f)) as u32 }
-                        else { a >> (b & 0x1f) }
+                let v = if f7 == 0x01 {
+                    // M-extension: multiply / divide / remainder
+                    match f3 {
+                        0 => (a as u64 * b as u64) as u32,
+                        1 => (((a as i64 as i128) * (b as i64 as i128)) >> 32) as u32,
+                        2 => (((a as i64 as i128) * (b as u64 as i128)) >> 32) as u32,
+                        3 => (((a as u64 as u128) * (b as u64 as u128)) >> 32) as u32,
+                        4 => if b == 0 { 0xFFFF_FFFF } else { (a as i32).wrapping_div(b as i32) as u32 },
+                        5 => if b == 0 { 0xFFFF_FFFF } else { a.wrapping_div(b) },
+                        6 => if b == 0 { a } else { (a as i32).wrapping_rem(b as i32) as u32 },
+                        7 => if b == 0 { a } else { a.wrapping_rem(b) },
+                        _ => 0,
                     }
-                    6 => a | b,
-                    7 => a & b,
-                    _ => 0,
+                } else {
+                    match f3 {
+                        0 => if f7 == 0x20 { a.wrapping_sub(b) } else { a.wrapping_add(b) },
+                        1 => a << (b & 0x1f),
+                        2 => if (a as i32) < (b as i32) { 1 } else { 0 },
+                        3 => if a < b { 1 } else { 0 },
+                        4 => a ^ b,
+                        5 => {
+                            if f7 == 0x20 { ((a as i32) >> (b & 0x1f)) as u32 }
+                            else { a >> (b & 0x1f) }
+                        }
+                        6 => a | b,
+                        7 => a & b,
+                        _ => 0,
+                    }
                 };
                 self.wr(rd, v);
             }

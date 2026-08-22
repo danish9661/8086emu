@@ -2257,24 +2257,83 @@ fn rv32_branch_loop() {
 }
 
 #[test]
-fn m6502_hello() {
+fn rv32_mul() {
     let src = r#"
         ORG 0
-        LDX #0
-    loop:
-        LDA msg,X
-        BEQ done
-        STA $01
-        INX
-        JMP loop
-    done:
-        BRK
-    msg: DB 'H','i',10,0
-    END
+        ADDI x1, x0, 6
+        ADDI x2, x0, 7
+        MUL  x3, x1, x2
+        ADDI x1, x0, -5
+        ADDI x2, x0, 3
+        MUL  x4, x1, x2
+        ADDI a7, x0, 93
+        ECALL
+        END
     "#;
-    let (_, out, halted) = run_asm("6502", src, 1000);
-    assert!(halted, "6502 should halt on BRK");
-    assert_eq!(out, "Hi\n");
+    let (regs, _, halted) = run_asm("rv32", src, 100);
+    assert!(halted);
+    assert_eq!(reg(&regs, "x3"), 42, "6 * 7 = 42");
+    assert_eq!(reg(&regs, "x4") as i32, -15, "(-5) * 3 = -15");
+}
+
+#[test]
+fn rv32_div_rem() {
+    let src = r#"
+        ORG 0
+        ADDI x1, x0, 20
+        ADDI x2, x0, 6
+        DIV  x3, x1, x2
+        REM  x4, x1, x2
+        DIVU x5, x1, x2
+        REMU x6, x1, x2
+        ADDI a7, x0, 93
+        ECALL
+        END
+    "#;
+    let (regs, _, halted) = run_asm("rv32", src, 100);
+    assert!(halted);
+    assert_eq!(reg(&regs, "x3") as i32, 3, "20 / 6 = 3");
+    assert_eq!(reg(&regs, "x4") as i32, 2, "20 % 6 = 2");
+    assert_eq!(reg(&regs, "x5"), 3, "20 /u 6 = 3");
+    assert_eq!(reg(&regs, "x6"), 2, "20 %u 6 = 2");
+}
+
+#[test]
+fn rv32_mulh() {
+    let src = r#"
+        ORG 0
+        LUI  x1, 0x10000      ; x1 = 0x10000 << 12 = 0x10000000
+        LUI  x2, 0x10000      ; x2 = 0x10000000
+        MUL  x3, x1, x2       ; low 32 bits of 0x10000000^2 = 0
+        MULH x4, x1, x2       ; high 32 bits = 0x10000000
+        ADDI a7, x0, 93
+        ECALL
+        END
+    "#;
+    let (regs, _, halted) = run_asm("rv32", src, 100);
+    assert!(halted);
+    assert_eq!(reg(&regs, "x3"), 0, "0x10000000^2 low = 0");
+    assert_eq!(reg(&regs, "x4"), 0x1000000, "0x10000000^2 high = 0x1000000");
+}
+
+#[test]
+fn m6502_hello() {
+     let src = r#"
+         ORG 0
+         LDX #0
+     loop:
+         LDA msg,X
+         BEQ done
+         STA $01
+         INX
+         JMP loop
+     done:
+         JMP done
+     msg: DB 'H','i',10,0
+     END
+     "#;
+     let (_, out, halted) = run_asm("6502", src, 1000);
+     assert_eq!(out, "Hi\n");
 }
 
 #[test]
@@ -2288,18 +2347,18 @@ fn m6502_sum() {
         STX $21
         CLC
         ADC $21
-        CPX #10
-        BNE loop
-        STA $20
-        BRK
-    END
-    "#;
-    let mut emu = make_emulator("6502").unwrap();
-    let code = emu.assemble(src).expect("assembly should succeed");
-    emu.mem_write(0, &code);
-    emu.set_pc(0);
-    emu.run(1000);
-    assert_eq!(emu.mem_read(0x20, 1)[0], 55, "1+2+...+10 = 55");
+         CPX #10
+         BNE loop
+         STA $20
+         BRK
+     END
+     "#;
+     let mut emu = make_emulator("6502").unwrap();
+     let code = emu.assemble(src).expect("assembly should succeed");
+     emu.mem_write(0, &code);
+     emu.set_pc(0);
+     emu.run(1000);
+     assert_eq!(emu.mem_read(0x20, 1)[0], 55, "1+2+...+10 = 55");
 }
 
 #[test]
@@ -2405,4 +2464,74 @@ fn z80_int_masked_when_di() {
     emu.request_interrupt("INT", 0);
     emu.step();
     assert_eq!(emu.pc(), pc_before, "INT ignored while IFF1 clear (DI)");
+}
+
+#[test]
+fn m6502_decimal_adc() {
+    let src = "ORG 0\n CLC\n SED\n LDA #9\n ADC #1\n STA $20\n CLD\n BRK\n ORG 0xFFFE\n NOP\n END\n";
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(20);
+    assert_eq!(emu.mem_read(0x20, 1)[0], 0x10, "BCD 9 + 1 = 10");
+}
+
+#[test]
+fn m6502_decimal_adc_carry() {
+    let src = "ORG 0\n CLC\n SED\n LDA #0x99\n ADC #1\n STA $20\n CLD\n BRK\n ORG 0xFFFE\n NOP\n END\n";
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(20);
+    assert_eq!(emu.mem_read(0x20, 1)[0], 0x00, "BCD 99 + 1 = 00 with carry");
+}
+
+#[test]
+fn m6502_decimal_sbc() {
+    let src = "ORG 0\n SEC\n SED\n LDA #0x10\n SBC #1\n STA $20\n CLD\n BRK\n ORG 0xFFFE\n NOP\n END\n";
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(20);
+    assert_eq!(emu.mem_read(0x20, 1)[0], 0x09, "BCD 10 - 1 = 09");
+}
+
+#[test]
+fn m6502_irq_vectors() {
+    let src = "ORG 0\n CLI\n loop:\n JMP loop\n ORG 0x0200\n NOP\n ORG 0xFFFE\n DW $0200\n END\n";
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(5);
+    emu.request_interrupt("IRQ", 0);
+    emu.step();
+    assert_eq!(emu.pc(), 0x0200, "IRQ (I cleared) vectors through FFFEh");
+}
+
+#[test]
+fn m6502_nmi_vectors() {
+    let src = "ORG 0\n SEI\n loop:\n JMP loop\n ORG 0x0200\n NOP\n ORG 0xFFFA\n DW $0200\n END\n";
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(5);
+    emu.request_interrupt("NMI", 0);
+    emu.step();
+    assert_eq!(emu.pc(), 0x0200, "NMI vectors through FFFAh even with I set");
+}
+
+#[test]
+fn m6502_brk_vectors() {
+    let src = "ORG 0\n BRK\n ORG 0x0200\n NOP\n ORG 0xFFFE\n DW $0200\n END\n";
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.step();
+    assert_eq!(emu.pc(), 0x0200, "BRK vectors through FFFEh");
 }

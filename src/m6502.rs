@@ -1,10 +1,7 @@
-//! MOS 6502 8-bit core (binary arithmetic; decimal mode flag is tracked but
-//! ADC/SBC use binary arithmetic). 64 KiB flat address space; page 0 = zero
-//! page, page 1 = stack (SP offset by 0x100). Vectors live at $FFFA..$FFFF.
-//! `BRK` halts; `RTI` returns. The tiny I/O convention mirrors the others: a
-//! `WCHR`/`OUT` could be added, but std output uses a `0x0000`? — we expose
-//! `Output` and a `serial` port: writing port `0x01` prints A (kept for IDE
-//! parity with 8085). Also `WCHR` is exposed via the `out`/serial path.
+//! MOS 6502 8-bit core. 64 KiB flat address space; page 0 = zero page, page 1
+//! = stack (SP offset by 0x100). Vectors live at $FFFA..$FFFF. ADC/SBC honour
+//! decimal mode (D flag); BRK and hardware NMI/IRQ are vectored through
+//! $FFFA (NMI) / $FFFE (IRQ+BRK). Writing port `0x01` prints A.
 
 use crate::cpu::{Cpu, Mem, Output, FlagSet, Reg, Disasm, RunResult};
 
@@ -23,6 +20,8 @@ pub struct Cpu6502 {
     pub out: Output,
     pub halted_reason: Option<String>,
     pub ports: [u8; 256],
+    pub pending_nmi: bool,
+    pub pending_irq: bool,
 }
 
 impl Default for Cpu6502 {
@@ -31,6 +30,7 @@ impl Default for Cpu6502 {
             mem: Mem::new(1 << 16),
             a: 0, x: 0, y: 0, pc: 0, sp: 0xFD, p: 0x24,
             halt: false, out: Output::default(), halted_reason: None, ports: [0; 256],
+            pending_nmi: false, pending_irq: false,
         };
         c.reset();
         c
@@ -79,6 +79,24 @@ impl Cpu6502 {
     pub fn load_rom(&mut self, data: &[u8], addr: u32) {
         self.mem.load(addr as usize, data);
         self.mem.set_rom(addr as usize, data.len());
+    }
+
+    /// Raise an NMI (vectored through $FFFA, non-maskable, B flag clear).
+    pub fn request_nmi(&mut self) { self.pending_nmi = true; }
+    /// Raise a maskable IRQ (vectored through $FFFE, honours the I flag).
+    pub fn request_irq(&mut self) { self.pending_irq = true; }
+
+    fn do_interrupt(&mut self, vector: u16, brk: bool) {
+        let pc = self.pc;
+        self.push((pc >> 8) as u8);
+        self.push(pc as u8);
+        let mut s = self.p | (1 << Self::B) | (1 << 5);
+        if !brk { s &= !(1 << Self::B); }
+        self.push(s);
+        self.set(Self::I, true);
+        let lo = self.rd(vector as u32);
+        let hi = self.rd((vector.wrapping_add(1)) as u32);
+        self.pc = lo as u16 | ((hi as u16) << 8);
     }
 }
 
@@ -191,18 +209,44 @@ impl Cpu6502 {
                 let c = if self.get(Self::C) { 1u16 } else { 0 };
                 let sum = self.a as u16 + m as u16 + c;
                 let r = sum as u8;
-                self.set(Self::C, sum > 0xFF);
-                self.set(Self::V, ((self.a ^ r) & (m ^ r) & 0x80) != 0);
-                self.a = r; self.set_nz(r);
+                let v = ((self.a ^ r) & (m ^ r) & 0x80) != 0;
+                if self.get(Self::D) {
+                    let mut al = (self.a & 0x0F) as u16 + (m & 0x0F) as u16 + c;
+                    let mut ah = (self.a & 0xF0) as u16 + (m & 0xF0) as u16;
+                    let mut cout = false;
+                    if al >= 0x0A { al -= 0x0A; ah += 0x10; }
+                    if ah >= 0xA0 { ah -= 0xA0; cout = true; }
+                    let rr = ((ah as u8) & 0xF0) | ((al as u8) & 0x0F);
+                    self.set(Self::C, cout);
+                    self.set(Self::V, v);
+                    self.a = rr; self.set_nz(rr);
+                } else {
+                    self.set(Self::C, sum > 0xFF);
+                    self.set(Self::V, v);
+                    self.a = r; self.set_nz(r);
+                }
             }
             SBC => {
                 let m = self.rd(addr);
                 let c = if self.get(Self::C) { 1i16 } else { 0 };
                 let diff = self.a as i16 - m as i16 - (1 - c);
                 let r = (diff & 0xFF) as u8;
-                self.set(Self::C, diff >= 0);
-                self.set(Self::V, ((self.a ^ r) & (self.a ^ m) & 0x80) != 0);
-                self.a = r; self.set_nz(r);
+                let v = ((self.a ^ r) & (self.a ^ m) & 0x80) != 0;
+                if self.get(Self::D) {
+                    let c_in = if self.get(Self::C) { 1i16 } else { 0 };
+                    let mut al = (self.a & 0x0F) as i16 - (m & 0x0F) as i16 - (1 - c_in);
+                    let mut ah = (self.a & 0xF0) as i16 - (m & 0xF0) as i16;
+                    if al < 0 { al += 0x0A; ah -= 0x10; }
+                    let cout = if ah < 0 { ah += 0xA0; false } else { true };
+                    let rr = ((ah as u8) & 0xF0) | ((al as u8) & 0x0F);
+                    self.set(Self::C, cout);
+                    self.set(Self::V, v);
+                    self.a = rr; self.set_nz(rr);
+                } else {
+                    self.set(Self::C, diff >= 0);
+                    self.set(Self::V, v);
+                    self.a = r; self.set_nz(r);
+                }
             }
             CMP => self.cmp(self.a, self.rd(addr)),
             CPX => self.cmp(self.x, self.rd(addr)),
@@ -257,7 +301,7 @@ impl Cpu6502 {
             PHP => self.push(self.p | (1 << Self::B) | (1 << 5)),
             PLA => { self.a = self.pop(); self.set_nz(self.a); }
             PLP => self.plp(),
-            BRK => { self.halt = true; self.halted_reason = Some("BRK".into()); }
+            BRK => self.do_interrupt(0xFFFE, true),
             NOP => {}
         }
     }
@@ -348,6 +392,7 @@ impl Cpu for Cpu6502 {
     fn reset(&mut self) {
         self.a = 0; self.x = 0; self.y = 0; self.sp = 0xFD; self.p = 0x24;
         self.halt = false; self.halted_reason = None; self.out = Output::default();
+        self.pending_nmi = false; self.pending_irq = false;
         // fetch reset vector
         let lo = self.mem.read(0xFFFC);
         let hi = self.mem.read(0xFFFD);
@@ -368,6 +413,14 @@ impl Cpu for Cpu6502 {
             if (mode == Mode::ZP || mode == Mode::ABS) && addr == 0xF001 { self.out.put_char(self.a as char); }
         }
         self.execute(inst, mode, addr);
+        // Service hardware interrupts between instructions (NMI > IRQ).
+        if self.pending_nmi {
+            self.pending_nmi = false;
+            self.do_interrupt(0xFFFA, false);
+        } else if self.pending_irq && !self.get(Self::I) {
+            self.pending_irq = false;
+            self.do_interrupt(0xFFFE, false);
+        }
         true
     }
 
@@ -416,6 +469,8 @@ impl Cpu for Cpu6502 {
         v.extend_from_slice(&self.pc.to_le_bytes());
         v.push(self.a); v.push(self.x); v.push(self.y); v.push(self.sp); v.push(self.p);
         v.push(if self.halt { 1 } else { 0 });
+        v.push(if self.pending_nmi { 1 } else { 0 });
+        v.push(if self.pending_irq { 1 } else { 0 });
         v.extend_from_slice(&self.mem.data);
         v
     }
@@ -426,6 +481,8 @@ impl Cpu for Cpu6502 {
         self.a = data[o]; self.x = data[o+1]; self.y = data[o+2]; self.sp = data[o+3]; self.p = data[o+4];
         o += 5;
         self.halt = data[o] != 0; o += 1;
+        self.pending_nmi = data[o] != 0; o += 1;
+        self.pending_irq = data[o] != 0; o += 1;
         for b in &mut self.mem.data { *b = data[o]; o += 1; }
     }
     fn is_halted(&self) -> bool { self.halt }

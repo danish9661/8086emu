@@ -14,7 +14,7 @@ export class Emulator {
      */
     assemble_info(source: string): string[];
     /**
-     * 8086 text-mode cursor as a 2-byte vector [col, row]. Other ISAs: [0, 0].
+     * 8086 text cursor as [col, row]; [0,0] otherwise.
      */
     cursor(): Uint8Array;
     /**
@@ -109,8 +109,7 @@ export class Emulator {
      */
     run_to(target_pc: number, max_steps: number): number;
     /**
-     * 8086 text-mode screen: 4000 bytes (80x25 cells of char, attr). Other ISAs
-     * return an empty vector.
+     * 8086 text-mode framebuffer (80x25 char/attr pairs at 0xB8000); [] otherwise.
      */
     screen(): Uint8Array;
     /**
@@ -171,6 +170,10 @@ export class Emulator {
      * Execute one instruction.
      */
     step(): void;
+    /**
+     * Current 8086 video mode (0 when not 8086 / unknown). MR=13h -> pixel graphics.
+     */
+    video_mode(): number;
     /**
      * True while the 8086 is blocked on an INT 21h read with an empty buffer.
      */
@@ -249,6 +252,7 @@ export interface InitOutput {
     readonly emulator_sod: (a: number) => number;
     readonly emulator_sram_region: (a: number) => [number, number];
     readonly emulator_step: (a: number) => void;
+    readonly emulator_video_mode: (a: number) => number;
     readonly emulator_waiting_input: (a: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

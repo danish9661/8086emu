@@ -47,11 +47,17 @@
       <button id="irq65" title="RST 6.5">6.5</button>
       <button id="irq55" title="RST 5.5">5.5</button>
       <button id="irqIntr" title="INTR with vector 08h">INTR</button>
+      <button id="sidBtn" title="Toggle the SID input pin (read by RIM bit 7)">SID</button>
+      <span class="led" id="sodLed" title="SOD output pin (set by SIM bit 7)">SOD:0</span>
     </span>
     <span id="intrBar51" style="display:none">
       <span style="color:var(--muted);font-size:11px">IRQ:</span>
       <button id="irqInt0" title="INT0 (external interrupt 0, vector 03h)">INT0</button>
       <button id="irqInt1" title="INT1 (external interrupt 1, vector 13h)">INT1</button>
+      <label title="Inject a received serial byte (SBUF + RI) — fires the serial ISR when ES is set" style="font-size:11px;color:var(--muted)">RX
+        <input id="serIn" size="3" maxlength="1" placeholder="c" title="Character to receive">
+        <button id="serSend" title="Send the typed character into the 8051 serial RX">send</button>
+      </label>
     </span>
     <span id="intrBar86" style="display:none">
       <span style="color:var(--muted);font-size:11px">IRQ:</span>
@@ -144,6 +150,15 @@
       <div class="panel" id="devicePanel" style="display:none">
         <h2>Peripherals <span class="hint"><button id="devResetBtn">Reset</button></span></h2>
         <div id="devices" class="dgrid"></div>
+      </div>
+      <div class="panel" id="z80memPanel" style="display:none">
+        <h2>Z80 Memory Editor <span class="hint">edit bytes, then Apply</span></h2>
+        <div id="memtools">
+          <label>Base <input id="z80memBase" value="0" spellcheck="false" size="6" title="Base address (hex)"></label>
+          <button id="z80memDump" title="Reload the hex dump from memory">Dump</button>
+          <button id="z80memApply" title="Write the edited bytes back to memory">Apply</button>
+        </div>
+        <textarea id="z80mem" spellcheck="false" wrap="off" rows="12" class="hex"></textarea>
       </div>
       <div id="helps">Keys: <kbd>F7</kbd> assemble · <kbd>F8</kbd> step · <kbd>F10</kbd> step-over · <kbd>F5</kbd> run · <kbd>Esc</kbd> stop · <kbd>Ctrl+S</kbd> save · output conventions: 8086 <b>INT 21h</b>, 8085 <b>OUT 01h</b>, 8051 <b>SBUF</b> · click a port to set it</div>
     </section>

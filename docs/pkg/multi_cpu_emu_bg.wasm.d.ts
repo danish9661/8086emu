@@ -56,6 +56,7 @@ export const emulator_snapshot: (a: number) => [number, number];
 export const emulator_sod: (a: number) => number;
 export const emulator_sram_region: (a: number) => [number, number];
 export const emulator_step: (a: number) => void;
+export const emulator_video_mode: (a: number) => number;
 export const emulator_waiting_input: (a: number) => number;
 export const __wbindgen_externrefs: WebAssembly.Table;
 export const __wbindgen_malloc: (a: number, b: number) => number;

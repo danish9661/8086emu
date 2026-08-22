@@ -362,7 +362,7 @@ impl CpuZ80 {
                 let v = self.a;
                 let r = (0u8).wrapping_sub(v);
                 let c = v != 0;
-                let h = (0u8 & 0xF) < (v & 0xF);
+                let h = (v & 0xF) != 0;
                 let ov = v == 0x80;
                 self.a = r;
                 self.set_flag(S, r & 0x80 != 0);

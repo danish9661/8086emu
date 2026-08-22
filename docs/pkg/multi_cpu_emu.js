@@ -45,7 +45,7 @@ export class Emulator {
         return v2;
     }
     /**
-     * 8086 text-mode cursor as a 2-byte vector [col, row]. Other ISAs: [0, 0].
+     * 8086 text cursor as [col, row]; [0,0] otherwise.
      * @returns {Uint8Array}
      */
     cursor() {
@@ -347,8 +347,7 @@ export class Emulator {
         return ret >>> 0;
     }
     /**
-     * 8086 text-mode screen: 4000 bytes (80x25 cells of char, attr). Other ISAs
-     * return an empty vector.
+     * 8086 text-mode framebuffer (80x25 char/attr pairs at 0xB8000); [] otherwise.
      * @returns {Uint8Array}
      */
     screen() {
@@ -492,6 +491,14 @@ export class Emulator {
      */
     step() {
         wasm.emulator_step(this.__wbg_ptr);
+    }
+    /**
+     * Current 8086 video mode (0 when not 8086 / unknown). MR=13h -> pixel graphics.
+     * @returns {number}
+     */
+    video_mode() {
+        const ret = wasm.emulator_video_mode(this.__wbg_ptr);
+        return ret;
     }
     /**
      * True while the 8086 is blocked on an INT 21h read with an empty buffer.
