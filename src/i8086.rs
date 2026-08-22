@@ -1320,9 +1320,9 @@ impl Cpu8086 {
                 let d = self.fetch8() as i8 as i16;
                 let cx = self.cx;
                 match op {
-                    0xE0 => { self.cx = cx.wrapping_sub(1); if cx != 0 { self.ip = self.ip.wrapping_add_signed(d); } }
-                    0xE1 => { self.cx = cx.wrapping_sub(1); if cx != 0 && self.flag(ZF) { self.ip = self.ip.wrapping_add_signed(d); } }
-                    0xE2 => { self.cx = cx.wrapping_sub(1); if cx != 0 && !self.flag(ZF) { self.ip = self.ip.wrapping_add_signed(d); } }
+                    0xE0 => { self.cx = cx.wrapping_sub(1); if self.cx != 0 { self.ip = self.ip.wrapping_add_signed(d); } }
+                    0xE1 => { self.cx = cx.wrapping_sub(1); if self.cx != 0 && self.flag(ZF) { self.ip = self.ip.wrapping_add_signed(d); } }
+                    0xE2 => { self.cx = cx.wrapping_sub(1); if self.cx != 0 && !self.flag(ZF) { self.ip = self.ip.wrapping_add_signed(d); } }
                     _ => { if cx == 0 { self.ip = self.ip.wrapping_add_signed(d); } }
                 }
             }

@@ -2045,6 +2045,18 @@ fn aam_div0_8086() {
 }
 
 #[test]
+fn loop_8086() {
+    // LOOP must branch on the *decremented* CX (3 iterations for CX=3).
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "ORG 100h\nMOV CX, 3\nMOV AL, 41h\nlp: OUT 01h, AL\nINC AL\nLOOP lp\nHLT\nEND\n";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0x100, &code);
+    emu.set_pc(0x100);
+    emu.run(1000);
+    assert_eq!(emu.take_output(), "ABC", "LOOP branches on decremented CX");
+}
+
+#[test]
 fn mem_info_facade() {
     // Live memory-map getters reflect configured ROM/SRAM/EA state.
     // 8085: external SRAM window present by default; ROM region only after load.

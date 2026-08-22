@@ -39,6 +39,9 @@ jobs:
       - name: Run native tests
         run: cargo test --test emulation
 
+      - name: WASM smoke test
+        run: node tools/wasm-smoke.mjs
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 

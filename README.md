@@ -18,11 +18,14 @@ See `AGENTS.md` for the full architecture and per-ISA coverage.
 ## Build & test
 
 ```bash
-cargo test                         # 8 integration tests across all three ISAs
+cargo test                         # ~86 integration tests across all three ISAs
 cargo clippy --all-targets         # should be warning-free
 
 # wasm build (needs wasm-pack)
 wasm-pack build --target web --out-dir docs/pkg --release --features wasm
+
+# self-contained WASM smoke test (exercises all three ISAs + new features)
+node tools/wasm-smoke.mjs
 
 # serve the web demo
 python3 -m http.server -d docs 8000   # then open http://localhost:8000
@@ -32,8 +35,11 @@ python3 -m http.server -d docs 8000   # then open http://localhost:8000
 
 The demo in `docs/` is a student-oriented IDE: ISA selector (8086/8085/8051),
 sample programs, line-numbered editor with assemble-error highlighting, step /
-run / stop / reset, live register + flag panels, memory dump with the PC
-highlighted, and a program-output console.
+step-over / run / stop / reset, **click-in-gutter breakpoints** with Step-Back
+time-travel, live register + flag panels, a memory dump with the PC highlighted,
+a **live memory-map** (showing loaded ROM / external SRAM / 8051 EA state), an
+**8051 SFR readout** (click a register to edit it live), and a program-output
+console.
 
 Deployment is handled by the workflow in `.github/workflows/pages.yml`: on every
 push to `main` it builds the wasm pkg, runs the native tests, and deploys
@@ -56,6 +62,18 @@ cargo run --example run -- examples/hello.asm          # 8086
 cargo run --example run -- --isa 8085 examples/hello85.asm
 cargo run --example run -- --isa 8051 examples/hello51.asm
 ```
+
+## Examples
+
+| File | ISA | Shows |
+|---|---|---|
+| `examples/hello.asm` | 8086 | `INT 21h` string output |
+| `examples/hello85.asm` | 8085 | `OUT 01h` printing |
+| `examples/hello51.asm` | 8051 | `SBUF` serial output |
+| `examples/8155.asm` | 8085 | 8155 external RAM/I/O |
+| `examples/timer51.asm` | 8051 | timer + interrupt |
+| `examples/ser.rs` | 8051 | native serial-RX injection |
+| `examples/bios.asm` | 8086 | BIOS image that boots from the reset vector `FFFF:FFF0` |
 
 ## Layout
 
@@ -80,13 +98,25 @@ cargo run --example run -- --isa 8051 examples/hello51.asm
 const emu = new Emulator("8086");            // "8086" | "8085" | "8051"
 const code = emu.assemble(src);              // throws on error
 emu.load(code, 0x100);                       // write code + set PC
+emu.set_pc(0x100);                           // (re)set the program counter
 emu.run(1_000_000);                          // steps executed
-emu.step();
+emu.step();  emu.run_to(targetPc, 1_000_000); // step / run-to-line (Step-Over)
 emu.pc();  emu.regs();  emu.flags();         // "AX=1234" / "ZF"
 emu.mem(0, 64);                              // raw bytes
 emu.out();                                   // program output (drains)
 emu.halted();  emu.reset();
 emu.snapshot();  emu.restore(bytes);         // deterministic time-travel
+
+// External memory (write-protected ROM / external SRAM / 8051 EA):
+emu.set_rom_region(0xF0000, 0x10000);        // mark ROM range
+emu.load_rom(bytes, 0xF0000);                // place a firmware image
+emu.set_ea(false);                           // 8051: fetch code from XDATA
+emu.set_sram(0x9000, 0x2000);                // 8085: (re)map external SRAM
+emu.rom_region();  emu.sram_region();        // live memory-map info
+emu.ea_active();  emu.ext_code_region();
+
+// 8051 peripheral registers:
+emu.sfr(0xD0);  emu.set_sfr(0xD0, 0x00);     // read/write an SFR
 ```
 
 ## Program output conventions
