@@ -2007,3 +2007,40 @@ fn bios_boot_8086() {
     assert_eq!(emu.take_output(), "A", "BIOS must execute from the top ROM");
 }
 
+#[test]
+fn enter_leave_8086() {
+    // ENTER builds a stack frame (push BP; BP = new frame; SP -= size); LEAVE
+    // restores BP and unwinds SP back to the caller's frame.
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "MOV BP, 9000h\nMOV SP, 9000h\nENTER 0004h, 00h\nHLT\nEND\n";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0x100, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    let r = |n: &str| emu.regs().iter().find(|x| x.name == n).unwrap().value;
+    assert_eq!(r("BP"), 0x8FFE, "ENTER must set BP to the new frame");
+    assert_eq!(r("SP"), 0x8FFA, "ENTER must reserve the frame size");
+
+    let src2 = "MOV BP, 9000h\nMOV SP, 9000h\nENTER 0004h, 00h\nLEAVE\nHLT\nEND\n";
+    let code2 = emu.assemble(src2).unwrap();
+    emu.reset();
+    emu.mem_write(0x100, &code2);
+    emu.set_pc(0x100);
+    emu.run(100);
+    let r = |n: &str| emu.regs().iter().find(|x| x.name == n).unwrap().value;
+    assert_eq!(r("BP"), 0x9000, "LEAVE must restore BP");
+    assert_eq!(r("SP"), 0x9000, "LEAVE must restore SP");
+}
+
+#[test]
+fn aam_div0_8086() {
+    // AAM with base 0 is a divide-by-zero and must fault (halt) like real HW.
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "MOV AX, 5\nDB 0D4h\nDB 00h\nHLT\nEND\n";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0x100, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert!(emu.is_halted(), "AAM base 0 must raise #DE and halt");
+}
+

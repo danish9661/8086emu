@@ -852,6 +852,17 @@ fn encode_instr(
         "AAA" => o.push(0x37), "AAS" => o.push(0x3F),
         "AAM" => { o.push(0xD4); o.push(0x0A); }
         "AAD" => { o.push(0xD5); o.push(0x0A); }
+        "ENTER" => {
+            match (a, b) {
+                (Some(Operand::Imm(imm)), Some(Operand::Imm(nest))) => {
+                    o.push(0xC8);
+                    o.extend_from_slice(&(*imm as u16).to_le_bytes());
+                    o.push(*nest as u8);
+                }
+                _ => return Err("ENTER needs imm16, imm8".into()),
+            }
+        }
+        "LEAVE" => o.push(0xC9),
         "CBW" => o.push(0x98), "CWD" => o.push(0x99),
         "NOP" => o.push(0x90),
         "HLT" => o.push(0xF4),

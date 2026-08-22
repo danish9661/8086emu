@@ -1259,10 +1259,29 @@ impl Cpu8086 {
                 let v = self.fetch16();
                 self.write_rm16(m, rm, seg, off, v);
             }
-            0xC8 => { // ENTER: no-op
-                let _ = self.fetch16(); let _ = self.fetch8();
+            0xC8 => { // ENTER imm16 (frame size), imm8 (nesting level 0..31)
+                let size = self.fetch16();
+                let nest = self.fetch8() & 0x1F;
+                self.push16(self.bp);
+                let temp = self.sp;
+                if nest > 0 {
+                    let mut i = 1u8;
+                    while i < nest {
+                        self.bp = self.bp.wrapping_sub(2);
+                        let w = self.read_ea16(self.ss, self.bp);
+                        self.push16(w);
+                        i += 1;
+                    }
+                    self.push16(temp);
+                }
+                self.bp = temp;
+                self.sp = self.sp.wrapping_sub(size);
             }
-            0xC9 => {} // LEAVE
+            0xC9 => { // LEAVE: restore caller's BP and unwind the frame
+                let saved = self.read_ea16(self.ss, self.bp);
+                self.sp = self.bp.wrapping_add(2);
+                self.bp = saved;
+            }
             0xCA => { let _n = self.fetch16(); let ip = self.pop16(); let cs = self.pop16(); self.ip = ip; self.cs = cs; }
             0xCB => { let ip = self.pop16(); let cs = self.pop16(); self.ip = ip; self.cs = cs; }
             0xCC => self.int_vec(3),
