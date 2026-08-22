@@ -73,6 +73,9 @@ exposes the same methods on `multi_cpu_emu::Emulator` (returns `Vec<u8>` /
 ### Example (WASM)
 
 ```js
+import init, { Emulator } from '8086emu';   // published npm name
+await init();
+
 const emu = new Emulator('8051');
 const code = emu.assemble('MOV A, #05h\nADD A, #03h\nEND');
 emu.load(code, 0);

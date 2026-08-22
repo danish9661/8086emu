@@ -6,23 +6,21 @@ You can publish it directly, or wrap it in your own package.
 
 ## Recommended package name
 
-Keep it consistent with the Rust crate and the emitted module so imports stay
-predictable:
+Use **`8086emu`** — short, matches the GitHub repo, and is easy to remember.
+It is the published npm name; the Rust crate stays `multi-cpu-emu` and the
+wasm module file stays `multi_cpu_emu.js` (snake_case, required by wasm-pack).
 
-- **`multi-cpu-emu`** ← recommended. It matches the crate name
-  (`multi-cpu-emu`) and the wasm module (`multi_cpu_emu.js`), so users write
-  `import init, { Emulator } from 'multi-cpu-emu'`.
-- **`@danish9661/multi-cpu-emu`** ← scoped alternative (requires the
-  `danish9661` npm scope). Scoped names avoid squatting collisions and let the
-  package live under your account.
-- Avoid reusing the repo name `8086emu` for the npm package — it only covers
-  one of the three ISAs and would mislead 8051/8085 users. If you want a
-  discoverable alias, also publish `retro-cpu-emu` or `emu-8086-8085-8051` as
-  a thin wrapper/re-export.
+- **`8086emu`** ← recommended. Users write
+  `import init, { Emulator } from '8086emu'`.
+- **`@danish9661/8086emu`** ← scoped alternative (requires the `danish9661`
+  npm scope) if the unscoped name is taken.
+- If you later want a name that advertises all three ISAs, publish
+  `retro-cpu-emu` or `emu-8086-8085-8051` as a thin re-export wrapper — but
+  `8086emu` is the primary, simplest choice.
 
-> The crate is `multi-cpu-emu`, the GitHub repo is `8086emu`, and the wasm
-> module file is `multi_cpu_emu.js` (snake_case is required by wasm-pack).
-> The npm name should be the **kebab-case** form: `multi-cpu-emu`.
+> The crate is `multi-cpu-emu`, the GitHub repo / npm name is `8086emu`, and
+> the wasm module file is `multi_cpu_emu.js`. The npm name is just the short
+> handle users import by.
 
 ## Build for publish
 
@@ -42,7 +40,7 @@ wasm-pack build --target web --out-dir pkg --release --features wasm --scope dan
 
 ```json
 {
-  "name": "multi-cpu-emu",
+  "name": "8086emu",
   "version": "0.1.0",
   "description": "WebAssembly emulators for Intel 8086, 8085 and 8051 (MCS-51)",
   "type": "module",
@@ -60,13 +58,13 @@ wasm-pack build --target web --out-dir pkg --release --features wasm --scope dan
 ```bash
 cd pkg
 npm version patch        # bump as needed
-npm publish --access public   # --access public required for unscoped
+npm publish              # unscoped name 8086emu; --access public only if scoped
 ```
 
 ## Usage from the package
 
 ```js
-import init, { Emulator } from 'multi-cpu-emu';
+import init, { Emulator } from '8086emu';
 
 const wasm = await init();           // or init('./multi_cpu_emu_bg.wasm')
 const emu = new Emulator('8086');

@@ -74,7 +74,7 @@ edit), peripheral/device panels, and a time-travel **Step-Back** history.
 ## 5. Use the wasm module from JavaScript
 
 ```js
-import init, { Emulator } from './pkg/multi_cpu_emu.js';
+import init, { Emulator } from '8086emu';   // published npm name
 await init();
 
 const emu = new Emulator('8086');
@@ -85,4 +85,6 @@ console.log(emu.regs());   // ["AX=0008", ...]
 console.log(emu.out());    // program output
 ```
 
-See [api-reference.md](api-reference.md) for the full surface.
+(The web demo in `docs/` imports the local build as `./pkg/multi_cpu_emu.js`;
+the published package name is `8086emu`.) See
+[api-reference.md](api-reference.md) for the full surface.
