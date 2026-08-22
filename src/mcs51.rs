@@ -253,59 +253,8 @@ impl Cpu8051 {
     }
     fn tick_timers(&mut self) {
         let tcon = self.sfr[S_TCON];
-        let tmod = self.sfr[S_TMOD];
-        if tcon & 0x10 != 0 { // TR0
-            let mode = tmod & 3;
-            let (v, reload) = self.timer_regs(mode, S_TH0, S_TL0);
-            let nv = v.wrapping_add(1);
-            let wrap = v == u16::MAX;
-            let overflow = match mode {
-                0 => v & 0x1FFF == 0x1FFF,
-                1 => wrap,
-                _ => nv as u8 == 0,
-            };
-            if overflow {
-                self.sfr[S_TCON] |= 0x20; // TF0
-            }
-            if reload {
-                // mode 2 (8-bit auto-reload): reload TH into TL only on overflow,
-                // otherwise just count in TL
-                if overflow {
-                    self.sfr[S_TL0] = self.sfr[S_TH0];
-                } else {
-                    self.sfr[S_TL0] = nv as u8;
-                }
-            } else {
-                self.sfr[S_TH0] = (nv >> 8) as u8;
-                self.sfr[S_TL0] = nv as u8;
-            }
-        }
-        if tcon & 0x40 != 0 { // TR1
-            let mode = (tmod >> 4) & 3;
-            let (v, reload) = self.timer_regs(mode, S_TH1, S_TL1);
-            let nv = v.wrapping_add(1);
-            let wrap = v == u16::MAX;
-            let overflow = match mode {
-                0 => v & 0x1FFF == 0x1FFF,
-                1 => wrap,
-                _ => nv as u8 == 0,
-            };
-            if overflow {
-                self.sfr[S_TCON] |= 0x80; // TF1
-            }
-            if reload {
-                // mode 2 (8-bit auto-reload): reload TH into TL only on overflow,
-                // otherwise just count in TL
-                if overflow {
-                    self.sfr[S_TL1] = self.sfr[S_TH1];
-                } else {
-                    self.sfr[S_TL1] = nv as u8;
-                }
-            } else {
-                self.sfr[S_TH1] = (nv >> 8) as u8;
-                self.sfr[S_TL1] = nv as u8;
-            }
-        }
+        if tcon & 0x10 != 0 { self.tick_timer0(); }
+        if tcon & 0x40 != 0 { self.tick_timer1(); }
         // serial transmit baud-rate countdown: when it elapses, emit the char
         // and set TI (transmit-complete) — the serial ISR must clear TI.
         if self.tx_countdown > 0 {
@@ -316,12 +265,82 @@ impl Cpu8051 {
             }
         }
     }
-    fn timer_regs(&self, mode: u8, th: usize, tl: usize) -> (u16, bool) {
-        let v = ((self.sfr[th] as u16) << 8) | self.sfr[tl] as u16;
+    /// Timer 0 tick. Mode 0 = 13-bit (TL low 5 bits, TH high 8 bits), mode 1 =
+    /// 16-bit, mode 2 = 8-bit auto-reload (TL counts, TH holds reload), mode 3 =
+    /// TL0 and TH0 become two independent 8-bit timers (TH0 gated by TR1).
+    fn tick_timer0(&mut self) {
+        let mode = self.sfr[S_TMOD] & 3;
         match mode {
-            0 => (v & 0x1FFF, false),
-            2 => (self.sfr[tl] as u16, true),
-            _ => (v, false),
+            0 => {
+                let c = ((self.sfr[S_TH0] as u16) << 5) | (self.sfr[S_TL0] as u16 & 0x1F);
+                let nc = c.wrapping_add(1) & 0x1FFF;
+                if c == 0x1FFF { self.sfr[S_TCON] |= 0x20; } // TF0
+                self.sfr[S_TH0] = (nc >> 5) as u8;
+                self.sfr[S_TL0] = (nc & 0x1F) as u8;
+            }
+            1 => {
+                let c = ((self.sfr[S_TH0] as u16) << 8) | self.sfr[S_TL0] as u16;
+                let nc = c.wrapping_add(1);
+                if c == 0xFFFF { self.sfr[S_TCON] |= 0x20; }
+                self.sfr[S_TH0] = (nc >> 8) as u8;
+                self.sfr[S_TL0] = nc as u8;
+            }
+            2 => {
+                let nc = self.sfr[S_TL0].wrapping_add(1);
+                if nc == 0 {
+                    self.sfr[S_TCON] |= 0x20; // TF0
+                    self.sfr[S_TL0] = self.sfr[S_TH0];
+                } else {
+                    self.sfr[S_TL0] = nc;
+                }
+            }
+            3 => {
+                // TL0 = 8-bit timer (TR0), TH0 = 8-bit timer gated by TR1 (overflow -> TF1)
+                let tl = self.sfr[S_TL0].wrapping_add(1);
+                if tl == 0 {
+                    self.sfr[S_TCON] |= 0x20; // TF0
+                } else {
+                    self.sfr[S_TL0] = tl;
+                }
+                if self.sfr[S_TCON] & 0x40 != 0 { // TR1 gates TH0
+                    let th = self.sfr[S_TH0].wrapping_add(1);
+                    if th == 0 { self.sfr[S_TCON] |= 0x80; } // TF1
+                    self.sfr[S_TH0] = th;
+                }
+            }
+            _ => {}
+        }
+    }
+    /// Timer 1 tick. Mode 3 halts timer 1 (its TR1 is repurposed for timer 0's
+    /// TH0 in mode 3).
+    fn tick_timer1(&mut self) {
+        let mode = (self.sfr[S_TMOD] >> 4) & 3;
+        if mode == 3 { return; }
+        match mode {
+            0 => {
+                let c = ((self.sfr[S_TH1] as u16) << 5) | (self.sfr[S_TL1] as u16 & 0x1F);
+                let nc = c.wrapping_add(1) & 0x1FFF;
+                if c == 0x1FFF { self.sfr[S_TCON] |= 0x80; } // TF1
+                self.sfr[S_TH1] = (nc >> 5) as u8;
+                self.sfr[S_TL1] = (nc & 0x1F) as u8;
+            }
+            1 => {
+                let c = ((self.sfr[S_TH1] as u16) << 8) | self.sfr[S_TL1] as u16;
+                let nc = c.wrapping_add(1);
+                if c == 0xFFFF { self.sfr[S_TCON] |= 0x80; }
+                self.sfr[S_TH1] = (nc >> 8) as u8;
+                self.sfr[S_TL1] = nc as u8;
+            }
+            2 => {
+                let nc = self.sfr[S_TL1].wrapping_add(1);
+                if nc == 0 {
+                    self.sfr[S_TCON] |= 0x80; // TF1
+                    self.sfr[S_TL1] = self.sfr[S_TH1];
+                } else {
+                    self.sfr[S_TL1] = nc;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -396,7 +415,8 @@ impl Cpu8051 {
                 self.set_acc(v);
             }
             0x83 => {
-                self.pc = self.pc.wrapping_add(1);
+                // MOVC A,@A+PC: PC already points at the instruction after the
+                // opcode (advanced by the fetch), so just add A.
                 let a = self.acc() as u16;
                 let addr = self.pc.wrapping_add(a);
                 let v = self.code.read(addr as usize);

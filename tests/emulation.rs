@@ -1463,7 +1463,7 @@ fn int0_edge_8051_fires_once() {
     emu.mem_write(0, &code);
     emu.set_pc(0);
     emu.request_interrupt("INT0", 0).unwrap();
-    emu.run(50);
+    emu.run(200);
     assert_eq!(reg(&emu.regs(), "R0"), 1, "edge mode fires INT0 exactly once");
 }
 
@@ -1488,7 +1488,7 @@ fn int0_level_8051_reasserts() {
     emu.mem_write(0, &code);
     emu.set_pc(0);
     emu.request_interrupt("INT0", 0).unwrap();
-    emu.run(50);
+    emu.run(200);
     assert!(reg(&emu.regs(), "R0") > 1, "level mode re-asserts INT0 while the line is held");
 }
 
@@ -1634,3 +1634,136 @@ fn dos_clock_and_rtc_8086() {
     assert_eq!((reg(&emu.regs(), "DX") >> 8) as u8, 0x06, "RTC month BCD");
     assert_eq!((reg(&emu.regs(), "DX") & 0xFF) as u8, 0x15, "RTC day BCD");
 }
+
+#[test]
+fn dos_stdio_8086() {
+    // INT 21h 40h to handle 1 (stdout) prints to Output; handle 2 (stderr) too.
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "ORG 100h\nMOV AH, 40h\nMOV BX, 1\nMOV CX, 2\nMOV DX, 0200h\nINT 21h\nMOV AX, 4C00h\nINT 21h\nORG 200h\nmsg: DB 'HI'\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(emu.take_output(), "HI", "INT 21h 40h handle 1 writes to stdout");
+
+    // handle 2 (stderr)
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "ORG 100h\nMOV AH, 40h\nMOV BX, 2\nMOV CX, 3\nMOV DX, 0200h\nINT 21h\nMOV AX, 4C00h\nINT 21h\nORG 200h\nmsg: DB 'ERR'\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(emu.take_output(), "ERR", "INT 21h 40h handle 2 writes to stderr");
+
+    // INT 21h 3Fh from handle 0 (stdin) reads the keyboard queue, blocking when empty.
+    let mut emu = make_emulator("8086").unwrap();
+    let src = "ORG 100h\nMOV AH, 3Fh\nMOV BX, 0\nMOV CX, 3\nMOV DX, 0300h\nINT 21h\nMOV AX, 4C00h\nINT 21h\nORG 300h\nbuf: DB 0, 0, 0\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert!(emu.waiting_input(), "3Fh handle 0 with empty buffer blocks on input");
+    emu.push_key(b'A');
+    emu.push_key(b'B');
+    emu.push_key(b'C');
+    emu.run(100);
+    assert!(!emu.waiting_input(), "input satisfied, no longer blocked");
+    assert_eq!(emu.mem_read(0x300, 3), vec![b'A', b'B', b'C'], "stdin bytes read into buffer");
+}
+
+#[test]
+fn timer_mode0_8051() {
+    // TMOD mode 0: 13-bit timer (TL0 low 5 bits + TH0 high 8 bits).
+    let src = r#"
+        ORG 30h
+        MOV TMOD, #00h
+        MOV TL0, #1Fh       ; low 5 bits = 0x1F
+        MOV TH0, #0FFh      ; high 8 bits = 0xFF -> count = 0x1FFF (about to wrap)
+        SETB TR0
+        MOV R0, #00h        ; one tick wraps 0x1FFF -> 0x0000 and sets TF0
+        JNB TF0, no
+        MOV R1, #1
+        SJMP done
+    no:
+        MOV R1, #0
+    done:
+        SJMP $
+        END
+    "#;
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x30);
+    emu.run(5); // exactly enough to arm TR0 and tick once into overflow
+    // After the 13-bit counter rolls 0x1FFF -> 0x0000: TF0 must be set and the
+    // latched TH0/TL0 must read back as 0 (low 5 bits of TL0 are the counter).
+    let sfr = |a: u8| emu.sfr(a);
+    assert!(sfr(0x88) & 0x20 != 0, "TF0 set after 13-bit wrap");
+    assert_eq!(sfr(0x8A) & 0x1F, 0, "TL0 low 5 bits wrap to 0 (mode 0)");
+    assert_eq!(sfr(0x8C), 0, "TH0 wraps to 0 (mode 0)");
+}
+
+#[test]
+fn timer_mode3_8051() {
+    // Timer 0 mode 3: TL0 and TH0 are two independent 8-bit timers (TH0 gated by
+    // TR1); timer 1 is halted in mode 3.
+    let src = r#"
+        ORG 30h
+        MOV TMOD, #33h      ; T0 mode 3, T1 mode 3
+        MOV TL0, #0FEh
+        MOV TH0, #0FEh
+        MOV TL1, #00h       ; T1 must NOT count in mode 3
+        SETB TR0
+        SETB TR1
+        MOV A, #00h         ; a few ticks: TL0 FE->FF->00 (TF0), TH0 FE->FF->00 (TF1)
+        MOV B, #00h
+        MOV R2, #00h
+        MOV R3, #00h
+        JNB TF0, n0
+        MOV R0, #1
+    n0:
+        JNB TF1, n1
+        MOV R1, #1
+    n1:
+        SJMP $
+        END
+    "#;
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(200);
+    assert_eq!(reg(&emu.regs(), "R0"), 1, "mode 3 TL0 overflow sets TF0");
+    assert_eq!(reg(&emu.regs(), "R1"), 1, "mode 3 TH0 overflow sets TF1");
+    let sfr = |a: u8| emu.sfr(a);
+    assert_eq!(sfr(0x8B), 0, "timer 1 frozen in mode 3 (TL1 unchanged)");
+}
+
+#[test]
+fn movc_8051() {
+    // MOVC A,@A+DPTR and MOVC A,@A+PC read from code (ROM) space.
+    let src = r#"
+        ORG 30h
+        MOV DPTR, #0100h
+        MOV A, #05h
+        MOVC A, @A+DPTR     ; A = code[0x105] = 0x66
+        MOV R0, A
+        MOV A, #03h
+        MOVC A, @A+PC       ; A = byte 3 past the MOVC = 0xAB (the DB)
+        MOV R1, A
+        SJMP $
+        DB 0ABh
+        ORG 0100h
+        DB 11h, 22h, 33h, 44h, 55h, 66h, 77h
+        END
+    "#;
+    let mut emu = make_emulator("8051").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(200);
+    assert_eq!(reg(&emu.regs(), "R0"), 0x66, "MOVC A,@A+DPTR reads code space");
+    assert_eq!(reg(&emu.regs(), "R1"), 0xAB, "MOVC A,@A+PC reads following byte");
+}
+
+

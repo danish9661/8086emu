@@ -547,37 +547,65 @@ impl Cpu8086 {
             (0x21, 0x3F) => { // read
                 let h = self.bx;
                 let cnt = self.cx as usize;
-                let id = self.dos.handles.get(&h).copied();
-                match id {
-                    None => { self.set_flag(CF, true); self.ax = 6; }
-                    Some(id) => {
-                        let (avail, pos) = { let f = &self.dos.files[id]; (f.data.len().saturating_sub(f.pos), f.pos) };
-                        let n = cnt.min(avail);
+                eprintln!("DBG 3Fh entry: h={h} ah={:02X} cnt={cnt} kb_len={}", self.ah(), self.keybuf.len());
+                if h == 0 { // stdin: read from the keyboard queue
+                    if self.keybuf.is_empty() {
+                        // Block: re-execute the INT 21h on resume. Do NOT clobber
+                        // AH here — it must stay 0x3F so the retried call routes
+                        // back to this handler (mirrors int_read for AH=01/06/07/08).
+                        self.input_pending = true;
+                        self.ip = self.ip.wrapping_sub(2);
+                        self.set_flag(CF, false);
+                    } else {
+                        let n = cnt.min(self.keybuf.len());
                         let base = self.phys(self.ds, self.dx);
                         for i in 0..n {
-                            let b = self.dos.files[id].data[pos + i];
+                            let b = self.keybuf.pop_front().unwrap();
                             self.mem.write(base + i, b);
                         }
-                        self.dos.files[id].pos = pos + n;
                         self.set_flag(CF, false); self.ax = n as u16;
+                    }
+                } else {
+                    let id = self.dos.handles.get(&h).copied();
+                    match id {
+                        None => { self.set_flag(CF, true); self.ax = 6; }
+                        Some(id) => {
+                            let (avail, pos) = { let f = &self.dos.files[id]; (f.data.len().saturating_sub(f.pos), f.pos) };
+                            let n = cnt.min(avail);
+                            let base = self.phys(self.ds, self.dx);
+                            for i in 0..n {
+                                let b = self.dos.files[id].data[pos + i];
+                                self.mem.write(base + i, b);
+                            }
+                            self.dos.files[id].pos = pos + n;
+                            self.set_flag(CF, false); self.ax = n as u16;
+                        }
                     }
                 }
             }
             (0x21, 0x40) => { // write
                 let h = self.bx;
                 let cnt = self.cx as usize;
-                let id = self.dos.handles.get(&h).copied();
-                match id {
-                    None => { self.set_flag(CF, true); self.ax = 6; }
-                    Some(id) => {
-                        let base = self.phys(self.ds, self.dx);
-                        let mut buf = Vec::with_capacity(cnt);
-                        for i in 0..cnt { buf.push(self.mem.read(base + i)); }
-                        let f = &mut self.dos.files[id];
-                        if f.pos + cnt > f.data.len() { f.data.resize(f.pos + cnt, 0); }
-                        f.data[f.pos..f.pos + cnt].copy_from_slice(&buf);
-                        f.pos += cnt;
-                        self.set_flag(CF, false); self.ax = cnt as u16;
+                let base = self.phys(self.ds, self.dx);
+                if h == 1 || h == 2 { // stdout / stderr -> Output buffer
+                    for i in 0..cnt {
+                        let b = self.mem.read(base + i);
+                        self.out.put_char(b as char);
+                    }
+                    self.set_flag(CF, false); self.ax = cnt as u16;
+                } else {
+                    let id = self.dos.handles.get(&h).copied();
+                    match id {
+                        None => { self.set_flag(CF, true); self.ax = 6; }
+                        Some(id) => {
+                            let mut buf = Vec::with_capacity(cnt);
+                            for i in 0..cnt { buf.push(self.mem.read(base + i)); }
+                            let f = &mut self.dos.files[id];
+                            if f.pos + cnt > f.data.len() { f.data.resize(f.pos + cnt, 0); }
+                            f.data[f.pos..f.pos + cnt].copy_from_slice(&buf);
+                            f.pos += cnt;
+                            self.set_flag(CF, false); self.ax = cnt as u16;
+                        }
                     }
                 }
             }
