@@ -154,3 +154,36 @@ export function renderDevices(emu, isa) {
     `<div class="dev"><h3>LED matrix <span class="p">20h-27h</span></h3>${led}</div>` +
     timing;
 }
+
+// Static memory-map overview per ISA for the "Memory map" panel.
+export function renderMemMap(emu, isa) {
+  const el = document.getElementById('memmap');
+  if (!el) return;
+  let rows;
+  if (isa === '8086') {
+    rows = [
+      '00000–9FFFF  RAM (640 KiB)',
+      'A0000–BFFFF  VGA / video',
+      'C0000–EFFFF  ROM / expansion',
+      'F0000–FFFFF  ROM (BIOS) — load via “Load ROM”',
+      '0000–FFFF    I/O ports (OUT/IN)',
+    ];
+  } else if (isa === '8085') {
+    rows = [
+      '0000–7FFF   main RAM',
+      '8000–80FF   8155 external RAM',
+      '8000–80FF   8155 I/O (ports 80–85)',
+      '9000–9FFF   external SRAM (8 KiB)',
+      '00–FF       I/O ports (OUT/IN)',
+    ];
+  } else {
+    rows = [
+      '0000–FFFF   code ROM (internal, EA=1)',
+      '0000–FFFF   XDATA = external ROM (EA=0) + RAM',
+      'FF00–FFFF   XDATA top → I/O ports',
+      '00–7F       internal RAM',
+      '80–FF       SFRs',
+    ];
+  }
+  el.innerHTML = rows.map((r) => `<div>${r}</div>`).join('');
+}

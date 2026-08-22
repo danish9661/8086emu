@@ -182,6 +182,35 @@ impl Emulator {
         }
     }
 
+    /// Mark `[base, base+len)` of main memory as read-only ROM (8086/8085).
+    pub fn set_rom_region(&mut self, base: u32, len: u32) {
+        match self {
+            Emulator::I8086(c) => c.set_rom_region(base, len),
+            Emulator::I8085(c) => c.set_rom_region(base, len),
+            _ => {}
+        }
+    }
+
+    /// Load a ROM image and mark its range read-only. 8051 routes to external
+    /// code (XDATA) when EA is low, otherwise to the internal code image.
+    pub fn load_rom(&mut self, data: &[u8], addr: u32) {
+        match self {
+            Emulator::I8086(c) => c.load_rom(data, addr),
+            Emulator::I8085(c) => c.load_rom(data, addr),
+            Emulator::Mcs51(c) => c.load_rom(data, addr),
+        }
+    }
+
+    /// 8051 EA pin: false => fetch code from external program memory (XDATA).
+    pub fn set_ea(&mut self, ea: bool) {
+        if let Emulator::Mcs51(c) = self { c.set_ea(ea); }
+    }
+
+    /// 8085: (re)configure the external SRAM chip window (default 8 KiB @ 0x9000).
+    pub fn set_sram(&mut self, base: u32, len: u32) {
+        if let Emulator::I8085(c) = self { c.set_sram(base, len); }
+    }
+
     /// Current reload/count of an 8086 PIT channel (0..2), for the IDE timer
     /// view. Returns 0 for other ISAs.
     pub fn pit_count(&self, n: usize) -> u16 {

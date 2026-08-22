@@ -217,6 +217,17 @@ impl Cpu8086 {
     /// 8253 channel reload counts (0 => 65536) for inspection/debug.
     pub fn pit_count(&self, n: usize) -> u16 { self.pit.ch_count(n) }
 
+    /// Mark `[base, base+len)` as read-only ROM (e.g. a BIOS at 0xF0000).
+    pub fn set_rom_region(&mut self, base: u32, len: u32) {
+        self.mem.set_rom(base as usize, len as usize);
+    }
+
+    /// Load a ROM image at `addr` and mark that range read-only.
+    pub fn load_rom(&mut self, data: &[u8], addr: u32) {
+        self.mem.set_rom(addr as usize, data.len());
+        self.mem.load(addr as usize, data);
+    }
+
     fn phys(&self, seg: u16, off: u16) -> usize {
         (((seg as u32) << 4) + off as u32) as usize
     }
@@ -2211,13 +2222,13 @@ impl Cpu for Cpu8086 {
 
     fn mem_write(&mut self, addr: u32, data: &[u8]) {
         for (i, b) in data.iter().enumerate() {
-            self.mem.write(addr as usize + i, *b);
+            self.mem.poke(addr as usize + i, *b);
         }
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53);
-        v.push(7); // version
+        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53 + 8);
+        v.push(8); // version
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.fs, self.gs, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -2239,6 +2250,9 @@ impl Cpu for Cpu8086 {
         v.push(self.video_mode);
         v.extend_from_slice(&self.pit.snapshot());
         v.extend_from_slice(&self.cycles.to_le_bytes());
+        let (rb, rl) = self.mem.rom_range();
+        v.extend_from_slice(&(rb as u32).to_le_bytes());
+        v.extend_from_slice(&(rl as u32).to_le_bytes());
         v
     }
 
@@ -2282,7 +2296,9 @@ impl Cpu for Cpu8086 {
                 self.intr_vector = body.get(start + 2).copied().unwrap_or(0);
             }
             if ver >= 5 {
-                let tail = if ver >= 7 {
+                let tail = if ver >= 8 {
+                    data.len() - 131 // 67 fpu + 3 cursor/mode + 45 pit + 8 cycles + 8 rom
+                } else if ver >= 7 {
                     data.len() - 123 // 67 fpu + 3 cursor/mode + 45 pit + 8 cycles
                 } else if ver == 6 {
                     data.len() - 70
@@ -2310,6 +2326,11 @@ impl Cpu for Cpu8086 {
                     let mut cy = [0u8; 8];
                     cy.copy_from_slice(&data[tail + 115..tail + 123]);
                     self.cycles = u64::from_le_bytes(cy);
+                }
+                if ver >= 8 {
+                    let rb = u32::from_le_bytes([data[tail + 123], data[tail + 124], data[tail + 125], data[tail + 126]]);
+                    let rl = u32::from_le_bytes([data[tail + 127], data[tail + 128], data[tail + 129], data[tail + 130]]);
+                    self.mem.set_rom(rb as usize, rl as usize);
                 }
             }
         }

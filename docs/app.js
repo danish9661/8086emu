@@ -1,5 +1,5 @@
 import init, { Emulator } from './pkg/multi_cpu_emu.js';
-import { renderDevices, resetDevices } from './devices.js';
+import { renderDevices, resetDevices, renderMemMap } from './devices.js';
 
 const EXAMPLES = {
   '8086': [
@@ -529,6 +529,7 @@ function refresh() {
 
   // --- peripherals (ports 10h..27h) ---
   renderDevices(emu, isa);
+  renderMemMap(emu, isa);
 
   // --- ports ---
   renderPorts();
@@ -947,6 +948,29 @@ $('loadBtn').onclick = () => {
   loadInput.click();
 };
 
+// ---------- load a ROM / firmware image (marked read-only) ----------
+let romInput = null;
+$('romBtn').onclick = () => {
+  if (!emu) return;
+  if (!romInput) {
+    romInput = document.createElement('input');
+    romInput.type = 'file';
+    romInput.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      file.arrayBuffer().then((buf) => {
+        const addr = parseInt($('romaddr').value.trim(), 16) || 0;
+        // 8051: a ROM image is external code, so force EA low.
+        if (isa === '8051') emu.set_ea(false);
+        emu.load_rom(new Uint8Array(buf), addr);
+        renderMemMap(emu, isa);
+        toast(`ROM loaded @ ${addr.toString(16)} (${buf.byteLength} bytes)`);
+      });
+    };
+  }
+  romInput.click();
+};
+
 // ---------- examples / persistence ----------
 let exIndex = 0;
 $('exampleBtn').onclick = () => {
@@ -977,6 +1001,7 @@ $('isa').onchange = () => {
   loadSource();
   $('memaddr').value = '0';
   memBase = 0;
+  $('romaddr').value = isa === '8086' ? 'F0000' : '0';
   $('intrBar85').style.display = isa === '8085' ? '' : 'none';
   $('intrBar51').style.display = isa === '8051' ? '' : 'none';
   $('intrBar86').style.display = isa === '8086' ? '' : 'none';
@@ -1017,4 +1042,5 @@ loadSource();
 $('intrBar85').style.display = 'none';
 $('intrBar51').style.display = 'none';
 $('intrBar86').style.display = '';   // default ISA is 8086
+$('romaddr').value = isa === '8086' ? 'F0000' : '0';
 refresh();

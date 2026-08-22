@@ -113,6 +113,27 @@ impl Emulator {
         self.inner.mem_write(addr, data);
     }
 
+    /// Mark `[base, base+len)` of main memory as read-only ROM (8086/8085).
+    pub fn set_rom_region(&mut self, base: u32, len: u32) {
+        self.inner.set_rom_region(base, len);
+    }
+
+    /// Load a ROM image and mark its range read-only. 8051 routes to external
+    /// code (XDATA) when EA is low.
+    pub fn load_rom(&mut self, data: &[u8], addr: u32) {
+        self.inner.load_rom(data, addr);
+    }
+
+    /// 8051 EA pin: false => fetch code from external program memory (XDATA).
+    pub fn set_ea(&mut self, ea: bool) {
+        self.inner.set_ea(ea);
+    }
+
+    /// 8085: (re)configure the external SRAM chip window (default 8 KiB @ 0x9000).
+    pub fn set_sram(&mut self, base: u32, len: u32) {
+        self.inner.set_sram(base, len);
+    }
+
     /// Drain the program output buffer.
     pub fn out(&mut self) -> String {
         self.inner.take_output()

@@ -2,14 +2,20 @@
 
 /// 8-bit memory abstraction. The 8086 uses it as a 1 MiB flat image (20-bit
 /// addresses resolved by its segment unit); the 8085 and 8051 use it directly.
+///
+/// A contiguous range may be marked read-only (ROM). CPU store instructions go
+/// through `write`/`write16` and are silently ignored inside ROM; the loader
+/// and debug poke use `poke`/`poke16`/`load` which bypass the protection.
 #[derive(Clone)]
 pub struct Mem {
     pub data: Vec<u8>,
+    rom_base: usize,
+    rom_len: usize,
 }
 
 impl Mem {
     pub fn new(size: usize) -> Self {
-        Mem { data: vec![0u8; size] }
+        Mem { data: vec![0u8; size], rom_base: 0, rom_len: 0 }
     }
 
     #[inline]
@@ -17,10 +23,15 @@ impl Mem {
         self.data[addr & (self.data.len() - 1)]
     }
 
+    /// CPU store path: ignored inside the ROM range.
     #[inline]
     pub fn write(&mut self, addr: usize, val: u8) {
-        let len = self.data.len();
-        self.data[addr & (len - 1)] = val;
+        let m = self.data.len() - 1;
+        let i = addr & m;
+        if self.rom_len > 0 && i >= self.rom_base && i < self.rom_base.wrapping_add(self.rom_len) {
+            return;
+        }
+        self.data[i] = val;
     }
 
     #[inline]
@@ -34,10 +45,35 @@ impl Mem {
         self.write(addr + 1, (val >> 8) as u8);
     }
 
+    /// Unprotected store (loader / debug poke).
+    #[inline]
+    pub fn poke(&mut self, addr: usize, val: u8) {
+        let m = self.data.len() - 1;
+        self.data[addr & m] = val;
+    }
+
+    #[inline]
+    pub fn poke16(&mut self, addr: usize, val: u16) {
+        self.poke(addr, val as u8);
+        self.poke(addr + 1, (val >> 8) as u8);
+    }
+
+    /// Load an image, bypassing ROM protection (used by the program/ROM loader).
     pub fn load(&mut self, addr: usize, bytes: &[u8]) {
         for (i, b) in bytes.iter().enumerate() {
-            self.write(addr + i, *b);
+            self.poke(addr + i, *b);
         }
+    }
+
+    /// Mark `[base, base+len)` as read-only ROM (address is masked to the size).
+    pub fn set_rom(&mut self, base: usize, len: usize) {
+        let m = self.data.len() - 1;
+        self.rom_base = base & m;
+        self.rom_len = len;
+    }
+
+    pub fn rom_range(&self) -> (usize, usize) {
+        (self.rom_base, self.rom_len)
     }
 
     pub fn slice(&self, addr: usize, len: usize) -> Vec<u8> {

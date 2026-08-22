@@ -55,6 +55,15 @@ export class Emulator {
         return v1;
     }
     /**
+     * Total clock cycles executed (machine cycles / T-states). Drives the
+     * cycle-accurate timers (8086 PIT, 8051 timers, 8085 8155 timer).
+     * @returns {bigint}
+     */
+    cycles() {
+        const ret = wasm.emulator_cycles(this.__wbg_ptr);
+        return BigInt.asUintN(64, ret);
+    }
+    /**
      * @returns {string[]}
      */
     flags() {
@@ -129,6 +138,17 @@ export class Emulator {
         wasm.emulator_load(this.__wbg_ptr, ptr0, len0, origin);
     }
     /**
+     * Load a ROM image and mark its range read-only. 8051 routes to external
+     * code (XDATA) when EA is low.
+     * @param {Uint8Array} data
+     * @param {number} addr
+     */
+    load_rom(data, addr) {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.emulator_load_rom(this.__wbg_ptr, ptr0, len0, addr);
+    }
+    /**
      * @param {number} addr
      * @param {number} len
      * @returns {Uint8Array}
@@ -185,6 +205,15 @@ export class Emulator {
     pc() {
         const ret = wasm.emulator_pc(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * Current reload/count of an 8086 PIT channel (0..2). Other ISAs: 0.
+     * @param {number} n
+     * @returns {number}
+     */
+    pit_count(n) {
+        const ret = wasm.emulator_pit_count(this.__wbg_ptr, n);
+        return ret;
     }
     /**
      * Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
@@ -299,6 +328,13 @@ export class Emulator {
         }
     }
     /**
+     * 8051 EA pin: false => fetch code from external program memory (XDATA).
+     * @param {boolean} ea
+     */
+    set_ea(ea) {
+        wasm.emulator_set_ea(this.__wbg_ptr, ea);
+    }
+    /**
      * Set the program counter (entry point after load).
      * @param {number} addr
      */
@@ -306,11 +342,27 @@ export class Emulator {
         wasm.emulator_set_pc(this.__wbg_ptr, addr);
     }
     /**
+     * Mark `[base, base+len)` of main memory as read-only ROM (8086/8085).
+     * @param {number} base
+     * @param {number} len
+     */
+    set_rom_region(base, len) {
+        wasm.emulator_set_rom_region(this.__wbg_ptr, base, len);
+    }
+    /**
      * Set the 8085 SID (Serial Input Data) pin read by RIM (bit 7). 8085 only.
      * @param {boolean} v
      */
     set_sid(v) {
         wasm.emulator_set_sid(this.__wbg_ptr, v);
+    }
+    /**
+     * 8085: (re)configure the external SRAM chip window (default 8 KiB @ 0x9000).
+     * @param {number} base
+     * @param {number} len
+     */
+    set_sram(base, len) {
+        wasm.emulator_set_sram(this.__wbg_ptr, base, len);
     }
     /**
      * @returns {Uint8Array}

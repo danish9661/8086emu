@@ -41,6 +41,10 @@ pub struct Cpu8051 {
     /// 256 bytes of XDATA (address 0xFF00..0xFFFF -> port 0x00..0xFF).
     pub ports: [u8; 256],
     pub code: Mem,
+    /// EA pin: when true, code is fetched from the internal `code` image; when
+    /// false, code is fetched from external program memory (the XDATA space),
+    /// modelling an 8051 with external ROM and no internal code.
+    pub ea: bool,
     pub pc: u16,
     pub out: Output,
     pub halted: bool,
@@ -89,6 +93,7 @@ impl Cpu8051 {
             port_pins: [0; 4],
             ports: [0; 256],
             code: Mem::new(CODE_SIZE),
+            ea: true,
             pc: 0,
             out: Output::default(),
             halted: false,
@@ -251,9 +256,15 @@ impl Cpu8051 {
         self.write_direct(b, byte);
     }
 
+    /// Read a program-memory byte, honouring the EA pin (false => external
+    /// code fetched from XDATA).
+    #[inline] fn code_byte(&self, addr: usize) -> u8 {
+        if self.ea { self.code.read(addr) } else { self.xdata.read(addr) }
+    }
+
     #[inline] fn fetch8(&mut self) -> u8 {
         self.cur_len += 1;
-        let b = self.code.read(self.pc as usize);
+        let b = self.code_byte(self.pc as usize);
         self.pc = self.pc.wrapping_add(1);
         b
     }
@@ -445,7 +456,7 @@ impl Cpu8051 {
             0x93 => {
                 let a = self.acc() as u16;
                 let addr = self.dptr().wrapping_add(a);
-                let v = self.code.read(addr as usize);
+                let v = self.code_byte(addr as usize);
                 self.set_acc(v);
             }
             0x83 => {
@@ -453,7 +464,7 @@ impl Cpu8051 {
                 // opcode (advanced by the fetch), so just add A.
                 let a = self.acc() as u16;
                 let addr = self.pc.wrapping_add(a);
-                let v = self.code.read(addr as usize);
+                let v = self.code_byte(addr as usize);
                 self.set_acc(v);
             }
             0xE2 | 0xE3 => { let a = self.xdata_addr(self.ri(op & 1) as u32); let v = if a >= 0xFF00 { self.port_read((a & 0xFF) as u8) } else { self.xdata.read(a) }; self.set_acc(v); }
@@ -672,6 +683,21 @@ impl Cpu8051 {
         if addr < 0x80 { self.iram[addr as usize] } else { self.sfr[addr as usize - 0x80] }
     }
 
+    /// Set the EA pin. When false, code is fetched from external program memory
+    /// (the XDATA space) instead of the internal `code` image.
+    pub fn set_ea(&mut self, ea: bool) { self.ea = ea; }
+
+    /// Load a ROM image. With EA high it goes to the internal code image; with
+    /// EA low it goes to external program memory (XDATA) so the CPU fetches it
+    /// there.
+    pub fn load_rom(&mut self, data: &[u8], addr: u32) {
+        if self.ea {
+            self.code.load(addr as usize, data);
+        } else {
+            self.xdata.load(addr as usize, data);
+        }
+    }
+
     /// Check pending interrupt sources in natural priority order
     /// (INT0 > TF0 > INT1 > TF1 > serial) and vector if enabled and
     /// not blocked by an equal-or-higher in-service priority latch.
@@ -734,7 +760,7 @@ impl Cpu for Cpu8051 {
         if pcon & 0x02 != 0 { // PD (power-down): oscillator stopped, frozen
             return true; // only reset wakes it; not "halted"
         }
-        let op = self.code.read(self.pc as usize); // peek for machine-cycle count
+        let op = self.code_byte(self.pc as usize); // peek for machine-cycle count
         if pcon & 0x01 != 0 { // IDL (idle): CPU sleeps, peripherals keep running
             self.tick_timers_n(1);
             if !self.halted { self.service_interrupts(); } // an interrupt wakes it (clears IDL)
@@ -791,7 +817,7 @@ impl Cpu for Cpu8051 {
     }
 
     fn mem_read(&self, addr: u32, len: usize) -> Vec<u8> {
-        (0..len).map(|i| self.code.read(addr as usize + i)).collect()
+        (0..len).map(|i| self.code_byte(addr as usize + i)).collect()
     }
 
     fn mem_write(&mut self, addr: u32, data: &[u8]) {
@@ -801,8 +827,8 @@ impl Cpu for Cpu8051 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 256 + 2 + 8);
-        v.push(7);
+        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 256 + 2 + 8 + 1);
+        v.push(8);
         v.push(self.halted as u8);
         v.extend_from_slice(&self.pc.to_le_bytes());
         v.push(self.in_svc_low as u8);
@@ -818,6 +844,7 @@ impl Cpu for Cpu8051 {
         v.push(self.ext_int0_held as u8);
         v.push(self.ext_int1_held as u8);
         v.extend_from_slice(&self.cycles.to_le_bytes());
+        v.push(self.ea as u8);
         v
     }
 
@@ -856,13 +883,23 @@ impl Cpu for Cpu8051 {
         self.ext_int0_held = false;
         self.ext_int1_held = false;
         self.cycles = 0;
+        self.ea = true;
         let n = data.len();
         if data[0] >= 7 {
-            self.ext_int0_held = data[n - 10] != 0;
-            self.ext_int1_held = data[n - 9] != 0;
-            let mut cy = [0u8; 8];
-            cy.copy_from_slice(&data[n - 8..n]);
-            self.cycles = u64::from_le_bytes(cy);
+            if data[0] >= 8 && n >= 12 {
+                self.ext_int0_held = data[n - 11] != 0;
+                self.ext_int1_held = data[n - 10] != 0;
+                let mut cy = [0u8; 8];
+                cy.copy_from_slice(&data[n - 9..n - 1]);
+                self.cycles = u64::from_le_bytes(cy);
+                self.ea = data[n - 1] != 0;
+            } else if n >= 10 {
+                self.ext_int0_held = data[n - 10] != 0;
+                self.ext_int1_held = data[n - 9] != 0;
+                let mut cy = [0u8; 8];
+                cy.copy_from_slice(&data[n - 8..n]);
+                self.cycles = u64::from_le_bytes(cy);
+            }
         } else if data[0] >= 4 {
             self.ext_int0_held = data[n - 2] != 0;
             self.ext_int1_held = data[n - 1] != 0;

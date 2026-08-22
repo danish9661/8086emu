@@ -7,6 +7,8 @@ use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg};
 use crate::i8155::I8155;
 
 const MEM_SIZE: usize = 64 * 1024;
+/// Default external SRAM chip size (8 KiB, like an Intel 6264).
+const SRAM_SIZE: usize = 8 * 1024;
 
 /// Approximate 8085 T-state (clock-cycle) cost per instruction. The 8155 timer
 /// is clocked by these so its period tracks real time; 8085 T-states are
@@ -87,6 +89,12 @@ pub struct Cpu8085 {
     /// registers at I/O ports 0x80..0x85). Its 14-bit timer counts host
     /// clock cycles for cycle-accurate timing.
     pub i8155: I8155,
+    /// External SRAM chip (memory-mapped, e.g. an 8 KiB 6264 at 0x9000).
+    /// Its window is `[sram_base, sram_base + sram_len)` and is read/writable
+    /// by instructions; it is stored separately from the main 64 KiB RAM.
+    pub sram: Mem,
+    pub sram_base: u32,
+    pub sram_len: u32,
     /// Total host clock cycles (T-states) executed — drives the 8155 timer.
     pub cycles: u64,
 }
@@ -113,6 +121,9 @@ impl Cpu8085 {
             sid: false, sod: false,
             ports: [0; 256],
             i8155: I8155::new(),
+            sram: Mem::new(SRAM_SIZE),
+            sram_base: 0x9000,
+            sram_len: SRAM_SIZE as u32,
             cycles: 0,
         };
         c.reset();
@@ -120,6 +131,27 @@ impl Cpu8085 {
     }
 
     pub fn last_error(&self) -> Option<String> { self.fault.clone() }
+
+    /// Mark `[base, base+len)` of the main 64 KiB RAM as read-only ROM
+    /// (e.g. a monitor/BIOS image you load with `load_rom`).
+    pub fn set_rom_region(&mut self, base: u32, len: u32) {
+        self.mem.set_rom(base as usize, len as usize);
+    }
+
+    /// Load a ROM image at `addr` and mark that range read-only.
+    pub fn load_rom(&mut self, data: &[u8], addr: u32) {
+        self.mem.set_rom(addr as usize, data.len());
+        self.mem.load(addr as usize, data);
+    }
+
+    /// (Re)configure the external SRAM chip window (default 8 KiB at 0x9000).
+    pub fn set_sram(&mut self, base: u32, len: u32) {
+        let size = len.max(1) as usize;
+        let size = size.next_power_of_two().max(1);
+        self.sram = Mem::new(size);
+        self.sram_base = base;
+        self.sram_len = size as u32;
+    }
 
     #[inline] fn parity(&self, x: u8) -> bool { (x.count_ones() & 1) == 0 }
 
@@ -147,12 +179,36 @@ impl Cpu8085 {
         match r { 0 => self.b = v, 1 => self.c = v, 2 => self.d = v, 3 => self.e = v, 4 => self.h = v, 5 => self.l = v, _ => self.a = v }
     }
 
-    fn m(&self) -> u8 { self.mem.read(self.hl()) }
-    fn set_m(&mut self, v: u8) { self.mem.write(self.hl(), v); }
+    fn m(&self) -> u8 { self.rd(self.hl()) }
+    fn set_m(&mut self, v: u8) { self.wr(self.hl(), v) }
+
+    /// Unified memory read: routes 8155 RAM window, the external SRAM window,
+    /// and the main RAM (ROM-protected via `Mem`).
+    fn rd(&self, a: usize) -> u8 {
+        if (0x8000..=0x80FF).contains(&a) {
+            self.i8155.ram_read(a - 0x8000)
+        } else if (a as u32) >= self.sram_base && (a as u32) < self.sram_base + self.sram_len {
+            self.sram.read(a - self.sram_base as usize)
+        } else {
+            self.mem.read(a)
+        }
+    }
+
+    /// Unified memory write: same routing as `rd`, with ROM protection on the
+    /// main RAM enforced by `Mem::write`.
+    fn wr(&mut self, a: usize, v: u8) {
+        if (0x8000..=0x80FF).contains(&a) {
+            self.i8155.ram_write(a - 0x8000, v);
+        } else if (a as u32) >= self.sram_base && (a as u32) < self.sram_base + self.sram_len {
+            self.sram.write(a - self.sram_base as usize, v);
+        } else {
+            self.mem.write(a, v);
+        }
+    }
     #[inline] fn hl(&self) -> usize { ((self.h as usize) << 8) | self.l as usize }
 
     #[inline] fn fetch8(&mut self) -> u8 {
-        let b = self.mem.read(self.pc as usize);
+        let b = self.rd(self.pc as usize);
         self.pc = self.pc.wrapping_add(1);
         b
     }
@@ -164,12 +220,12 @@ impl Cpu8085 {
 
     fn push16(&mut self, v: u16) {
         self.sp = self.sp.wrapping_sub(2);
-        self.mem.write(self.sp as usize, v as u8);
-        self.mem.write(self.sp.wrapping_add(1) as usize, (v >> 8) as u8);
+        self.wr(self.sp as usize, v as u8);
+        self.wr(self.sp.wrapping_add(1) as usize, (v >> 8) as u8);
     }
     fn pop16(&mut self) -> u16 {
-        let lo = self.mem.read(self.sp as usize) as u16;
-        let hi = self.mem.read(self.sp.wrapping_add(1) as usize) as u16;
+        let lo = self.rd(self.sp as usize) as u16;
+        let hi = self.rd(self.sp.wrapping_add(1) as usize) as u16;
         self.sp = self.sp.wrapping_add(2);
         lo | hi << 8
     }
@@ -323,14 +379,14 @@ impl Cpu8085 {
                 self.cy = sum > 0xFFFF;
                 self.set_rp(2, sum as u16);
             }
-            0x0A => { self.a = self.mem.read(((self.b as usize) << 8) | self.c as usize); }
-            0x1A => { self.a = self.mem.read(((self.d as usize) << 8) | self.e as usize); }
-            0x02 => { self.mem.write(((self.b as usize) << 8) | self.c as usize, self.a); }
-            0x12 => { self.mem.write(((self.d as usize) << 8) | self.e as usize, self.a); }
-            0x2A => { let a = self.fetch16() as usize; self.l = self.mem.read(a); self.h = self.mem.read(a + 1); }
-            0x22 => { let a = self.fetch16() as usize; self.mem.write(a, self.l); self.mem.write(a + 1, self.h); }
-            0x3A => { let a = self.fetch16() as usize; self.a = self.mem.read(a); }
-            0x32 => { let a = self.fetch16() as usize; self.mem.write(a, self.a); }
+            0x0A => { self.a = self.rd(((self.b as u16) << 8 | self.c as u16) as usize); }
+            0x1A => { self.a = self.rd(((self.d as u16) << 8 | self.e as u16) as usize); }
+            0x02 => { self.wr(((self.b as u16) << 8 | self.c as u16) as usize, self.a); }
+            0x12 => { self.wr(((self.d as u16) << 8 | self.e as u16) as usize, self.a); }
+            0x2A => { let a = self.fetch16() as usize; self.l = self.rd(a); self.h = self.rd(a.wrapping_add(1)); }
+            0x22 => { let a = self.fetch16() as usize; self.wr(a, self.l); self.wr(a.wrapping_add(1), self.h); }
+            0x3A => { let a = self.fetch16() as usize; self.a = self.rd(a); }
+            0x32 => { let a = self.fetch16() as usize; self.wr(a, self.a); }
             0xEB => { std::mem::swap(&mut self.h, &mut self.d); std::mem::swap(&mut self.l, &mut self.e); }
             // ALU
             0x80..=0xBF => {
@@ -529,7 +585,7 @@ impl Cpu for Cpu8085 {
 
     fn step(&mut self) -> bool {
         if self.halted { return false; }
-        let op = self.mem.read(self.pc as usize);
+        let op = self.rd(self.pc as usize);
         self.exec();
         if !self.halted {
             let ts = i8085_tstates(op);
@@ -567,30 +623,18 @@ impl Cpu for Cpu8085 {
     }
 
     fn mem_read(&self, addr: u32, len: usize) -> Vec<u8> {
-        (0..len).map(|i| {
-            let a = addr as usize + i;
-            if (0x8000..=0x80FF).contains(&a) {
-                self.i8155.ram_read(a - 0x8000)
-            } else {
-                self.mem.read(a)
-            }
-        }).collect()
+        (0..len).map(|i| self.rd((addr + i as u32) as usize)).collect()
     }
 
     fn mem_write(&mut self, addr: u32, data: &[u8]) {
         for (i, b) in data.iter().enumerate() {
-            let a = addr as usize + i;
-            if (0x8000..=0x80FF).contains(&a) {
-                self.i8155.ram_write(a - 0x8000, *b);
-            } else {
-                self.mem.write(a, *b);
-            }
+            self.wr((addr + i as u32) as usize, *b);
         }
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(16 + MEM_SIZE + 256 + 267 + 8);
-        v.push(3);
+        let mut v = Vec::with_capacity(16 + MEM_SIZE + 256 + 267 + 8 + SRAM_SIZE + 16);
+        v.push(4);
         v.extend_from_slice(&[self.a, self.b, self.c, self.d, self.e, self.h, self.l]);
         v.extend_from_slice(&self.sp.to_le_bytes());
         v.extend_from_slice(&self.pc.to_le_bytes());
@@ -613,6 +657,12 @@ impl Cpu for Cpu8085 {
         v.extend_from_slice(&self.ports);
         v.extend_from_slice(&self.i8155.snapshot());
         v.extend_from_slice(&self.cycles.to_le_bytes());
+        v.extend_from_slice(&self.sram.data);
+        v.extend_from_slice(&self.sram_base.to_le_bytes());
+        v.extend_from_slice(&self.sram_len.to_le_bytes());
+        let (rb, rl) = self.mem.rom_range();
+        v.extend_from_slice(&(rb as u32).to_le_bytes());
+        v.extend_from_slice(&(rl as u32).to_le_bytes());
         v
     }
 
@@ -650,10 +700,23 @@ impl Cpu for Cpu8085 {
         }
         if ver >= 3 {
             let n = data.len();
-            self.i8155.restore(&data[n - 275..n - 8]);
+            let appended = if ver >= 4 { SRAM_SIZE + 16 } else { 0 };
+            let v3end = n - appended;
+            self.i8155.restore(&data[v3end - 275..v3end - 8]);
             let mut cy = [0u8; 8];
-            cy.copy_from_slice(&data[n - 8..n]);
+            cy.copy_from_slice(&data[v3end - 8..v3end]);
             self.cycles = u64::from_le_bytes(cy);
+            if ver >= 4 && data.len() >= appended {
+                let sram_data = &data[n - appended..n - 16];
+                self.sram = Mem::new(SRAM_SIZE);
+                let m = sram_data.len().min(SRAM_SIZE);
+                self.sram.data[..m].copy_from_slice(&sram_data[..m]);
+                self.sram_base = u32::from_le_bytes([data[n - 16], data[n - 15], data[n - 14], data[n - 13]]);
+                self.sram_len = u32::from_le_bytes([data[n - 12], data[n - 11], data[n - 10], data[n - 9]]);
+                let rb = u32::from_le_bytes([data[n - 8], data[n - 7], data[n - 6], data[n - 5]]);
+                let rl = u32::from_le_bytes([data[n - 4], data[n - 3], data[n - 2], data[n - 1]]);
+                self.mem.set_rom(rb as usize, rl as usize);
+            }
         }
     }
 

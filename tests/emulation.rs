@@ -1933,3 +1933,61 @@ END\n";
     assert_eq!(emu.port_read(0x84), 0, "8155 timer must count down to 0");
     assert_eq!(emu.port_read(0x80) & 0x80, 0, "8155 timer must stop after single pulse");
 }
+
+#[test]
+fn rom_write_protected_8086() {
+    // A ROM image loaded at 0xF0000 must be read-only: CPU store instructions
+    // are silently ignored inside the ROM window, even though debug pokes work.
+    let mut emu = make_emulator("8086").unwrap();
+    emu.load_rom(&[0xAA], 0xF0000); // also marks [0xF0000, +1) read-only
+    let src = "MOV AX, 1234h\nMOV [0F0000h], AX\nHLT\nEND\n";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0x100, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    // Both bytes of the attempted write are dropped; ROM keeps its image.
+    assert_eq!(emu.mem_read(0xF0000, 1)[0], 0xAA, "ROM byte must be unchanged");
+    assert_eq!(emu.mem_read(0xF0001, 1)[0], 0, "ROM byte must be unchanged");
+}
+
+#[test]
+fn rom_write_protected_8085() {
+    let mut emu = make_emulator("8085").unwrap();
+    emu.set_rom_region(0x0000, 0x8000);
+    emu.load_rom(&[0xBB], 0x0000); // poke writes the ROM image
+    let src = "ORG 9000h\nMVI A, 34h\nSTA 0000h\nHLT\nEND\n";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0x9000, &code);
+    emu.set_pc(0x9000);
+    emu.run(100);
+    assert_eq!(emu.mem_read(0, 1)[0], 0xBB, "8085 ROM must reject stores");
+}
+
+#[test]
+fn ext_sram_8085() {
+    // The external 8 KiB SRAM at 0x9000 is memory-mapped and reachable by
+    // ordinary STA/LDA (routed through the unified store path).
+    let mut emu = make_emulator("8085").unwrap();
+    let src = "ORG 0000h\nMVI A, 55h\nSTA 9000h\nLDA 9000h\nHLT\nEND\n";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(emu.mem_read(0x9000, 1)[0], 0x55, "external SRAM must store STA");
+    assert_eq!(emu.regs().iter().find(|r| r.name == "A").unwrap().value, 0x55, "LDA must read SRAM back");
+}
+
+#[test]
+fn ext_code_8051_ea() {
+    // With EA low, code is fetched from external program memory (XDATA). Load a
+    // program there and confirm it executes (emits 'A' to SBUF -> Output).
+    let mut emu = make_emulator("8051").unwrap();
+    emu.set_ea(false);
+    let src = "ORG 0\nMOV A, #41h\nMOV SBUF, A\nSJMP $\nEND\n";
+    let code = emu.assemble(src).unwrap();
+    emu.load_rom(&code, 0); // EA low -> written to XDATA (external ROM)
+    emu.set_pc(0);
+    emu.run(200);
+    assert!(emu.take_output().contains('A'), "8051 must fetch+run external code (EA=0)");
+}
+

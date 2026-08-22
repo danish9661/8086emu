@@ -81,6 +81,14 @@
         <div id="memview"></div>
       </div>
       <div class="panel">
+        <h2>Memory map</h2>
+        <div id="memmap" class="mono"></div>
+        <div id="romload">
+          <label>ROM @ <input id="romaddr" value="0" spellcheck="false" size="6" title="ROM load address (hex)"></label>
+          <button id="romBtn" title="Load a ROM/firmware image (marked read-only)">Load ROM…</button>
+        </div>
+      </div>
+      <div class="panel">
         <h2>I/O Ports <span class="hint"><button id="portsClearBtn">Clear</button></span></h2>
         <div id="ports"></div>
       </div>
