@@ -343,6 +343,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                 }
             }
             Stmt::Dw(items) => addr += items.len() as u32 * 2,
+            Stmt::Dd(items) => addr += items.len() as u32 * 4,
             Stmt::Dq(items) => addr += items.len() as u32 * 8,
             Stmt::Instr { mnemonic, ops } => {
                 match enc(mnemonic, ops, &syms, addr, origin) {
@@ -394,6 +395,16 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                 for it in items {
                     match parse_expr(it, &syms2, addr, origin) {
                         Ok(v) => { code.extend_from_slice(&(v as u16).to_be_bytes()); addr += 2; }
+                        Err(e) => errs.push(AsmErr::new(*ln, e)),
+                    }
+                }
+                info.push(LineInfo { line: *ln as u32, addr: start, bytes: code[start as usize..addr as usize].to_vec() });
+            }
+            Stmt::Dd(items) => {
+                let start = addr;
+                for it in items {
+                    match parse_expr(it, &syms2, addr, origin) {
+                        Ok(v) => { code.extend_from_slice(&(v as u32).to_be_bytes()); addr += 4; }
                         Err(e) => errs.push(AsmErr::new(*ln, e)),
                     }
                 }

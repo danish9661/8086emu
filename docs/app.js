@@ -144,6 +144,36 @@ done:
 INT 21h
 END
 `,
+     },
+     {
+      name: 'Graphics (INT 10h mode 13h)',
+      src: `; Mode 13h: 320x200, 256 colours. Plot a diagonal line + boxes.
+ORG 100h
+     MOV AX, 0013h
+     INT 10h          ; set graphics mode
+     MOV CX, 0        ; x
+loop:
+     MOV DX, CX       ; y = x  (diagonal)
+     MOV AL, 14       ; colour (yellow)
+     MOV AH, 0Ch
+     INT 10h          ; write pixel (CX,DX)
+     INC CX
+     CMP CX, 200
+     JB loop
+     ; draw a coloured bar across the top
+     MOV CX, 0
+bar:
+     MOV DX, 10
+     MOV AL, CL
+     MOV AH, 0Ch
+     INT 10h
+     INC CX
+     CMP CX, 320
+     JB bar
+     MOV AX, 4C00h
+     INT 21h
+END
+`,
     },
     {
       name: 'Peripherals demo (ports 10h-27h)',
@@ -391,12 +421,118 @@ END
 `,
     },
   ],
+  'rv32': [
+    {
+      name: 'Hello (ECALL write)',
+      src: `; RV32I base ISA. Print "Hi\\n" via the tiny ECALL ABI
+; (a7 = 64 write fd/a1/a2, a7 = 93 exit), then halt.
+ORG 0
+    ADDI a1, x0, 0x100   ; pointer to message
+    ADDI a2, x0, 3       ; length
+    ADDI a7, x0, 64      ; syscall: write
+    ECALL
+    ADDI a7, x0, 93      ; syscall: exit
+    ECALL
+ORG 0x100
+    DB 'H','i',10
+END
+`,
+    },
+    {
+      name: 'Arithmetic loop',
+      src: `; Sum 1..10 into x3 using a BLT loop.
+ORG 0
+    ADDI x1, x0, 0       ; i = 0
+    ADDI x2, x0, 10      ; limit
+    ADDI x3, x0, 0       ; sum = 0
+loop:
+    ADDI x1, x1, 1       ; i++
+    ADD  x3, x3, x1      ; sum += i
+    BLT  x1, x2, loop
+END
+`,
+    },
+  ],
+  '6502': [
+    {
+      name: 'Hello (STA $01)',
+      src: `; MOS 6502. Print "Hi\\n" by writing each char to I/O port $01
+; (the IDE maps STA $01 to the output console), then BRK.
+ORG 0
+    LDX #0
+loop:
+    LDA msg,X
+    BEQ done
+    STA $01
+    INX
+    JMP loop
+done:
+    BRK
+msg: DB 'H','i',10,0
+END
+`,
+    },
+    {
+      name: 'Sum 1..10',
+      src: `; Sum 1..10 into $20 (zero page), using X as the counter.
+ORG 0
+    LDX #0
+    LDA #0
+loop:
+    INX
+    STX $21       ; temp = i
+    CLC
+    ADC $21       ; A = A + i
+    CPX #10
+    BNE loop
+        STA $20
+        BRK
+    END
+    `,
+    },
+  ],
+  'Z80': [
+    {
+      name: 'Hello (OUT (1),A)',
+      src: `; Zilog Z80. Print "Hi\\n" by OUT to port 1 (mapped to console), then HALT.
+ORG 0
+    LD A, 'H'
+    OUT (1), A
+    LD A, 'i'
+    OUT (1), A
+    LD A, 10
+    OUT (1), A
+    HALT
+END
+`,
+    },
+    {
+      name: 'Sum 1..10',
+      src: `; Sum 1..10 into $20 using B as counter and C as the running value.
+ORG 0
+    LD B, 10
+    LD A, 0
+    LD C, 0
+loop:
+    INC C
+    ADD A, C
+    DEC B
+    JP NZ, loop
+    LD ($20), A
+    HALT
+END
+`,
+    },
+  ],
 };
 
   const ISA_DEFAULTS = {
     '8086': EXAMPLES['8086'][0].src,
     '8085': EXAMPLES['8085'][0].src,
     '8051': EXAMPLES['8051'][0].src,
+    'rv32': EXAMPLES['rv32'][0].src,
+    '6502': EXAMPLES['6502'][0].src,
+    'Z80': EXAMPLES['Z80'][0].src,
   };
   const ISA_LIST = Object.keys(ISA_DEFAULTS);
 
@@ -407,12 +543,18 @@ const ISA_INFO = {
   }, memBase: (pc) => pc },
   '8085': { origin: 0, entry: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
   '8051': { origin: 0, entry: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
+  'rv32': { origin: 0, entry: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
+  '6502': { origin: 0, entry: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
+  'Z80': { origin: 0, entry: 0, pcLabel: (pc) => pc.toString(16).toUpperCase(), memBase: (pc) => pc },
 };
 
 const FLAG_MAP = {
   '8086': [['carry','CF'],['zero','ZF'],['sign','SF'],['parity','PF'],['aux','AF'],['overflow','OF'],['direction','DF'],['interrupt','IF'],['trap','TF']],
   '8085': [['carry','CY'],['zero','Z'],['sign','S'],['parity','P'],['aux','AC'],['interrupt','IE']],
   '8051': [['carry','CY'],['aux','AC'],['overflow','OV'],['parity','P']],
+  'rv32': [],
+  '6502': [['carry','C'],['zero','Z'],['interrupt','I'],['decimal','D'],['overflow','V'],['sign','N']],
+  'Z80': [['carry','CF'],['zero','ZF'],['sign','SF'],['half','AF'],['parity','PF'],['interrupt','IF']],
 };
 
 function val(regs, name) {
@@ -462,6 +604,9 @@ const WATCH_REGS = {
   '8086': ['AX','BX','CX','DX','AH','AL','BH','BL','CH','CL','DH','DL','SI','DI','BP','SP','CS','DS','ES','SS','FS','GS','IP','FLAGS'],
   '8085': ['A','B','C','D','E','H','L','SP','PC','PSW'],
   '8051': ['A','B','DPTR','SP','PC','PSW','BANK','R0','R1','R2','R3','R4','R5','R6','R7'],
+  'rv32': ['x0','x1','x2','x3','x4','x5','x6','x7','x8','x9','x10','x11','x12','x13','x14','x15','x16','x17','x18','x19','x20','x21','x22','x23','x24','x25','x26','x27','x28','x29','x30','x31','pc'],
+  '6502': ['A','X','Y','PC','SP','P'],
+  'Z80': ['A','F','B','C','D','E','H','L','IX','IY','SP','PC','I','R'],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -568,6 +713,7 @@ function refresh() {
 
   // --- text screen (8086 INT 10h / 0xB8000) ---
   renderScreen();
+  renderGfx();
 
   // --- peripherals (ports 10h..27h) ---
   renderDevices(emu, isa);
@@ -611,10 +757,37 @@ function renderScreen() {
     }
     html += line + '\n';
   }
-  box.innerHTML = html;
+   box.innerHTML = html;
 }
 
-function renderPorts() {
+// Standard VGA 256-colour palette (mode 13h)
+const VGA_PAL = (function () {
+  const p = [];
+  const base16 = [[0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],[85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]];
+  for (let i = 0; i < 16; i++) p[i] = base16[i];
+  let n = 16;
+  for (let r = 0; r < 6; r++) for (let g = 0; g < 6; g++) for (let b = 0; b < 6; b++) p[n++] = [r * 51, g * 51, b * 51];
+  for (let i = 0; i < 24; i++) { const v = 8 + i * 10; p[232 + i] = [v, v, v]; }
+  return p;
+})();
+
+function renderGfx() {
+  const panel = $('gfxPanel');
+  const cv = $('gfx');
+  if (!panel || !cv) return;
+  const info = emu.gfx();
+  if (!info || isa !== '8086') { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  const w = info.w, h = info.h;
+  const data = new Uint8Array(emu.mem(info.base, w * h));
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    const c = VGA_PAL[data[i]] || [0, 0, 0];
+    img.data[i * 4] = c[0]; img.data[i * 4 + 1] = c[1]; img.data[i * 4 + 2] = c[2]; img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
   const box = $('ports');
   if (isa === '8051') {
     box.innerHTML = ['P0', 'P1', 'P2', 'P3'].map((n, i) =>
@@ -1004,11 +1177,16 @@ const ISA_MNEM = {
   8086: ['MOV','ADD','ADC','SUB','SBB','AND','OR','XOR','CMP','INC','DEC','MUL','IMUL','DIV','IDIV','NOT','NEG','TEST','XCHG','LEA','PUSH','POP','PUSHA','POPA','CALL','RET','RETF','JMP','JE','JZ','JNE','JNZ','JC','JB','JNC','JNB','JA','JAE','JBE','JG','JGE','JL','JLE','JO','JNO','JS','JNS','JP','JPE','JNP','JPO','LOOP','LOOPZ','LOOPNZ','JCXZ','INT','IRET','INT3','INTO','CLC','STC','CMC','CLI','STI','CLD','STD','NOP','HLT','SHL','SHR','SAL','SAR','ROL','ROR','RCL','RCR','CBW','CWD','DAA','DAS','AAA','AAS','AAM','AAD','LAHF','SAHF','MOVS','LODS','STOS','CMPS','SCAS','IN','OUT'],
   8085: ['MOV','MVI','LXI','LDA','STA','LHLD','SHLD','LDAX','STAX','XCHG','ADD','ADC','SUB','SBB','ANA','XRA','ORA','CMP','ADI','ACI','SUI','SBI','ANI','XRI','ORI','CPI','INR','DCR','INX','DCX','DAD','RLC','RRC','RAL','RAR','CMA','CMC','STC','DAA','JMP','JZ','JNZ','JC','JNC','JP','JM','JPE','JPO','CALL','CC','CNC','CZ','CNZ','CP','CM','CPE','CPO','RET','RNZ','RZ','RNC','RP','RM','RPE','RPO','RST','PUSH','POP','XTHL','SPHL','PCHL','EI','DI','SIM','RIM','IN','OUT','NOP','HLT'],
   8051: ['MOV','MOVC','MOVX','PUSH','POP','XCH','XCHD','SWAP','ADD','ADDC','SUBB','INC','DEC','MUL','DIV','DA','ANL','ORL','XRL','CLR','CPL','RL','RR','RLC','RRC','SETB','SJMP','AJMP','LJMP','JZ','JNZ','JC','JNC','JB','JNB','JBC','CJNE','DJNZ','ACALL','LCALL','RET','RETI','NOP'],
+  rv32: ['LUI','AUIPC','JAL','JALR','BEQ','BNE','BLT','BGE','BLTU','BGEU','LB','LH','LW','LBU','LHU','SB','SH','SW','ADDI','SLTI','SLTIU','XORI','ORI','ANDI','SLLI','SRLI','SRAI','ADD','SUB','SLL','SLT','SLTU','XOR','SRL','SRA','OR','AND','FENCE','ECALL','EBREAK'],
+  '6502': ['LDA','LDX','LDY','STA','STX','STY','ADC','SBC','INC','DEC','AND','ORA','EOR','ASL','LSR','ROL','ROR','CMP','CPX','CPY','BIT','JMP','JSR','RTS','RTI','BCC','BCS','BEQ','BNE','BMI','BPL','BVC','BVS','CLC','SEC','CLI','SEI','CLV','CLD','SED','TAX','TAY','TSX','TXA','TXS','TYA','DEX','DEY','INX','INY','PHA','PHP','PLA','PLP','BRK','NOP'],
+  'Z80': ['LD','LDIR','LDI','LDD','PUSH','POP','ADD','ADC','SUB','SBC','AND','OR','XOR','CP','INC','DEC','RLCA','RRCA','RLA','RRA','RLC','RRC','RL','RR','SLA','SRA','SRL','EX','EXX','JP','JR','CALL','RET','DJNZ','NOP','HALT','DI','EI','CPL','SCF','CCF','DAA','BIT','RES','SET','IN','OUT','RST','NZ','Z','NC','C','PO','PE','P','M'],
 };
 const REG_WORDS = {
   8086: ['AX','BX','CX','DX','AH','AL','BH','BL','CH','CL','DH','DL','SI','DI','BP','SP','CS','DS','ES','SS','IP','FLAGS'],
   8085: ['A','B','C','D','E','H','L','PSW','SP','PC'],
   8051: ['A','B','R0','R1','R2','R3','R4','R5','R6','R7','DPTR','PSW','SP','PC','ACC','DPH','DPL'],
+  rv32: ['x0','x1','x2','x3','x4','x5','x6','x7','x8','x9','x10','x11','x12','x13','x14','x15','x16','x17','x18','x19','x20','x21','x22','x23','x24','x25','x26','x27','x28','x29','x30','x31','pc'],
+  'Z80': ['A','F','B','C','D','E','H','L','AF','BC','DE','HL','IX','IY','SP','PC','I','R'],
 };
 const DESC = {
   MOV:'Move data', ADD:'Add', ADC:'Add with carry', SUB:'Subtract', SBB:'Subtract with borrow',

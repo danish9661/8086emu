@@ -33,6 +33,7 @@ pub enum Stmt {
     Org(u32),
     Db(Vec<String>),
     Dw(Vec<String>),
+    Dd(Vec<String>),
     Dq(Vec<String>),
     Equ(String, String),
     End,
@@ -94,6 +95,9 @@ pub fn parse_number(s: &str) -> Option<u32> {
     if s.starts_with('\'') && s.ends_with('\'') && s.len() == 3 {
         return Some(s.chars().nth(1)? as u32);
     }
+    if let Some(hex) = s.strip_prefix('$') {
+        return u32::from_str_radix(hex, 16).ok();
+    }
     if let Some(hex) = s.strip_prefix("0X") {
         return u32::from_str_radix(hex, 16).ok();
     }
@@ -120,7 +124,14 @@ fn parse_term(t: &str, syms: &HashMap<String, u32>, cur: u32, origin: u32) -> Re
 
 /// Evaluate `a+b-c` style expressions with labels, `$` and `$$`.
 pub fn parse_expr(s: &str, syms: &HashMap<String, u32>, cur: u32, origin: u32) -> Result<u32, String> {
-    let s = s.trim();
+    let st = s.trim();
+    // Allow a leading sign (e.g. "-1") by prefixing an explicit zero.
+    let owned = if st.starts_with('+') || st.starts_with('-') {
+        format!("0{st}")
+    } else {
+        st.to_string()
+    };
+    let s = owned.as_str();
     if s.is_empty() { return Err("empty expression".into()); }
     let mut value = 0u32;
     let mut op = '+';
@@ -202,13 +213,14 @@ if let Some(v) = parse_number(o) {
                     errs.push(AsmErr::new(ln, "ORG needs an address"));
                 }
             }
-            "DB" | "DW" | "DQ" => {
+            "DB" | "DW" | "DD" | "DQ" => {
                 if let Some(l) = pending_label.take() {
                     stmts.push((ln, Stmt::Equ(l, "$".to_string())));
                 }
                 let items = split_data_items(&ops.join(","));
                 if mnem == "DB" { stmts.push((ln, Stmt::Db(items))); }
                 else if mnem == "DW" { stmts.push((ln, Stmt::Dw(items))); }
+                else if mnem == "DD" { stmts.push((ln, Stmt::Dd(items))); }
                 else { stmts.push((ln, Stmt::Dq(items))); }
             }
             "EQU" => {

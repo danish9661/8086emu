@@ -10,6 +10,15 @@ fn to_js<T>(r: Result<T, String>) -> Result<T, JsValue> {
     r.map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Graphics framebuffer descriptor (8086 pixel modes). `base` is the linear
+/// memory address of the pixel data; `w`/`h` are the dimensions in pixels.
+#[wasm_bindgen]
+pub struct GfxInfo {
+    pub base: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
 #[wasm_bindgen]
 pub struct Emulator {
     inner: Core,
@@ -108,6 +117,11 @@ impl Emulator {
         if f.interrupt { v.push("IF".to_string()); }
         if f.trap { v.push("TF".to_string()); }
         v
+    }
+
+    /// 8086 graphics framebuffer, or None when in a text mode / non-8086 ISA.
+    pub fn gfx(&self) -> Option<GfxInfo> {
+        self.inner.gfx_framebuffer().map(|(b, w, h)| GfxInfo { base: b, w, h })
     }
 
     pub fn mem(&self, addr: u32, len: u32) -> Vec<u8> {

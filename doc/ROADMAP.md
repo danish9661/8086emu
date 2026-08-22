@@ -14,6 +14,10 @@ Planned and in-progress work, tracked against the reference
 - [x] I/O ports / peripheral register inspection
 - [x] Keyboard shortcuts (F4/F5/F7/F8/F10/Esc), run-to-cursor
 - [x] 8086 `INT 16h` keyboard + `INT 21h AH=0A` line input + broader `INT 10h`
+- [x] 8086 graphics `INT 10h` mode 13h (framebuffer + pixel I/O + IDE canvas)
+- [x] x87 FPU execution subset (D8–DF escapes: add/mul/sub/div, load/store, compare,
+      constants, stack ops, FILD/FIST; transcendentals FSQRT/FSIN/FCOS/FRNDINT/FSCALE/
+      FSINCOS/FPREM/FYL2XP1) + assembler `DD` and FPU mnemonics
 - [x] 8051 disassembler external-ROM (EA=0) fix
 - [x] `set_reg` test coverage
 - [x] Conditional breakpoints + memory-diff highlight

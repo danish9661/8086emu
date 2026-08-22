@@ -44,6 +44,10 @@ export class Emulator {
      * Preload a file into the 8086 DOS virtual filesystem.
      */
     fs_put(name: string, data: Uint8Array): void;
+    /**
+     * 8086 graphics framebuffer, or None when in a text mode / non-8086 ISA.
+     */
+    gfx(): GfxInfo | undefined;
     halted(): boolean;
     /**
      * Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
@@ -169,11 +173,31 @@ export class Emulator {
     waiting_input(): boolean;
 }
 
+/**
+ * Graphics framebuffer descriptor (8086 pixel modes). `base` is the linear
+ * memory address of the pixel data; `w`/`h` are the dimensions in pixels.
+ */
+export class GfxInfo {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    base: number;
+    h: number;
+    w: number;
+}
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_emulator_free: (a: number, b: number) => void;
+    readonly __wbg_get_gfxinfo_base: (a: number) => number;
+    readonly __wbg_get_gfxinfo_h: (a: number) => number;
+    readonly __wbg_get_gfxinfo_w: (a: number) => number;
+    readonly __wbg_gfxinfo_free: (a: number, b: number) => void;
+    readonly __wbg_set_gfxinfo_base: (a: number, b: number) => void;
+    readonly __wbg_set_gfxinfo_h: (a: number, b: number) => void;
+    readonly __wbg_set_gfxinfo_w: (a: number, b: number) => void;
     readonly emulator_assemble: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_cursor: (a: number) => [number, number];
@@ -184,6 +208,7 @@ export interface InitOutput {
     readonly emulator_flags: (a: number) => [number, number];
     readonly emulator_fs_get: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_fs_put: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+    readonly emulator_gfx: (a: number) => number;
     readonly emulator_halted: (a: number) => number;
     readonly emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];
     readonly emulator_load: (a: number, b: number, c: number, d: number) => void;

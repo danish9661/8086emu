@@ -2,6 +2,13 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_emulator_free: (a: number, b: number) => void;
+export const __wbg_get_gfxinfo_base: (a: number) => number;
+export const __wbg_get_gfxinfo_h: (a: number) => number;
+export const __wbg_get_gfxinfo_w: (a: number) => number;
+export const __wbg_gfxinfo_free: (a: number, b: number) => void;
+export const __wbg_set_gfxinfo_base: (a: number, b: number) => void;
+export const __wbg_set_gfxinfo_h: (a: number, b: number) => void;
+export const __wbg_set_gfxinfo_w: (a: number, b: number) => void;
 export const emulator_assemble: (a: number, b: number, c: number) => [number, number, number, number];
 export const emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
 export const emulator_cursor: (a: number) => [number, number];
@@ -12,6 +19,7 @@ export const emulator_ext_code_region: (a: number) => [number, number];
 export const emulator_flags: (a: number) => [number, number];
 export const emulator_fs_get: (a: number, b: number, c: number) => [number, number, number, number];
 export const emulator_fs_put: (a: number, b: number, c: number, d: number, e: number) => [number, number];
+export const emulator_gfx: (a: number) => number;
 export const emulator_halted: (a: number) => number;
 export const emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];
 export const emulator_load: (a: number, b: number, c: number, d: number) => void;

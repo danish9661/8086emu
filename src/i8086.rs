@@ -128,6 +128,7 @@ pub struct Cpu8086 {
     // text-mode screen state (framebuffer itself lives at 0xB8000 in `mem`)
     cursor: (u8, u8), // (col, row); 80x25 colour text
     video_mode: u8,
+    gfx: bool,        // true when in a pixel graphics mode (framebuffer at 0xA0000)
     // 8253 PIT (system timer): channel 0 pulses IRQ0
     pit: Pit8253,
     // 8259 PIC: routes IRQ lines (incl. PIT channel 0) to the INTR pin
@@ -208,6 +209,7 @@ impl Cpu8086 {
             dos: DosFs::new(),
             cursor: (0, 0),
             video_mode: 3,
+            gfx: false,
             pit: Pit8253::new(),
             pic: Pic8259::new(),
             cycles: 0,
@@ -222,6 +224,11 @@ impl Cpu8086 {
     /// character/attribute framebuffer itself lives at linear 0xB8000.
     pub fn text_cursor(&self) -> (u8, u8) { self.cursor }
     pub fn video_mode(&self) -> u8 { self.video_mode }
+    /// Returns the linear graphics framebuffer (base, width, height) when the
+    /// CPU is in a pixel graphics mode, else None. The IDE renders it to canvas.
+    pub fn gfx_framebuffer(&self) -> Option<(u32, u32, u32)> {
+        if self.gfx { Some((Self::GFX_BASE as u32, Self::GFX_W as u32, Self::GFX_H as u32)) } else { None }
+    }
     /// Total host clock cycles executed (drives the 8253 PIT; CPU_HZ_8086).
     pub fn cycles(&self) -> u64 { self.cycles }
     /// 8253 channel reload counts (0 => 65536) for inspection/debug.
@@ -620,6 +627,10 @@ impl Cpu8086 {
     const VRAM: usize = 0xB8000;
     const COLS: usize = 80;
     const ROWS: usize = 25;
+    // ----- graphics framebuffer (mode 13h: 320x200, 256 colours at 0xA0000) -----
+    const GFX_BASE: usize = 0xA0000;
+    const GFX_W: usize = 320;
+    const GFX_H: usize = 200;
 
     fn mem_clear_text(&mut self) {
         for a in Self::VRAM..Self::VRAM + Self::COLS * Self::ROWS * 2 {
@@ -763,8 +774,18 @@ impl Cpu8086 {
             (0x16, 0x02) | (0x16, 0x12) => { self.set_al(0); } // shift-state flags
             // ----- BIOS INT 10h (text-mode services) -----
             (0x10, 0x00) => { // set video mode: clear screen, home cursor
-                self.video_mode = self.al();
-                self.mem_clear_text();
+                let mode = self.al();
+                self.video_mode = mode;
+                // mode 13h = 320x200 256-colour graphics; other common modes are text
+                if mode == 0x13 {
+                    self.gfx = true;
+                    for a in Self::GFX_BASE..Self::GFX_BASE + Self::GFX_W * Self::GFX_H {
+                        self.mem.write(a, 0);
+                    }
+                } else {
+                    self.gfx = false;
+                    self.mem_clear_text();
+                }
                 self.cursor = (0, 0);
             }
             (0x10, 0x01) => { /* set cursor shape: no-op for framebuffer */ }
@@ -821,6 +842,25 @@ impl Cpu8086 {
                     row = Self::ROWS as u8 - 1; col = 0;
                 }
                 self.cursor = (col, row);
+            }
+            (0x10, 0x0C) => { // write graphics pixel: CX=x, DX=y, AL=colour
+                if self.gfx {
+                    let x = self.cx as usize;
+                    let y = self.dx as usize;
+                    if x < Self::GFX_W && y < Self::GFX_H {
+                        self.mem.write(Self::GFX_BASE + y * Self::GFX_W + x, self.al());
+                    }
+                }
+            }
+            (0x10, 0x0D) => { // read graphics pixel: CX=x, DX=y -> AL
+                if self.gfx {
+                    let x = self.cx as usize;
+                    let y = self.dx as usize;
+                    let v = if x < Self::GFX_W && y < Self::GFX_H {
+                        self.mem.read(Self::GFX_BASE + y * Self::GFX_W + x)
+                    } else { 0 };
+                    self.set_al(v);
+                }
             }
             (0x10, 0x0E) => { // TTY write: char at cursor, advance, scroll at bottom
                 self.out.put_char(self.al() as char);
@@ -1596,6 +1636,17 @@ impl Cpu8086 {
                             6 => self.fpu_push(0.0),          // FLDZ
                             _ => self.fpu_push(f64::INFINITY), // FLDINF
                         },
+                        7 => match rm { // transcendentals (D9 F0..FF)
+                            0 => { let q = (self.fst(0) / self.fst(1)).round(); self.set_fst(0, self.fst(0) - self.fst(1) * q); } // FPREM
+                            1 => { let st1 = self.fst(1); let r = st1 * (self.fst(0) + 1.0).log2(); self.set_fst(0, r); self.fpu_pop(); } // FYL2XP1
+                            2 => self.set_fst(0, self.fst(0).sqrt()), // FSQRT
+                            3 => { let c = self.fst(0).cos(); let s = self.fst(0).sin(); self.fpu_push(s); self.set_fst(0, c); } // FSINCOS
+                            4 => self.set_fst(0, self.fst(0).round()), // FRNDINT
+                            5 => self.set_fst(0, self.fst(0) * 2f64.powi(self.fst(1).trunc() as i32)), // FSCALE
+                            6 => self.set_fst(0, self.fst(0).sin()), // FSIN
+                            7 => self.set_fst(0, self.fst(0).cos()), // FCOS
+                            _ => {}
+                        },
                         _ => {}
                     }
                 } else {
@@ -1653,15 +1704,16 @@ impl Cpu8086 {
                 if m == 3 {
                     let st0 = self.fst(0);
                     let sti = self.fst(rm as usize);
+                    let d = rm as usize;
                     match reg {
-                        0 => { self.set_fst(0, st0 + sti); self.fpu_pop(); } // FADDP
-                        1 => { self.set_fst(0, st0 * sti); self.fpu_pop(); } // FMULP
+                        0 => { self.set_fst(d, st0 + sti); self.fpu_pop(); } // FADDP
+                        1 => { self.set_fst(d, st0 * sti); self.fpu_pop(); } // FMULP
                         2 => self.fpu_compare(st0, sti),
                         3 => { self.fpu_compare(st0, sti); self.fpu_pop(); } // FCOMP
-                        4 => { self.set_fst(0, sti - st0); self.fpu_pop(); } // FSUBRP
-                        5 => { self.set_fst(0, st0 - sti); self.fpu_pop(); } // FSUBP
-                        6 => { self.set_fst(0, sti / st0); self.fpu_pop(); } // FDIVRP
-                        7 => { self.set_fst(0, st0 / sti); self.fpu_pop(); } // FDIVP
+                        4 => { self.set_fst(d, sti - st0); self.fpu_pop(); } // FSUBRP
+                        5 => { self.set_fst(d, st0 - sti); self.fpu_pop(); } // FSUBP
+                        6 => { self.set_fst(d, sti / st0); self.fpu_pop(); } // FDIVRP
+                        7 => { self.set_fst(d, st0 / sti); self.fpu_pop(); } // FDIVP
                         _ => {}
                     }
                 } else {
@@ -1704,15 +1756,16 @@ impl Cpu8086 {
                 if m == 3 {
                     let st0 = self.fst(0);
                     let sti = self.fst(rm as usize);
+                    let d = rm as usize;
                     match reg {
-                        0 => { self.set_fst(0, st0 + sti); self.fpu_pop(); }
-                        1 => { self.set_fst(0, st0 * sti); self.fpu_pop(); }
+                        0 => { self.set_fst(d, st0 + sti); self.fpu_pop(); }
+                        1 => { self.set_fst(d, st0 * sti); self.fpu_pop(); }
                         2 => self.fpu_compare(st0, sti),
                         3 => { self.fpu_compare(st0, sti); self.fpu_pop(); }
-                        4 => { self.set_fst(0, sti - st0); self.fpu_pop(); }
-                        5 => { self.set_fst(0, st0 - sti); self.fpu_pop(); }
-                        6 => { self.set_fst(0, sti / st0); self.fpu_pop(); }
-                        7 => { self.set_fst(0, st0 / sti); self.fpu_pop(); }
+                        4 => { self.set_fst(d, sti - st0); self.fpu_pop(); }
+                        5 => { self.set_fst(d, st0 - sti); self.fpu_pop(); }
+                        6 => { self.set_fst(d, sti / st0); self.fpu_pop(); }
+                        7 => { self.set_fst(d, st0 / sti); self.fpu_pop(); }
                         _ => {}
                     }
                 } else {

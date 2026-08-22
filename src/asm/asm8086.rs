@@ -189,6 +189,7 @@ const FPU_MNEMONICS: &[&str] = &[
     "FADDP", "FMULP", "FSUBRP", "FSUBP", "FDIVRP", "FDIVP",
     "FCOM", "FCOMP", "FCOMPP", "FUCOM", "FUCOMP", "FUCOMPP",
     "FILD", "FIST", "FISTP", "FBLD", "FBSTP", "FFREE", "FSAVE", "FRSTOR",
+    "FSQRT", "FSIN", "FCOS", "FRNDINT", "FSCALE", "FSINCOS", "FPREM", "FPREM1", "FXTRACT", "FYL2XP1",
 ];
 
 fn is_fpu_mnemonic(m: &str) -> bool { FPU_MNEMONICS.contains(&m) }
@@ -267,6 +268,16 @@ fn encode_fpu(
         "FLDLN2" => { o.push(0xD9); o.push(0xED); return Ok(o); }
         "FINCSTP" => { o.push(0xD9); o.push(0xF7); return Ok(o); }
         "FDECSTP" => { o.push(0xD9); o.push(0xF6); return Ok(o); }
+        "FSQRT" => { o.push(0xD9); o.push(0xFA); return Ok(o); }
+        "FSIN" => { o.push(0xD9); o.push(0xFE); return Ok(o); }
+        "FCOS" => { o.push(0xD9); o.push(0xFF); return Ok(o); }
+        "FRNDINT" => { o.push(0xD9); o.push(0xFC); return Ok(o); }
+        "FSCALE" => { o.push(0xD9); o.push(0xFD); return Ok(o); }
+        "FSINCOS" => { o.push(0xD9); o.push(0xFB); return Ok(o); }
+        "FPREM" => { o.push(0xD9); o.push(0xF8); return Ok(o); }
+        "FPREM1" => { o.push(0xD9); o.push(0xF5); return Ok(o); }
+        "FXTRACT" => { o.push(0xD9); o.push(0xF4); return Ok(o); }
+        "FYL2XP1" => { o.push(0xD9); o.push(0xF9); return Ok(o); }
         _ => {}
     }
     let n = ops.len();
@@ -961,6 +972,16 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
                     for it in items {
                         match parse_expr(it, &labels, addr, origin) {
                             Ok(v) => { cur_code.extend_from_slice(&(v as u16).to_le_bytes()); addr += 2; }
+                            Err(e) => { errs.push(AsmErr::new(*ln, e)); line_err = true; }
+                        }
+                    }
+                    cur_info.push(LineInfo { line: *ln as u32, addr: start, bytes: cur_code[start as usize..addr as usize].to_vec() });
+                }
+                Stmt::Dd(items) => {
+                    let start = addr;
+                    for it in items {
+                        match parse_expr(it, &labels, addr, origin) {
+                            Ok(v) => { cur_code.extend_from_slice(&(v as u32).to_le_bytes()); addr += 4; }
                             Err(e) => { errs.push(AsmErr::new(*ln, e)); line_err = true; }
                         }
                     }

@@ -141,6 +141,14 @@ export class Emulator {
         }
     }
     /**
+     * 8086 graphics framebuffer, or None when in a text mode / non-8086 ISA.
+     * @returns {GfxInfo | undefined}
+     */
+    gfx() {
+        const ret = wasm.emulator_gfx(this.__wbg_ptr);
+        return ret === 0 ? undefined : GfxInfo.__wrap(ret);
+    }
+    /**
      * @returns {boolean}
      */
     halted() {
@@ -485,6 +493,69 @@ export class Emulator {
     }
 }
 if (Symbol.dispose) Emulator.prototype[Symbol.dispose] = Emulator.prototype.free;
+
+/**
+ * Graphics framebuffer descriptor (8086 pixel modes). `base` is the linear
+ * memory address of the pixel data; `w`/`h` are the dimensions in pixels.
+ */
+export class GfxInfo {
+    static __wrap(ptr) {
+        const obj = Object.create(GfxInfo.prototype);
+        obj.__wbg_ptr = ptr;
+        GfxInfoFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        GfxInfoFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_gfxinfo_free(ptr, 0);
+    }
+    /**
+     * @returns {number}
+     */
+    get base() {
+        const ret = wasm.__wbg_get_gfxinfo_base(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get h() {
+        const ret = wasm.__wbg_get_gfxinfo_h(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get w() {
+        const ret = wasm.__wbg_get_gfxinfo_w(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @param {number} arg0
+     */
+    set base(arg0) {
+        wasm.__wbg_set_gfxinfo_base(this.__wbg_ptr, arg0);
+    }
+    /**
+     * @param {number} arg0
+     */
+    set h(arg0) {
+        wasm.__wbg_set_gfxinfo_h(this.__wbg_ptr, arg0);
+    }
+    /**
+     * @param {number} arg0
+     */
+    set w(arg0) {
+        wasm.__wbg_set_gfxinfo_w(this.__wbg_ptr, arg0);
+    }
+}
+if (Symbol.dispose) GfxInfo.prototype[Symbol.dispose] = GfxInfo.prototype.free;
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -515,6 +586,9 @@ function __wbg_get_imports() {
 const EmulatorFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_emulator_free(ptr, 1));
+const GfxInfoFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_gfxinfo_free(ptr, 1));
 
 function getArrayJsValueFromWasm0(ptr, len) {
     ptr = ptr >>> 0;

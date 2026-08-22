@@ -10,6 +10,9 @@ pub mod asm;
 pub mod disasm8086;
 pub mod disasm8085;
 pub mod disasm8051;
+pub mod m6502;
+pub mod z80;
+pub mod rv32;
 pub mod pit;
 pub mod pic8259;
 pub mod i8155;
@@ -24,6 +27,9 @@ pub enum Emulator {
     I8086(Box<i8086::Cpu8086>),
     I8085(Box<i8085::Cpu8085>),
     Mcs51(Box<mcs51::Cpu8051>),
+    Rv32(Box<rv32::CpuRv32>),
+    M6502(Box<m6502::Cpu6502>),
+    Z80(Box<z80::CpuZ80>),
 }
 
 pub fn make_emulator(isa: &str) -> Result<Emulator, String> {
@@ -31,7 +37,10 @@ pub fn make_emulator(isa: &str) -> Result<Emulator, String> {
         "8086" | "X86" => Ok(Emulator::I8086(Box::<i8086::Cpu8086>::default())),
         "8085" => Ok(Emulator::I8085(Box::default())),
         "8051" | "MCS51" | "MCS-51" => Ok(Emulator::Mcs51(Box::<mcs51::Cpu8051>::default())),
-        other => Err(format!("unknown ISA '{other}'; expected 8086, 8085 or 8051")),
+        "RV32" | "RV32I" | "RISC-V" | "RISCV" => Ok(Emulator::Rv32(Box::<rv32::CpuRv32>::default())),
+        "6502" | "65C02" | "R6502" | "M6502" | "MOS6502" => Ok(Emulator::M6502(Box::<m6502::Cpu6502>::default())),
+        "Z80" | "ZILOG" => Ok(Emulator::Z80(Box::<z80::CpuZ80>::default())),
+        other => Err(format!("unknown ISA '{other}'; expected 8086, 8085, 8051, rv32, 6502 or z80")),
     }
 }
 
@@ -59,6 +68,9 @@ impl Emulator {
             Emulator::I8086(_) => asm::parse_8086(source),
             Emulator::I8085(_) => asm::parse_8085(source),
             Emulator::Mcs51(_) => asm::parse_8051(source),
+            Emulator::Rv32(_) => asm::parse_rv32(source),
+            Emulator::M6502(_) => asm::parse_6502(source),
+            Emulator::Z80(_) => asm::parse_z80(source),
         }
     }
 
@@ -102,6 +114,15 @@ impl Emulator {
 
     pub fn flags(&self) -> FlagSet {
         self.cpu_ref().flags()
+    }
+
+    /// 8086 graphics framebuffer (base, width, height) when in a pixel mode,
+    /// else None. Used by the IDE to draw the graphics screen canvas.
+    pub fn gfx_framebuffer(&self) -> Option<(u32, u32, u32)> {
+        match self {
+            Emulator::I8086(c) => c.gfx_framebuffer(),
+            _ => None,
+        }
     }
 
     pub fn mem_read(&self, addr: u32, len: usize) -> Vec<u8> {
@@ -159,6 +180,9 @@ impl Emulator {
             }
             Emulator::Mcs51(c) => c.request_interrupt(kind),
             Emulator::I8086(c) => c.request_interrupt(kind, data),
+            Emulator::Rv32(_) => Err("request_interrupt: rv32 has no interrupt model".into()),
+            Emulator::M6502(_) => Err("request_interrupt: 6502 has no interrupt model".into()),
+            Emulator::Z80(c) => { if kind.eq_ignore_ascii_case("NMI") { c.request_nmi(); } else { c.request_int(); } Ok(()) }
         }
     }
 
@@ -169,6 +193,9 @@ impl Emulator {
             Self::I8085(c) => c.ports[port as usize],
             Self::I8086(c) => c.ports[port as usize],
             Self::Mcs51(c) => c.port_read(port),
+            Self::Rv32(_) => 0,
+            Self::M6502(_) => 0,
+            Self::Z80(c) => c.port_read(port),
         }
     }
 
@@ -179,6 +206,9 @@ impl Emulator {
             Self::I8085(c) => c.ports[port as usize] = v,
             Self::I8086(c) => c.ports[port as usize] = v,
             Self::Mcs51(c) => c.port_write(port, v),
+            Self::Rv32(_) => {}
+            Self::M6502(_) => {}
+            Self::Z80(c) => c.port_write(port, v),
         }
     }
 
@@ -189,6 +219,9 @@ impl Emulator {
             Self::I8085(c) => c.cycles(),
             Self::I8086(c) => c.cycles(),
             Self::Mcs51(c) => c.cycles(),
+            Self::Rv32(_) => 0,
+            Self::M6502(_) => 0,
+            Self::Z80(_) => 0,
         }
     }
 
@@ -208,6 +241,9 @@ impl Emulator {
             Emulator::I8086(c) => c.load_rom(data, addr),
             Emulator::I8085(c) => c.load_rom(data, addr),
             Emulator::Mcs51(c) => c.load_rom(data, addr),
+            Emulator::Rv32(c) => c.load_rom(data, addr),
+            Emulator::M6502(c) => c.load_rom(data, addr),
+            Emulator::Z80(c) => c.load_rom(data, addr),
         }
     }
 
@@ -305,6 +341,18 @@ impl Emulator {
                 if l > 0 { Some((b as u32, l as u32)) } else { None }
             }
             Emulator::Mcs51(_) => None,
+            Emulator::Rv32(c) => {
+                let (b, l) = c.mem.rom_range();
+                if l > 0 { Some((b as u32, l as u32)) } else { None }
+            }
+            Emulator::M6502(c) => {
+                let (b, l) = c.mem.rom_range();
+                if l > 0 { Some((b as u32, l as u32)) } else { None }
+            }
+            Self::Z80(c) => {
+                let (b, l) = c.rom_region();
+                if l > 0 { Some((b, l)) } else { None }
+            }
         }
     }
 
@@ -365,6 +413,9 @@ impl Emulator {
             // 8051 fetches code from internal `code` when EA=1, and from
             // external XDATA (the loaded ROM) when EA=0.
             Emulator::Mcs51(c) => disasm8051::disasm(if c.ea { &c.code } else { &c.xdata }, start, count),
+            Emulator::Rv32(c) => c.disasm(start, count),
+            Emulator::M6502(c) => c.disasm(start, count),
+            Emulator::Z80(c) => c.disasm(start, count),
         }
     }
 
@@ -373,6 +424,9 @@ impl Emulator {
             Emulator::I8086(c) => c.as_mut(),
             Emulator::I8085(c) => c.as_mut(),
             Emulator::Mcs51(c) => c.as_mut(),
+            Emulator::Rv32(c) => c.as_mut(),
+            Emulator::M6502(c) => c.as_mut(),
+            Emulator::Z80(c) => c.as_mut(),
         }
     }
 
@@ -381,6 +435,9 @@ impl Emulator {
             Emulator::I8086(c) => c.as_ref(),
             Emulator::I8085(c) => c.as_ref(),
             Emulator::Mcs51(c) => c.as_ref(),
+            Emulator::Rv32(c) => c.as_ref(),
+            Emulator::M6502(c) => c.as_ref(),
+            Emulator::Z80(c) => c.as_ref(),
         }
     }
 
@@ -389,6 +446,9 @@ impl Emulator {
             Emulator::I8086(c) => &mut c.as_mut().out,
             Emulator::I8085(c) => &mut c.as_mut().out,
             Emulator::Mcs51(c) => &mut c.as_mut().out,
+            Emulator::Rv32(c) => &mut c.as_mut().out,
+            Emulator::M6502(c) => &mut c.as_mut().out,
+            Emulator::Z80(c) => &mut c.as_mut().out,
         }
     }
 }

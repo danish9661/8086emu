@@ -2130,3 +2130,243 @@ fn mem_info_facade() {
     assert!(e51.ext_code_region().is_some(), "external code region present with EA low");
 }
 
+
+#[test]
+fn graphics_mode13h_pixel_io() {
+    let mut emu = make_emulator("8086").unwrap();
+    // set mode 13h, plot pixel (5,7) colour 42, read it back
+    let src = r#"
+        ORG 100h
+        MOV AX, 0013h
+        INT 10h
+        MOV CX, 5
+        MOV DX, 7
+        MOV AL, 42
+        MOV AH, 0Ch
+        INT 10h
+        MOV AH, 0Dh
+        INT 10h
+        MOV AH, 4Ch
+        INT 21h
+    "#;
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(1000);
+    // pixel (5,7) in mode 13h lives at 0xA0000 + 7*320 + 5
+    let byte = emu.mem_read(0xA0000 + 7 * 320 + 5, 1)[0];
+    assert_eq!(byte, 42, "graphics pixel should be written to the framebuffer");
+    // AL (low byte of AX) after INT 10h/0D should hold the pixel colour
+    assert_eq!(reg(&emu.regs(), "AX") & 0xFF, 42, "INT 10h/0D should read back the pixel");
+}
+
+
+#[test]
+fn fpu_arithmetic_and_sqrt() {
+    let mut emu = make_emulator("8086").unwrap();
+    // 3.0 * 4.0 + 5.0 = 17.0, then sqrt(17) ~ 4.1231.
+    // Data is placed at a fixed ORG so we can read it back by address.
+    let src = r#"
+        ORG 100h
+        FLD DWORD PTR [a]
+        FLD DWORD PTR [b]
+        FMUL
+        FLD DWORD PTR [c]
+        FADDP ST(1), ST(0)
+        FSTP DWORD PTR [r]
+        FLD DWORD PTR [r]
+        FSQRT
+        FSTP DWORD PTR [s]
+        MOV AH, 4Ch
+        INT 21h
+        ORG 300h
+    a: DD 40400000h   ; 3.0
+    b: DD 40800000h   ; 4.0
+    c: DD 40A00000h   ; 5.0
+    r: DD 00000000h
+    s: DD 00000000h
+    "#;
+    let code = emu.assemble(src).expect("fpu assembly should succeed");
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(1000);
+    // a=300h, b=304h, c=308h, r=30Ch, s=310h
+    let rword = read_f32(&emu, 0x30C);
+    let sword = read_f32(&emu, 0x310);
+    assert!((rword - 17.0).abs() < 1e-3, "FPU 3*4+5 should be 17, got {rword}");
+    assert!((sword - 17.0_f32.sqrt() as f64).abs() < 1e-3, "FPU sqrt(17) mismatch, got {sword}");
+}
+
+fn read_f32(emu: &multi_cpu_emu::Emulator, addr: u32) -> f64 {
+    let b = emu.mem_read(addr, 4);
+    f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64
+}
+
+#[test]
+fn rv32_add() {
+    let src = r#"
+        ORG 0
+        ADDI x1, x0, 3
+        ADDI x2, x0, 4
+        ADD  x3, x1, x2
+        ADDI x4, x0, -1
+        ADD  x5, x4, x0
+        END
+    "#;
+    let (regs, _, halted) = run_asm("rv32", src, 100);
+    assert!(halted, "rv32 should halt");
+    assert_eq!(reg(&regs, "x3"), 7, "3 + 4 = 7");
+    assert_eq!(reg(&regs, "x4"), 0xFFFF_FFFF, "-1");
+    assert_eq!(reg(&regs, "x5"), 0xFFFF_FFFF, "(-1)+0 = -1");
+}
+
+#[test]
+fn rv32_hello() {
+    let src = r#"
+        ORG 0
+        ADDI a1, x0, 0x100
+        ADDI a2, x0, 3
+        ADDI a7, x0, 64
+        ECALL
+        ADDI a7, x0, 93
+        ECALL
+        ORG 0x100
+        DB 'H','i',10
+        END
+    "#;
+    let (_, out, halted) = run_asm("rv32", src, 100);
+    assert!(halted);
+    assert_eq!(out, "Hi\n");
+}
+
+#[test]
+fn rv32_branch_loop() {
+    let src = r#"
+        ORG 0
+        ADDI x1, x0, 0
+        ADDI x2, x0, 10
+    loop:
+        ADDI x1, x1, 1
+        BLT  x1, x2, loop
+        ADD  x3, x1, x0
+        END
+    "#;
+    let (regs, _, _) = run_asm("rv32", src, 1000);
+    assert_eq!(reg(&regs, "x1"), 10);
+    assert_eq!(reg(&regs, "x3"), 10);
+}
+
+#[test]
+fn m6502_hello() {
+    let src = r#"
+        ORG 0
+        LDX #0
+    loop:
+        LDA msg,X
+        BEQ done
+        STA $01
+        INX
+        JMP loop
+    done:
+        BRK
+    msg: DB 'H','i',10,0
+    END
+    "#;
+    let (_, out, halted) = run_asm("6502", src, 1000);
+    assert!(halted, "6502 should halt on BRK");
+    assert_eq!(out, "Hi\n");
+}
+
+#[test]
+fn m6502_sum() {
+    let src = r#"
+        ORG 0
+        LDX #0
+        LDA #0
+    loop:
+        INX
+        STX $21
+        CLC
+        ADC $21
+        CPX #10
+        BNE loop
+        STA $20
+        BRK
+    END
+    "#;
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble(src).expect("assembly should succeed");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(1000);
+    assert_eq!(emu.mem_read(0x20, 1)[0], 55, "1+2+...+10 = 55");
+}
+
+#[test]
+fn z80_hello() {
+    let src = r#"
+        ORG 0
+        LD A, 'H'
+        OUT (1), A
+        LD A, 'i'
+        OUT (1), A
+        LD A, 10
+        OUT (1), A
+        HALT
+    END
+    "#;
+    let (_, out, halted) = run_asm("Z80", src, 1000);
+    assert!(halted, "Z80 should halt on HALT");
+    assert_eq!(out, "Hi\n");
+}
+
+#[test]
+fn z80_sum() {
+    let src = r#"
+        ORG 0
+        LD B, 10
+        LD A, 0
+        LD C, 0
+    loop:
+        INC C
+        ADD A, C
+        DEC B
+        JP NZ, loop
+        LD ($20), A
+        HALT
+    END
+    "#;
+    let mut emu = make_emulator("Z80").unwrap();
+    let code = emu.assemble(src).expect("assembly should succeed");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(1000);
+    assert_eq!(emu.mem_read(0x20, 1)[0], 55, "1+2+...+10 = 55");
+}
+
+#[test]
+fn z80_ix_loop() {
+    let src = r#"
+        ORG 0
+        LD IX, 0x30
+        LD B, 5
+        LD A, 0
+    loop:
+        ADD A, (IX+0)
+        INC IX
+        DEC B
+        JP NZ, loop
+        LD ($40), A
+        HALT
+    END
+    "#;
+    let mut emu = make_emulator("Z80").unwrap();
+    let code = emu.assemble(src).expect("assembly should succeed");
+    emu.mem_write(0, &code);
+    for (i, v) in [1u8, 2, 3, 4, 5].iter().enumerate() {
+        emu.mem_write(0x30 + i as u32, &[*v]);
+    }
+    emu.set_pc(0);
+    emu.run(1000);
+    assert_eq!(emu.mem_read(0x40, 1)[0], 15, "1+2+3+4+5 = 15");
+}

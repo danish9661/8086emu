@@ -28,9 +28,14 @@ shifts/rotates (`D0`–`D3`), `CBW`/`CWD`, BCD/ASCII adjust (`DAA`/`DAS`/`AAA`/
 `Jcc`/`JMP`/`CALL`/`RET`/`RETF`, `LOOP`/`LOOPZ`/`LOOPNZ`/`JCXZ`, `INT n`/
 `INT3`/`INTO`/`IRET`, `NOP`, `HLT`, `IN`/`OUT`.
 
-**Not yet** modeled (treated as unimplemented/halt): x87 FPU opcodes are
-stubbed (`FPU` state exists but no arithmetic), and a few obscure system
-instructions. Most teaching/lab programs run unchanged.
+**Not yet** modeled (treated as unimplemented/halt): a few obscure system
+instructions and x87 FPU load/store of the 80-bit `TBYTE` format in some forms.
+Most teaching/lab FPU programs (add/mul/sub/div, `FLD`/`FSTP`, `FILD`/`FIST`,
+compare, constants, `FSQRT`/`FSIN`/`FCOS`, etc.) run unchanged.
+
+> Note: the x87 FPU **is** implemented (a real 8-deep `f64` register stack). The
+> `FPU` state is not shown in the IDE register panel yet — a follow-up adds an
+> FPU-stack inspector.
 
 ## DOS / BIOS services
 
