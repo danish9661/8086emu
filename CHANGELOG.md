@@ -11,6 +11,8 @@ versions are dated snapshots of `main`.
   every peripheral (port) write, for tracing hardware access.
 - CLI: `--help`/`-h` and a clean `print_usage()`; running with no arguments now
   prints usage and exits 0 instead of panicking.
+- CLI: `--bench [N]` measures steady-state emulation throughput (steps/sec) for
+  any ISA; the IDE also exposes `window.emu` for browser-side benchmarking.
 - Hand-written, consumer-facing TypeScript types at `docs/types.d.ts`.
 - 6502 decimal mode (ADC/SBC BCD under the D flag) and NMI/IRQ/BRK vectoring.
 - rv32i M-extension (`MUL`/`MULH`/`MULHSU`/`MULHU`/`DIV`/`DIVU`/`REM`/`REMU`)

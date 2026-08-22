@@ -641,6 +641,7 @@ const editor = $('editor'), gutter = $('gutter'), hl = $('hl'), errorsBox = $('e
 
 function newEmulator() {
   emu = new Emulator(isa);
+  window.emu = emu; // exposed for console benchmarking, e.g. time a run()
     breakpoints = new Map();
   steps = 0; accumOut = '';
   history = [];

@@ -83,6 +83,7 @@ fn main() {
     let mut grade: Option<String> = None;
     let mut max_steps: u32 = 5_000_000;
     let mut verbose = false;
+    let mut bench_steps: Option<u32> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -102,11 +103,30 @@ fn main() {
             }
             "--grade" => { i += 1; grade = args.get(i).cloned(); }
             "--verbose" | "-v" => { verbose = true; }
+            "--bench" => {
+                i += 1;
+                let n = args.get(i).and_then(|s| s.parse::<u32>().ok());
+                bench_steps = Some(n.unwrap_or(10_000_000));
+            }
             "--help" | "-h" => { print_usage(); return; }
             p if p.starts_with('-') => { eprintln!("error: unknown option '{p}'"); print_usage(); std::process::exit(2); }
             p => path = Some(p.to_string()),
         }
         i += 1;
+    }
+
+    // Create the emulator early so --bench can run without a source file.
+    let mut emu = match make_emulator(&isa) {
+        Ok(e) => e,
+        Err(_) => {
+            eprintln!("error: unsupported ISA '{}'. Valid choices: 8086, 8085, 8051, 6502, Z80, rv32", isa);
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(bench) = bench_steps {
+        run_bench(&mut emu, &isa, bench);
+        return;
     }
 
     let Some(path) = path else {
@@ -118,13 +138,6 @@ fn main() {
         Err(e) => { eprintln!("error: cannot read '{}': {}", path, e); std::process::exit(1); }
     };
 
-    let mut emu = match make_emulator(&isa) {
-        Ok(e) => e,
-        Err(_) => {
-            eprintln!("error: unsupported ISA '{}'. Valid choices: 8086, 8085, 8051, 6502, Z80, rv32", isa);
-            std::process::exit(1);
-        }
-    };
     let code = match emu.assemble(&source) {
         Ok(c) => c,
         Err(e) => { eprintln!("assembly failed for '{}':\n{}", path, e); std::process::exit(1); }
@@ -208,6 +221,7 @@ fn print_usage() {
            --max-steps <N>   stop after N instructions (default 5,000,000)\n\
            --grade <spec>    grade the program against a spec file (see below)\n\
            --verbose, -v     trace each instruction and peripheral I/O writes\n\
+           --bench [N]       measure emulation throughput over N steps (default 10M)\n\
            --help, -h        show this help and exit\n\
          \n\
          Spec file (--grade) is line-oriented; blank lines and ;/# comments ignored:\n\
@@ -261,6 +275,49 @@ fn run_verbose(emu: &mut multi_cpu_emu::Emulator, max_steps: u32) {
     println!(
         "--- verbose trace: {} steps, halted={} ---",
         steps,
+        emu.is_halted()
+    );
+}
+
+/// Built-in tight loop per ISA, used to measure steady-state emulation
+/// throughput without the program halting.
+fn bench_loop(isa: &str) -> String {
+    match isa {
+        "8085" => "ORG 0\nagain:\nJMP again\nEND\n".to_string(),
+        "8051" => "ORG 0\nagain:\nSJMP again\nEND\n".to_string(),
+        "6502" => "ORG 0\nagain:\nJMP again\nEND\n".to_string(),
+        "Z80" => "ORG 0\nagain:\nJR again\nEND\n".to_string(),
+        "rv32" => "ORG 0\nagain:\nBEQ x0, x0, again\nEND\n".to_string(),
+        _ => "ORG 100h\nagain:\njmp again\nEND\n".to_string(), // 8086
+    }
+}
+
+/// Assemble a busy loop, run it for `steps` instructions, and report throughput.
+fn run_bench(emu: &mut multi_cpu_emu::Emulator, isa: &str, steps: u32) {
+    let src = bench_loop(isa);
+    let code = match emu.assemble(&src) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: benchmark loop failed to assemble for '{}':\n{}", isa, e);
+            std::process::exit(1);
+        }
+    };
+    let entry = if isa == "8086" { 0x100 } else { 0 };
+    emu.mem_write(0, &code);
+    emu.set_pc(entry);
+    // warm up (JIT/cache settle) before timing
+    emu.run(1000);
+    let start = std::time::Instant::now();
+    let res = emu.run(steps);
+    let elapsed = start.elapsed();
+    let secs = elapsed.as_secs_f64();
+    let rate = if secs > 0.0 { res.steps as f64 / secs } else { 0.0 };
+    println!(
+        "bench [{}]: {} steps in {:.3} s  =>  {:.0} steps/sec  (halted={})",
+        isa,
+        res.steps,
+        secs,
+        rate,
         emu.is_halted()
     );
 }
