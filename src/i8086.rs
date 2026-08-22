@@ -100,6 +100,13 @@ pub struct Cpu8086 {
     pub si: u16, pub di: u16, pub bp: u16, pub sp: u16,
     pub cs: u16, pub ds: u16, pub es: u16, pub ss: u16,
     pub fs: u16, pub gs: u16, // 286+ segment registers (present for compatibility)
+    // cached segment bases (seg << 4) to avoid recomputing on every memory access
+    cs_base: u32, ds_base: u32, es_base: u32, ss_base: u32, fs_base: u32, gs_base: u32,
+    // conservative decode cache: (phys_ip, prefix+op bytes, seg_ov, rep, ip_after)
+    // validity is verified by re-reading the bytes on each hit (correct even for
+    // self-modifying code, and needs no write hooking)
+    dec_cache: Option<(u32, Vec<u8>, Option<u16>, Option<bool>, u16)>,
+    last_op: u8, // opcode of the most recently decoded instruction (for cycle accounting)
     pub ip: u16,
     pub flags: u16,
     pub mem: Mem,
@@ -213,8 +220,12 @@ impl Cpu8086 {
             pit: Pit8253::new(),
             pic: Pic8259::new(),
             cycles: 0,
+            cs_base: 0, ds_base: 0, es_base: 0, ss_base: 0, fs_base: 0, gs_base: 0,
+            dec_cache: None,
+            last_op: 0,
         };
         c.reset();
+        c.sync_seg_bases();
         c
     }
 
@@ -249,6 +260,17 @@ impl Cpu8086 {
         (((seg as u32) << 4) + off as u32) as usize
     }
 
+    /// Recompute the cached segment bases from the current segment registers.
+    /// Cheap; called on reset/restore/set_pc/set_reg and at the end of each step.
+    #[inline] fn sync_seg_bases(&mut self) {
+        self.cs_base = (self.cs as u32) << 4;
+        self.ds_base = (self.ds as u32) << 4;
+        self.es_base = (self.es as u32) << 4;
+        self.ss_base = (self.ss as u32) << 4;
+        self.fs_base = (self.fs as u32) << 4;
+        self.gs_base = (self.gs as u32) << 4;
+    }
+
     // ----- flag helpers -----
     #[inline] fn flag(&self, m: u16) -> bool { self.flags & m != 0 }
     #[inline] fn set_flag(&mut self, m: u16, v: bool) {
@@ -259,7 +281,7 @@ impl Cpu8086 {
     // ----- instruction fetch -----
     #[inline]
     fn fetch8(&mut self) -> u8 {
-        let b = self.mem.read(self.phys(self.cs, self.ip));
+        let b = self.mem.read((self.cs_base + self.ip as u32) as usize);
         self.ip = self.ip.wrapping_add(1);
         b
     }
@@ -1094,12 +1116,17 @@ impl Cpu8086 {
     #[inline] fn set_ah(&mut self, v: u8) { self.ax = (self.ax & 0x00FF) | ((v as u16) << 8); }
 
     // ----- one instruction -----
-    pub fn exec(&mut self) -> bool {
+    /// Decode the prefix bytes + opcode at the current CS:IP, advancing IP to
+    /// the first operand. Returns (opcode, bytes consumed). Used by the decode
+    /// cache in `exec`.
+    #[inline]
+    fn scan_decode(&mut self) -> (u8, Vec<u8>) {
         self.rep = None;
         self.seg_ov = None;
-        // prefix scan
+        let start = (self.cs_base + self.ip as u32) as usize;
+        let start_ip = self.ip;
         loop {
-            let p = self.mem.read(self.phys(self.cs, self.ip));
+            let p = self.mem.read((self.cs_base + self.ip as u32) as usize);
             match p {
                 0x26 => { self.seg_ov = Some(self.es); self.ip = self.ip.wrapping_add(1); }
                 0x2E => { self.seg_ov = Some(self.cs); self.ip = self.ip.wrapping_add(1); }
@@ -1113,6 +1140,41 @@ impl Cpu8086 {
             }
         }
         let op = self.fetch8();
+        let len = self.ip.wrapping_sub(start_ip) as usize;
+        let bytes: Vec<u8> = (0..len).map(|i| self.mem.read(start + i)).collect();
+        (op, bytes)
+    }
+
+    pub fn exec(&mut self) -> bool {
+        let phys_ip = (self.cs_base + self.ip as u32) as u32;
+        // Conservative decode cache: on a hit, re-read the prefix+op bytes and
+        // compare; only reuse the cached decode if they are byte-identical.
+        // This is correct for self-modifying code and needs no write hooking.
+        let op = if let Some((p, po, so, rp, ip_after)) = &self.dec_cache {
+            let mut same = po.len() <= 8;
+            if same {
+                for i in 0..po.len() {
+                    if self.mem.read(phys_ip as usize + i) != po[i] { same = false; break; }
+                }
+            } else {
+                let cur: Vec<u8> = (0..po.len()).map(|i| self.mem.read(phys_ip as usize + i)).collect();
+                same = cur == *po;
+            }
+            if *p == phys_ip && same {
+                self.seg_ov = *so;
+                self.rep = *rp;
+                self.ip = *ip_after;
+                po[po.len() - 1]
+            } else {
+                let (o, b) = self.scan_decode();
+                self.dec_cache = Some((phys_ip, b, self.seg_ov, self.rep, self.ip));
+                o
+            }
+        } else {
+            let (o, b) = self.scan_decode();
+            self.dec_cache = Some((phys_ip, b, self.seg_ov, self.rep, self.ip));
+            o
+        };
         match op {
             0x00..=0x05 => self.op_group1(op),
             0x06 => self.push16(self.es),
@@ -1412,7 +1474,8 @@ impl Cpu8086 {
             0xE0..=0xE3 => { // LOOP/LOOPZ/LOOPNZ/JCXZ rel8
                 let d = self.fetch8() as i8 as i16;
                 let cx = self.cx;
-                match op {
+        self.last_op = op;
+        match op {
                     0xE0 => { self.cx = cx.wrapping_sub(1); if self.cx != 0 { self.ip = self.ip.wrapping_add_signed(d); } }
                     0xE1 => { self.cx = cx.wrapping_sub(1); if self.cx != 0 && self.flag(ZF) { self.ip = self.ip.wrapping_add_signed(d); } }
                     0xE2 => { self.cx = cx.wrapping_sub(1); if self.cx != 0 && !self.flag(ZF) { self.ip = self.ip.wrapping_add_signed(d); } }
@@ -1880,7 +1943,14 @@ impl Cpu8086 {
                 0x30 => { nv = a ^ b; self.flags_logic16(nv); }
                 _ => { let _ = a.wrapping_sub(b); self.flags_sub16(a, b, false); }
             }
-            if base != 0x38 { self.write_rm16(m, rm, seg, off, nv); }
+            if base != 0x38 {
+                if (op & 2) == 2 {
+                    // ADD/OR/... reg, r/m : destination is the register
+                    self.set_reg16(r, nv);
+                } else {
+                    self.write_rm16(m, rm, seg, off, nv);
+                }
+            }
         } else {
             let a = self.rm8(m, rm, seg, off);
             let b = self.reg8(r);
@@ -1895,7 +1965,14 @@ impl Cpu8086 {
                 0x30 => { nv = a ^ b; self.flags_logic8(nv); }
                 _ => { let _ = a.wrapping_sub(b); self.flags_sub8(a, b, false); }
             }
-            if base != 0x38 { self.write_rm8(m, rm, seg, off, nv); }
+            if base != 0x38 {
+                if (op & 2) == 2 {
+                    // ADD/OR/... reg, r/m : destination is the register
+                    self.set_reg8(r, nv);
+                } else {
+                    self.write_rm8(m, rm, seg, off, nv);
+                }
+            }
         }
     }
 
@@ -2287,36 +2364,49 @@ impl Cpu for Cpu8086 {
             self.cs = 0xF000;
             self.ip = 0xFFF0;
         }
+        self.sync_seg_bases();
+        self.dec_cache = None;
     }
 
     fn step(&mut self) -> bool {
         if self.halted { return false; }
         if self.input_pending { return true; } // blocked on INT 21h input
         let trap = self.flag(TF);
-        let op0 = self.mem_read(self.pc(), 1)[0];
-        let c = inst_cycles(op0) as u64;
         self.exec();
+        let c = inst_cycles(self.last_op) as u64;
         if !self.halted {
             self.cycles += c;
-            self.pit.advance(c);
-            if self.pit.take_irq0() {
-                self.pic.request(0); // 8253 channel 0 terminal count -> IRQ0
+            if self.pit.any_counting() {
+                self.pit.advance(c);
+                if self.pit.take_irq0() {
+                    self.pic.request(0); // 8253 channel 0 terminal count -> IRQ0
+                }
             }
-            self.service_interrupts();
+            // Only service hardware interrupts when one can actually fire:
+            // NMI, a latched external INTR, or a PIC IRQ with IF set.
+            let can_intr = self.pending_nmi
+                || self.pending_intr
+                || (self.flag(IF) && self.pic.has_irq());
+            if can_intr {
+                self.service_interrupts();
+            }
             if trap && self.flag(TF) {
                 self.hardware_intr(1); // single-step trap: INT 1
             }
         }
+        self.sync_seg_bases();
         !self.halted
     }
 
     fn pc(&self) -> u32 {
-        (self.cs as u32) << 4 | self.ip as u32
+        self.cs_base + self.ip as u32
     }
 
     fn set_pc(&mut self, addr: u32) {
         self.cs = (addr >> 4) as u16;
         self.ip = (addr & 0xF) as u16;
+        self.sync_seg_bases();
+        self.dec_cache = None;
     }
 
     fn set_reg(&mut self, name: &str, val: u32) {
@@ -2330,6 +2420,7 @@ impl Cpu for Cpu8086 {
             "FLAGS" => self.flags = v,
             _ => {}
         }
+        self.sync_seg_bases();
     }
 
     fn regs(&self) -> Vec<Reg> {
@@ -2492,6 +2583,8 @@ impl Cpu for Cpu8086 {
         }
         self.rep = None;
         self.seg_ov = None;
+        self.sync_seg_bases();
+        self.dec_cache = None;
     }
 
     fn is_halted(&self) -> bool { self.halted }

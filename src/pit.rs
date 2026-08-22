@@ -24,6 +24,16 @@ struct Channel {
 }
 
 impl Channel {
+    fn any_counting(&self) -> bool {
+        if !self.gate {
+            return false;
+        }
+        // mode 0/4/5 produce a single terminal-count pulse then stop until
+        // reloaded; once `out` is asserted they are spent.
+        let spent = (self.mode == 0 || self.mode == 4 || self.mode == 5) && self.out;
+        !spent
+    }
+
     fn tick(&mut self, n: u64) {
         if !self.gate {
             return;
@@ -109,6 +119,13 @@ impl Pit8253 {
             self.irq0 = true;
             self.ch[0].pulse = false;
         }
+    }
+
+    /// True when any channel is still counting and could produce a future
+    /// terminal-count pulse. Used to skip `advance` entirely when the timer
+    /// subsystem is idle (e.g. all channels disabled / spent).
+    pub fn any_counting(&self) -> bool {
+        self.ch.iter().any(|c| c.gate && c.any_counting())
     }
 
     pub fn write_cmd(&mut self, v: u8) {

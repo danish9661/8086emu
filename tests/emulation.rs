@@ -96,6 +96,78 @@ fn arithmetic_8086() {
 }
 
 #[test]
+fn seg_override_decode_cache_8086() {
+    // Repeatedly decodes an instruction with a DS: prefix (exercise the
+    // decode cache's prefix handling across many hits).
+    let src = r#"
+        ORG 100h
+        MOV AX, 0
+        MOV CX, 100
+        MOV SI, OFFSET data
+    loop:
+        ADD AX, DS:[SI]
+        INC SI
+        INC SI
+        LOOP loop
+        MOV BX, AX
+        MOV AH, 4Ch
+        INT 21h
+    data: DW 1,2,3,4,5,6,7,8,9,10
+    END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 5000);
+    assert_eq!(reg(&regs, "BX"), 55); // sum of the ten words
+}
+
+#[test]
+fn rep_string_decode_cache_8086() {
+    // REP-prefixed string op must decode correctly through the cache.
+    let src = r#"
+        ORG 100h
+        MOV AX, 0xAAAA
+        MOV CX, 20
+        MOV DI, 0x300
+        CLD
+        REP STOSW
+        MOV AX, 0
+        MOV SI, 0x300
+        MOV CX, 20
+        REP LODSW
+        MOV BX, AX
+        MOV AH, 4Ch
+        INT 21h
+    END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 5000);
+    assert_eq!(reg(&regs, "BX"), 0xAAAA); // last loaded word
+}
+
+#[test]
+fn self_modifying_code_decode_cache_8086() {
+    // The decode cache must re-decode when the instruction bytes change.
+    // `target` starts as NOP, is rewritten to INC AX, then re-executed.
+    let src = r#"
+        ORG 100h
+        MOV AX, 0
+        MOV BX, OFFSET target
+        CALL target          ; first decode: NOP -> executed, AX stays 0
+        MOV byte ptr [BX], 0x40   ; rewrite NOP -> INC AX
+        CALL target          ; re-decode: bytes changed -> INC AX -> AX=1
+        MOV CX, AX
+        MOV AH, 4Ch
+        INT 21h
+    target:
+        NOP
+        RET
+    END
+    "#;
+    let (regs, _, _) = run_asm("8086", src, 5000);
+    // CX captures AX right after the (re-decoded) INC AX, before MOV AH,4Ch
+    assert_eq!(reg(&regs, "CX"), 1); // proves the INC AX was re-decoded
+    assert_eq!(reg(&regs, "AX") & 0xFF, 1);
+}
+
+#[test]
 fn arithmetic_8085() {
     // A = 25 + 5 = 30
     let src = r#"

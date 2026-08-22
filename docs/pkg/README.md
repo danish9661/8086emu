@@ -1,11 +1,14 @@
 # multi-cpu-emu
 
-A single Rust crate that emulates three classic microprocessors:
+A single Rust crate that emulates six classic microprocessors:
 
 - **Intel 8086** — 16-bit, segmented, 1 MiB address space; includes an 8259 PIC
   and 8253 PIT so timer interrupts (IRQ0 → `INT 8`) fire end-to-end
 - **Intel 8085** — 8-bit, 64 KiB, accumulator-centric
 - **Intel 8051 (MCS-51)** — 8-bit, SFRs, bit-addressable RAM, timers
+- **MOS 6502** — 8-bit, decimal mode, NMI/IRQ/BRK vectoring
+- **Zilog Z80** — 8-bit, IM 0/1/2, NMI/INT, full 8080 + Z80 ops
+- **RISC-V rv32i (+M)** — 32-bit, base integer ISA plus the M-extension
 
 Each core has a matching assembler, and the whole crate compiles to **one WASM
 module** (via `wasm-bindgen`, feature `wasm`) plus a native `rlib`/`cdylib`.
@@ -56,13 +59,59 @@ prebuilt `docs/pkg/` is committed. After any Rust change, rebuild and commit it:
 `wasm-pack build --target web --out-dir docs/pkg --release --features wasm`.
 Root `index.html` redirects to `docs/` for local convenience.
 
-## CLI runner
+## Quick start
+
+### Run headless from a shell (CLI)
+
+The CLI lives in `examples/run.rs`; it assembles source and runs the program,
+printing registers, flags, and output.
 
 ```bash
-cargo run --example run -- examples/hello.asm          # 8086
-cargo run --example run -- --isa 8085 examples/hello85.asm
-cargo run --example run -- --isa 8051 examples/hello51.asm
+# build once
+cargo build --release --example run
+
+# 8086 hello world
+cargo run --example run -- examples/hello.asm
+
+# other ISAs, with a step cap
+cargo run --example run -- --isa 8051 --max-steps 1000 examples/hello51.asm
+
+# trace every instruction + peripheral (port) write
+cargo run --example run -- --isa 8085 --verbose examples/traffic.asm
+
+# automate checks (exit 0 = pass, 1 = fail, 2 = usage error)
+cargo run --example run -- --grade tests/spec.txt examples/prog.asm
+
+# measure emulation throughput (native numbers)
+cargo run --example run -- --bench            # default 10M steps
+cargo run --example run -- --bench 2000000 --isa rv32
 ```
+
+### Use it in the browser (WASM IDE)
+
+```bash
+# serve the demo (from repo root)
+python3 -m http.server -d docs 8000
+# open http://localhost:8000  (root redirects to /docs/)
+```
+
+In the IDE: pick an ISA → write code → `F7` assemble → `F5` run / `F8` step →
+set breakpoints in the gutter → inspect registers, memory, and device panels.
+
+**Browser throughput check** (open DevTools console on the IDE page; the
+emulator is exposed as `window.emu`):
+
+```js
+let t = performance.now();
+let s = emu.run(1_000_000);          // steps executed
+let ms = performance.now() - t;
+console.log(s, 'steps in', ms.toFixed(1), 'ms =>', Math.round(s / (ms/1000)), 'steps/sec');
+```
+
+Both the CLI and the browser run the **same Rust core** (native vs WASM), so
+bulk `run()` throughput is comparable; only per-instruction single-stepping
+from JS is slower because of the JS↔WASM call boundary.
+
 
 ## Examples
 

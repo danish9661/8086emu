@@ -26,6 +26,15 @@ versions are dated snapshots of `main`.
   had broken the entire IDE script).
 - Z80 `NEG` half-carry now computed correctly (was an always-zero erasing op).
 - Richer JSDoc on the WASM `Emulator` surface for better generated `.d.ts`.
+- 8086 performance: cached segment bases (`cs_base`..`gs_base`) avoid a `seg<<4`
+  per memory access; `PIT`/`PIC` servicing is skipped in `step()` when no timer
+  is counting and no IRQ can fire; a conservative, re-read-verified decode cache
+  in `exec()` reuses decoded prefixes/opcode across iterations. The redundant
+  `mem_read(pc())` used only for cycle counting was removed (`~2x` faster busy
+  loop, ~16M steps/sec in a debug native build).
+- 8086 core bug fix: `op_group1` `reg, r/m` forms (e.g. `ADD AX, [SI]`,
+  `ADD AX, BX`) now write the result to the **register** operand instead of the
+  `r/m` operand (the previous behaviour corrupted the source register/memory).
 
 ## [2026-08-22] - Initial multi-CPU feature set
 - Cores: 8086, 8085, 8051, Z80, 6502, rv32i (+M).

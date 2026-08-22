@@ -41,6 +41,11 @@ impl Pic8259 {
     }
 
     /// Highest-priority unmasked, non-preempting IRQ vector, if any.
+    /// Cheap check used to skip interrupt servicing when nothing can fire.
+    pub fn has_irq(&self) -> bool {
+        (self.irr & !self.imr) != 0
+    }
+
     pub fn output_vector(&self) -> Option<u8> {
         let req = self.irr & !self.imr;
         if req == 0 {
