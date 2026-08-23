@@ -8,6 +8,17 @@
 
 use crate::cpu::{Cpu, Mem, Output, FlagSet, Reg, Disasm, RunResult};
 
+#[derive(Clone, Copy)]
+struct RvDec {
+    opcode: u8,
+    f3: u8,
+    f7: u8,
+    rd: usize,
+    rs1: usize,
+    rs2: usize,
+    imm_i: u32,
+}
+
 #[derive(Clone)]
 pub struct CpuRv32 {
     pub mem: Mem,
@@ -16,6 +27,12 @@ pub struct CpuRv32 {
     pub halt: bool,
     pub out: Output,
     pub halted_reason: Option<String>,
+    /// Decode cache: `(pc, insn, decoded_fields)`. On a hit the raw bytes are
+    /// *trusted* (the 4-byte `fetch` is skipped) when `pc` is in ROM (ROM writes
+    /// are silently ignored, so the bytes are immutable during execution); for
+    /// writable code the cached bytes are re-read and compared, so self-modifying
+    /// code stays correct. Invalidated on `reset`/`restore`.
+    dec: Option<(u32, u32, RvDec)>,
 }
 
 impl Default for CpuRv32 {
@@ -27,6 +44,7 @@ impl Default for CpuRv32 {
             halt: false,
             out: Output::default(),
             halted_reason: None,
+            dec: None,
         };
         c.reset();
         c
@@ -47,14 +65,48 @@ impl CpuRv32 {
             self.x[i] = v;
         }
     }
-    fn fetch32(&mut self) -> u32 {
-        let a = self.pc as usize;
-        let b = self.mem.read(a) as u32
+    /// Read a 32-bit little-endian instruction at `a` *without* advancing `pc`.
+    fn peek32(&self, a: u32) -> u32 {
+        let a = a as usize;
+        self.mem.read(a) as u32
             | (self.mem.read(a + 1) as u32) << 8
             | (self.mem.read(a + 2) as u32) << 16
-            | (self.mem.read(a + 3) as u32) << 24;
-        self.pc = self.pc.wrapping_add(4);
-        b
+            | (self.mem.read(a + 3) as u32) << 24
+    }
+    /// Split an instruction word into its base decode fields.
+    fn fields(insn: u32) -> RvDec {
+        RvDec {
+            opcode: (insn & 0x7f) as u8,
+            rd: ((insn >> 7) & 0x1f) as usize,
+            f3: ((insn >> 12) & 0x7) as u8,
+            rs1: ((insn >> 15) & 0x1f) as usize,
+            rs2: ((insn >> 20) & 0x1f) as usize,
+            f7: ((insn >> 25) & 0x7f) as u8,
+            imm_i: ((insn as i32) >> 20) as u32,
+        }
+    }
+    /// Fetch + decode at `addr`, using the decode cache. Returns the raw
+    /// instruction word and its decoded fields. Advances are the caller's job
+    /// (the cache must not move `pc`), so `step` sets the default next-PC itself.
+    fn fetch_decode(&mut self, addr: u32) -> (u32, RvDec) {
+        if let Some((cpc, cinsn, cd)) = self.dec {
+            if cpc == addr {
+                if self.mem.in_rom(addr as usize) {
+                    return (cinsn, cd); // immutable: trust, skip the 4-byte fetch
+                }
+                let cur = self.peek32(addr);
+                if cur == cinsn {
+                    return (cinsn, cd); // writable but unchanged: reuse fields
+                }
+                let d = Self::fields(cur);
+                self.dec = Some((addr, cur, d));
+                return (cur, d);
+            }
+        }
+        let cur = self.peek32(addr);
+        let d = Self::fields(cur);
+        self.dec = Some((addr, cur, d));
+        (cur, d)
     }
     fn lb(&self, a: u32) -> u32 {
         (self.mem.read(a as usize) as i8) as i32 as u32
@@ -188,6 +240,7 @@ impl Cpu for CpuRv32 {
         self.halt = false;
         self.halted_reason = None;
         self.out = Output::default();
+        self.dec = None;
     }
 
     fn step(&mut self) -> bool {
@@ -195,19 +248,22 @@ impl Cpu for CpuRv32 {
             return false;
         }
         let addr = self.pc;
-        let insn = self.fetch32();
+        // Default next-PC is addr+4 (what `fetch32` used to advance); branches,
+        // jumps, and `ecall`/`ebreak`/halt override below.
+        self.pc = addr.wrapping_add(4);
+        let (insn, d) = self.fetch_decode(addr);
         if insn == 0 {
             self.halt = true;
             self.halted_reason = Some("zero instruction".into());
             return false;
         }
-        let opcode = insn & 0x7f;
-        let rd = ((insn >> 7) & 0x1f) as usize;
-        let f3 = (insn >> 12) & 0x7;
-        let rs1 = ((insn >> 15) & 0x1f) as usize;
-        let rs2 = ((insn >> 20) & 0x1f) as usize;
-        let f7 = (insn >> 25) & 0x7f;
-        let imm_i = ((insn as i32) >> 20) as u32;
+        let opcode = d.opcode;
+        let rd = d.rd;
+        let f3 = d.f3;
+        let rs1 = d.rs1;
+        let rs2 = d.rs2;
+        let f7 = d.f7;
+        let imm_i = d.imm_i;
 
         match opcode {
             0x37 => self.wr(rd, insn & 0xfffff000),
@@ -379,6 +435,9 @@ impl Cpu for CpuRv32 {
         (0..len).map(|i| self.mem.read(addr as usize + i)).collect()
     }
     fn mem_write(&mut self, addr: u32, data: &[u8]) {
+        // External write (loader / debugger poke): the code that was just
+        // written may land on a cached PC, so drop the decode cache.
+        self.dec = None;
         for (i, b) in data.iter().enumerate() {
             self.mem.write(addr as usize + i, *b);
         }
@@ -395,6 +454,7 @@ impl Cpu for CpuRv32 {
     }
     fn restore(&mut self, data: &[u8]) {
         let mut o = 0;
+        self.dec = None; // memory/pc changed; force re-decode
         let get4 = |d: &[u8], p: &mut usize| {
             let v = u32::from_le_bytes([d[*p], d[*p + 1], d[*p + 2], d[*p + 3]]);
             *p += 4;

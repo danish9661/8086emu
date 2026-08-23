@@ -22,6 +22,17 @@ versions are dated snapshots of `main`.
 - IDE: 8085 SID/SOD indicators, 8051 serial RX injector, Z80 memory hex editor.
 
 ### Changed
+- rv32: added a re-read-verified decode cache in `step()`. The decoded
+  instruction word is *trusted* (the 4-byte `fetch` is skipped) when the PC is
+  inside the read-only ROM range — `Mem::write` silently ignores ROM writes, so
+  the bytes are provably immutable during execution; for writable code the cached
+  bytes are re-read and compared, keeping self-modifying code correct. The cache
+  is invalidated on `reset`/`restore`. Busy-loop throughput (debug native, ROM
+  image) rose from ~33 M to ~52 M steps/sec (**~+57%**). `Mem::in_rom` added to
+  support the fast path.
+- CLI `--bench`: rv32 now loads its loop as ROM (representative of real
+  read-only RISC-V code) instead of plain `mem_write`, so the reported rv32
+  throughput reflects the decode-cache trust fast path.
 - CLI: assembly/file/ISA errors now print actionable messages to stderr and use
   conventional exit codes (0 success, 1 runtime failure, 2 usage error).
 - `renderPorts()` function header restored in `docs/app.js` (the missing header

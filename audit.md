@@ -105,7 +105,7 @@ firing). Release builds and WASM are faster/slower respectively (see caveats).
 | 8051 | **~39.1 M** | ~1.6x faster after removing the redundant `code_byte(pc)` peek + gating idle timer/interrupt work. Timers tick per step otherwise. |
 | 6502 | ~35–37 M | already lean (single fetch, no per-step timer, cheap interrupt check). |
 | Z80 | **~50.0 M** | already lean; bench was previously broken (see section 7). |
-| rv32 | ~31–33 M | already lean (single 4-byte fetch, no per-step timer). |
+| rv32 | **~52 M** | ~+57% after a re-read-verified decode cache: the 4-byte fetch is skipped when the PC is in ROM (ROM writes are ignored, so bytes are immutable); writable code is re-read/verified so self-modifying code stays correct. |
 
 ### Caveats
 

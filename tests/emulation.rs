@@ -2388,6 +2388,44 @@ fn rv32_mulh() {
     assert_eq!(reg(&regs, "x4"), 0x1000000, "0x10000000^2 high = 0x1000000");
 }
 
+/// The decode cache must re-read (and thus pick up) code that is externally
+/// poked while a stale decode for that PC exists. This guards the writable
+/// (non-ROM) verify path of the rv32 decode cache.
+#[test]
+fn rv32_poke_code_invalidates_cache() {
+    let mut emu = make_emulator("rv32").unwrap();
+    // Two plain ALU ops (no halt) so the core stays runnable and a stale decode
+    // for PC=0 remains cached after the first step.
+    let a = emu.assemble("ORG 0\naddi x1, x0, 5\naddi x2, x0, 1\nEND\n").unwrap();
+    emu.mem_write(0, &a);
+    emu.set_pc(0);
+    emu.step();
+    assert_eq!(reg(&emu.regs(), "x1"), 5, "first instruction sets x1=5");
+    assert!(!emu.is_halted(), "core must remain runnable for the poke check");
+
+    // Poke a different first instruction (x1 = 7) over the same address and
+    // re-run from 0. The cache must not serve the stale x1=5 decode.
+    let b = emu.assemble("ORG 0\naddi x1, x0, 7\nEND\n").unwrap();
+    emu.mem_write(0, &b);
+    emu.set_pc(0);
+    emu.step();
+    assert_eq!(reg(&emu.regs(), "x1"), 7, "poked code must take effect");
+    assert!(!emu.is_halted(), "no ebreak in poked code");
+}
+
+/// The decode-cache trust fast path (skip the per-step fetch) must still
+/// execute ROM-loaded code correctly.
+#[test]
+fn rv32_rom_load_executes() {
+    let mut emu = make_emulator("rv32").unwrap();
+    let code = emu.assemble("ORG 0\naddi x1, x0, 42\naddi a7, x0, 93\necall\nEND\n").unwrap();
+    emu.load_rom(&code, 0);
+    emu.set_pc(0);
+    emu.run(100);
+    assert!(emu.is_halted(), "ecall exit halts");
+    assert_eq!(reg(&emu.regs(), "x1"), 42, "ROM-loaded program executed via cache trust path");
+}
+
 #[test]
 fn m6502_hello() {
      let src = r#"

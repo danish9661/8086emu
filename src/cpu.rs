@@ -79,6 +79,19 @@ impl Mem {
         (self.rom_base, self.rom_len)
     }
 
+    /// True if `addr` falls inside the read-only ROM range. CPU store
+    /// instructions (`write`) silently ignore writes here, so the bytes at a
+    /// ROM address are provably immutable during execution — a decoder may
+    /// safely cache (trust) them without re-reading.
+    pub fn in_rom(&self, addr: usize) -> bool {
+        if self.rom_len == 0 {
+            return false;
+        }
+        let m = self.data.len() - 1;
+        let i = addr & m;
+        i >= self.rom_base && i < self.rom_base.wrapping_add(self.rom_len)
+    }
+
     pub fn slice(&self, addr: usize, len: usize) -> Vec<u8> {
         (0..len).map(|i| self.read(addr + i)).collect()
     }
