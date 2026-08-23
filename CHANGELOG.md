@@ -7,6 +7,8 @@ versions are dated snapshots of `main`.
 ## [Unreleased]
 
 ### Added
+- `audit.md`: security, memory/leakage, per-step overhead, performance
+  benchmarks, determinism, and known-limitation audit of the cores.
 - CLI: `--verbose`/`-v` debug trace that prints each decoded instruction and
   every peripheral (port) write, for tracing hardware access.
 - CLI: `--help`/`-h` and a clean `print_usage()`; running with no arguments now
@@ -35,6 +37,9 @@ versions are dated snapshots of `main`.
 - 8086 core bug fix: `op_group1` `reg, r/m` forms (e.g. `ADD AX, [SI]`,
   `ADD AX, BX`) now write the result to the **register** operand instead of the
   `r/m` operand (the previous behaviour corrupted the source register/memory).
+- CLI: `--bench` for Z80 now assembles the correct `JR again` loop (the
+  case-sensitive `bench_loop` arm was matching `"Z80"` while `--isa` passes
+  `"z80"`, which silently fell through to the 8086 loop and was rejected).
 
 ## [2026-08-22] - Initial multi-CPU feature set
 - Cores: 8086, 8085, 8051, Z80, 6502, rv32i (+M).

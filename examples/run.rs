@@ -286,7 +286,7 @@ fn bench_loop(isa: &str) -> String {
         "8085" => "ORG 0\nagain:\nJMP again\nEND\n".to_string(),
         "8051" => "ORG 0\nagain:\nSJMP again\nEND\n".to_string(),
         "6502" => "ORG 0\nagain:\nJMP again\nEND\n".to_string(),
-        "Z80" => "ORG 0\nagain:\nJR again\nEND\n".to_string(),
+        "z80" => "ORG 0\nagain:\nJR again\nEND\n".to_string(),
         "rv32" => "ORG 0\nagain:\nBEQ x0, x0, again\nEND\n".to_string(),
         _ => "ORG 100h\nagain:\njmp again\nEND\n".to_string(), // 8086
     }
