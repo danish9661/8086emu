@@ -101,11 +101,11 @@ firing). Release builds and WASM are faster/slower respectively (see caveats).
 | ISA | steps/sec | Notes |
 |---|---|---|
 | 8086 | **~16.3 M** | ~2x faster after the optimizations in `e6dea4b` (was ~8.5 M). |
-| 8085 | ~16.8 M | |
-| 8051 | ~23.8 M | timers tick per step |
-| 6502 | ~37.2 M | |
-| Z80 | **~50.0 M** | bench was previously broken (see section 7); corrected value shown |
-| rv32 | ~32.6 M | |
+| 8085 | **~20.5 M** | ~1.2x faster after removing the redundant `rd(pc)` opcode read + gating idle interrupt servicing (`4c71d3b`+cross-core pass). |
+| 8051 | **~39.1 M** | ~1.6x faster after removing the redundant `code_byte(pc)` peek + gating idle timer/interrupt work. Timers tick per step otherwise. |
+| 6502 | ~35–37 M | already lean (single fetch, no per-step timer, cheap interrupt check). |
+| Z80 | **~50.0 M** | already lean; bench was previously broken (see section 7). |
+| rv32 | ~31–33 M | already lean (single 4-byte fetch, no per-step timer). |
 
 ### Caveats
 

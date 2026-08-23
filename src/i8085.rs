@@ -97,6 +97,8 @@ pub struct Cpu8085 {
     pub sram_len: u32,
     /// Total host clock cycles (T-states) executed — drives the 8155 timer.
     pub cycles: u64,
+    /// Opcode of the most recently decoded instruction (for cycle accounting).
+    last_op: u8,
 }
 
 impl Default for Cpu8085 {
@@ -125,6 +127,7 @@ impl Cpu8085 {
             sram_base: 0x9000,
             sram_len: SRAM_SIZE as u32,
             cycles: 0,
+            last_op: 0,
         };
         c.reset();
         c
@@ -347,6 +350,7 @@ impl Cpu8085 {
 
     pub fn exec(&mut self) {
         let op = self.fetch8();
+        self.last_op = op;
         match op {
             // MOV r,r'
             0x40..=0x7F if op & 0x07 != 6 && (op >> 3) & 7 != 6 => {
@@ -565,6 +569,16 @@ impl Cpu8085 {
         if clear_iff { self.int_enabled = false; }
         self.pc = vector;
     }
+
+    /// Cheap check used to skip `service_interrupts` when nothing can fire.
+    fn has_interrupt(&self) -> bool {
+        self.pending_trap
+            || (self.int_enabled
+                && (self.pending_rst75 && !self.mask_rst75
+                    || self.pending_rst65 && !self.mask_rst65
+                    || self.pending_rst55 && !self.mask_rst55
+                    || self.intr_vector.is_some()))
+    }
 }
 
 impl Cpu for Cpu8085 {
@@ -585,13 +599,14 @@ impl Cpu for Cpu8085 {
 
     fn step(&mut self) -> bool {
         if self.halted { return false; }
-        let op = self.rd(self.pc as usize);
         self.exec();
         if !self.halted {
-            let ts = i8085_tstates(op);
+            let ts = i8085_tstates(self.last_op);
             self.cycles += ts as u64;
-            self.i8155.advance(ts as u64);
-            self.service_interrupts();
+            self.i8155.advance(ts as u64); // I8155::advance self-gates when idle
+            if self.has_interrupt() {
+                self.service_interrupts();
+            }
         }
         !self.halted
     }

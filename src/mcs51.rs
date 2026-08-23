@@ -66,6 +66,8 @@ pub struct Cpu8051 {
     pub cycles: u64,
     /// Instruction length of the opcode currently being fetched (1..=3).
     cur_len: u8,
+    /// Opcode of the most recently decoded instruction (for cycle accounting).
+    last_op: u8,
 }
 
 impl Default for Cpu8051 {
@@ -107,6 +109,7 @@ impl Cpu8051 {
             tx_char: 0,
             cycles: 0,
             cur_len: 0,
+            last_op: 0,
         };
         c.reset();
         c
@@ -429,8 +432,30 @@ impl Cpu8051 {
         self.halted = true;
     }
 
+    /// True when a timer is actually running (TR0/TR1 set) or a serial TX is in
+    /// progress — used to skip `tick_timers_n` when the subsystem is idle.
+    fn timers_active(&self) -> bool {
+        self.sfr[S_TCON] & 0x50 != 0 || self.tx_countdown > 0
+    }
+
+    /// Cheap check used to skip `service_interrupts` when no source can fire.
+    fn has_interrupt(&self) -> bool {
+        let ie = self.sfr[S_IE];
+        if ie & 0x80 == 0 { return false; } // EA not enabled
+        let tcon = self.sfr[S_TCON];
+        let scon = self.sfr[S_SCON];
+        let ie0 = if tcon & 0x01 != 0 { tcon & 0x02 != 0 } else { self.ext_int0_held };
+        let ie1 = if tcon & 0x04 != 0 { tcon & 0x08 != 0 } else { self.ext_int1_held };
+        (ie0 && (ie & 0x01 != 0))
+            || (tcon & 0x20 != 0 && (ie & 0x02 != 0))
+            || (ie1 && (ie & 0x04 != 0))
+            || (tcon & 0x80 != 0 && (ie & 0x08 != 0))
+            || (scon & 0x03 != 0 && (ie & 0x10 != 0))
+    }
+
     pub fn exec(&mut self) {
         let op = self.fetch8();
+        self.last_op = op;
         match op {
             // ----- MOV A,<src> -----
             0xE8..=0xEF => { let v = self.rn(op & 7); self.set_acc(v); }
@@ -774,19 +799,22 @@ impl Cpu for Cpu8051 {
         if pcon & 0x02 != 0 { // PD (power-down): oscillator stopped, frozen
             return true; // only reset wakes it; not "halted"
         }
-        let op = self.code_byte(self.pc as usize); // peek for machine-cycle count
         if pcon & 0x01 != 0 { // IDL (idle): CPU sleeps, peripherals keep running
-            self.tick_timers_n(1);
-            if !self.halted { self.service_interrupts(); } // an interrupt wakes it (clears IDL)
+            if self.timers_active() { self.tick_timers_n(1); }
+            if !self.halted && self.has_interrupt() { self.service_interrupts(); } // an interrupt wakes it (clears IDL)
             return true; // no user instruction executed this step
         }
         self.cur_len = 0;
         self.exec();
         if !self.halted {
-            let cyc = mcs51_cycles(op, self.cur_len);
+            let cyc = mcs51_cycles(self.last_op, self.cur_len);
             self.cycles += cyc as u64;
-            self.tick_timers_n(cyc);
-            self.service_interrupts();
+            if self.timers_active() || self.tx_countdown > 0 {
+                self.tick_timers_n(cyc);
+            }
+            if self.has_interrupt() {
+                self.service_interrupts();
+            }
         }
         !self.halted
     }

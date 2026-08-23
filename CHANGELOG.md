@@ -40,6 +40,13 @@ versions are dated snapshots of `main`.
 - CLI: `--bench` for Z80 now assembles the correct `JR again` loop (the
   case-sensitive `bench_loop` arm was matching `"Z80"` while `--isa` passes
   `"z80"`, which silently fell through to the 8086 loop and was rejected).
+- Cross-core performance pass: 8085 and 8051 no longer re-read the opcode at
+  `step()` just to compute cycle counts (the decoded opcode is reused via a
+  `last_op` field, matching the 8086 optimization); 8051 also skips
+  `tick_timers_n` / `service_interrupts` when no timer is running and no
+  interrupt source is enabled. **8085 ~+22%, 8051 ~+64%** on busy-loop
+  throughput (debug native). 6502 / Z80 / rv32 `step()` were already lean
+  (single fetch, no per-step timer, cheap interrupt check) and are unchanged.
 
 ## [2026-08-22] - Initial multi-CPU feature set
 - Cores: 8086, 8085, 8051, Z80, 6502, rv32i (+M).
