@@ -592,6 +592,7 @@ let emu = null;
 let isa = '8086';
 let steps = 0;
 let runTimer = null;
+let rafId = null;          // handle for the requestAnimationFrame run loop
 let stopRequested = false;
 let accumOut = '';
 let errLine = -1;
@@ -1472,45 +1473,52 @@ function runToLine(addr) {
   }
 }
 
-function startRun() {
-  if (emu.halted()) return;
-  stopRequested = false;
-  // Snapshot the pre-run state so Step-Back can undo the whole run (time-travel).
-  history.push({ snap: emu.snapshot(), steps });
-  if (history.length > MAX_HISTORY) history.shift();
-  const condBps = bpAddrs().filter(a => bpCond(a));
-  const active = bpUncondAddrs().filter(a => a !== emu.pc()); // continue past the bp we are stopped at
-  runTimer = setInterval(() => {
-    if (condBps.length > 0) {
-      // stepping mode so conditional breakpoints are tested every instruction
-      let n = 0;
-      while (n < 30000 && !emu.halted() && !stopRequested) {
-        emu.step(); n++;
-        if (emu.waiting_input() || bpHit(emu.pc())) break;
-      }
-      steps += n;
-      refresh();
-      if (emu.waiting_input()) { stopRun(); maybePromptInput(); return; }
-      if (n < 30000 && !stopRequested && bpHit(emu.pc())) { stopRun(); toast('Breakpoint @' + fmt(emu.pc()).padStart(4, '0') + 'h'); return; }
-      if (emu.halted() || stopRequested) { stopRun(); return; }
-    } else {
-      const n = emu.run_bp(30000, active);
-      steps += n;
-      refresh();
-      if (emu.waiting_input()) { stopRun(); maybePromptInput(); return; }
-      if (n < 30000 && !stopRequested && bpHit(emu.pc())) { stopRun(); toast('Breakpoint @' + fmt(emu.pc()).padStart(4, '0') + 'h'); return; }
-      if (emu.halted() || stopRequested) { stopRun(); return; }
-    }
-  }, 16);
-  $('stopBtn').disabled = false;
-  refresh();
-}
+ function startRun() {
+   if (emu.halted() || runTimer) return;
+   stopRequested = false;
+   // Snapshot the pre-run state so Step-Back can undo the whole run (time-travel).
+   history.push({ snap: emu.snapshot(), steps });
+   if (history.length > MAX_HISTORY) history.shift();
+   const condBps = bpAddrs().filter(a => bpCond(a));
+   const active = bpUncondAddrs().filter(a => a !== emu.pc()); // continue past the bp we are stopped at
+   $('stopBtn').disabled = false;
+   refresh();
+   // Drive the run from requestAnimationFrame so the UI repaints in lock-step
+   // with the display (smoother than setInterval, and it naturally pauses when
+   // the tab is backgrounded).
+   const tick = () => {
+     if (stopRequested || emu.halted()) { stopRun(); return; }
+     if (condBps.length > 0) {
+       // stepping mode so conditional breakpoints are tested every instruction
+       let n = 0;
+       while (n < 30000 && !emu.halted() && !stopRequested) {
+         emu.step(); n++;
+         if (emu.waiting_input() || bpHit(emu.pc())) break;
+       }
+       steps += n; refresh();
+       if (emu.waiting_input()) { stopRun(); maybePromptInput(); return; }
+       if (n < 30000 && !stopRequested && bpHit(emu.pc())) { stopRun(); toast('Breakpoint @' + fmt(emu.pc()).padStart(4, '0') + 'h'); return; }
+       if (emu.halted() || stopRequested) { stopRun(); return; }
+     } else {
+       const n = emu.run_bp(30000, active);
+       steps += n; refresh();
+       if (emu.waiting_input()) { stopRun(); maybePromptInput(); return; }
+       if (n < 30000 && !stopRequested && bpHit(emu.pc())) { stopRun(); toast('Breakpoint @' + fmt(emu.pc()).padStart(4, '0') + 'h'); return; }
+       if (emu.halted() || stopRequested) { stopRun(); return; }
+     }
+     rafId = requestAnimationFrame(tick);
+   };
+   runTimer = 1;                 // running sentinel (button/state logic unchanged)
+   rafId = requestAnimationFrame(tick);
+ }
 
-function stopRun() {
-  if (runTimer) { clearInterval(runTimer); runTimer = null; }
-  stopRequested = false;
-  refresh();
-}
+ function stopRun() {
+   if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+   if (runTimer) { clearInterval(runTimer); } // no-op when runTimer is the sentinel
+   runTimer = null;
+   stopRequested = false;
+   refresh();
+ }
 
 $('asmBtn').onclick = assemble;
 $('stepBtn').onclick = stepOnce;

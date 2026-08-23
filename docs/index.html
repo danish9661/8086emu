@@ -9,37 +9,47 @@
 <body>
   <header>
     <span class="logo">multi-cpu-emu <small>8086 · 8085 · 8051 · RISC-V</small></span>
-    <label>ISA
-      <select id="isa">
-        <option value="8086" selected>Intel 8086</option>
-      <option value="8085">Intel 8085</option>
-      <option value="8051">Intel 8051</option>
-      <option value="rv32">RISC-V (RV32I)</option>
-      <option value="6502">MOS 6502</option>
-      <option value="Z80">Zilog Z80</option>
-      </select>
-    </label>
-    <button id="exampleBtn" title="Load a sample program" data-i18n="example">Example</button>
-    <label>Lang
-      <select id="lang">
-        <option value="en" selected>EN</option>
-        <option value="es">ES</option>
-        <option value="de">DE</option>
-        <option value="fr">FR</option>
-        <option value="hi">HI</option>
-      </select>
-    </label>
+    <div class="hgroup">
+      <label>ISA
+        <select id="isa">
+          <option value="8086" selected>Intel 8086</option>
+          <option value="8085">Intel 8085</option>
+          <option value="8051">Intel 8051</option>
+          <option value="rv32">RISC-V (RV32I)</option>
+          <option value="6502">MOS 6502</option>
+          <option value="Z80">Zilog Z80</option>
+        </select>
+      </label>
+      <button id="exampleBtn" title="Load a sample program" data-i18n="example">Example</button>
+      <label>Lang
+        <select id="lang">
+          <option value="en" selected>EN</option>
+          <option value="es">ES</option>
+          <option value="de">DE</option>
+          <option value="fr">FR</option>
+          <option value="hi">HI</option>
+        </select>
+      </label>
+    </div>
     <span class="spacer"></span>
-    <button id="asmBtn" class="primary" title="Assemble and load (F7)" data-i18n="assemble">Assemble</button>
-    <button id="stepBtn" title="Step one instruction (F8)" disabled data-i18n="step">Step</button>
-    <button id="overBtn" title="Step over a CALL (F10): run the whole call in one step" disabled data-i18n="stepOver">Step-Over</button>
-    <button id="backBtn" title="Undo the last Step (snapshot restore)" disabled data-i18n="stepBack">Step-Back</button>
-    <button id="runBtn" title="Run until halt or Stop (F5)" disabled data-i18n="run">Run</button>
-    <button id="stopBtn" title="Stop running" disabled data-i18n="stop">Stop</button>
-    <button id="resetBtn" title="Reset CPU" data-i18n="reset">Reset</button>
-    <button id="saveBtn" title="Download a snapshot of the current CPU state" data-i18n="saveState">Save State</button>
-    <button id="loadBtn" title="Restore CPU state from a saved snapshot file" data-i18n="loadState">Load State</button>
-    <button id="shareBtn" title="Copy a shareable link with the current source encoded in the URL" data-i18n="share">Share Link</button>
+    <div class="hgroup">
+      <button id="asmBtn" class="primary" title="Assemble and load (F7)" data-i18n="assemble">Assemble</button>
+    </div>
+    <div class="hgroup">
+      <button id="stepBtn" title="Step one instruction (F8)" disabled data-i18n="step">Step</button>
+      <button id="overBtn" title="Step over a CALL (F10): run the whole call in one step" disabled data-i18n="stepOver">Step-Over</button>
+      <button id="backBtn" title="Undo the last Step (snapshot restore)" disabled data-i18n="stepBack">Step-Back</button>
+    </div>
+    <div class="hgroup">
+      <button id="runBtn" title="Run until halt or Stop (F5)" disabled data-i18n="run">Run</button>
+      <button id="stopBtn" title="Stop running" disabled data-i18n="stop">Stop</button>
+    </div>
+    <div class="hgroup">
+      <button id="resetBtn" title="Reset CPU" data-i18n="reset">Reset</button>
+      <button id="saveBtn" title="Download a snapshot of the current CPU state" data-i18n="saveState">Save State</button>
+      <button id="loadBtn" title="Restore CPU state from a saved snapshot file" data-i18n="loadState">Load State</button>
+      <button id="shareBtn" title="Copy a shareable link with the current source encoded in the URL" data-i18n="share">Share Link</button>
+    </div>
     <span id="intrBar85" style="display:none">
       <span style="color:var(--muted);font-size:11px">IRQ:</span>
       <button id="irqTrap" title="Non-maskable, works with DI">TRAP</button>
@@ -178,7 +188,7 @@
         </div>
         <div class="panel" id="z80memPanel" style="display:none">
           <h2>Z80 Memory Editor <span class="hint">edit bytes, then Apply</span></h2>
-          <div id="memtools">
+          <div id="z80memtools">
             <label>Base <input id="z80memBase" value="0" spellcheck="false" size="6" title="Base address (hex)"></label>
             <button id="z80memDump" title="Reload the hex dump from memory">Dump</button>
             <button id="z80memApply" title="Write the edited bytes back to memory">Apply</button>

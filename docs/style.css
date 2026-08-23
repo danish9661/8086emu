@@ -25,6 +25,9 @@ header {
 }
 header .logo { font-weight: 700; color: var(--accent); font-size: 15px; margin-right: 8px; }
 header .logo small { color: var(--muted); font-weight: 400; }
+.hgroup { display: flex; align-items: center; gap: 6px; }
+.hgroup + .hgroup { margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--border); }
+@media (max-width: 1100px) { .hgroup + .hgroup { border-left: none; padding-left: 0; } }
 select, button, input {
   font: inherit; color: var(--text); background: #21262d;
   border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer;
@@ -170,7 +173,7 @@ main {
 #memview .mb { cursor: pointer; border-radius: 2px; }
 #memview .mb:hover { background: rgba(88, 166, 255, .25); }
 #memview .mb.ch { background: var(--amber, #e3a008); color: #1b1f24; }
-#memtools { display: flex; gap: 6px; padding: 6px 10px; align-items: center; border-top: 1px solid var(--border); }
+#memtools, #z80memtools { display: flex; gap: 6px; padding: 6px 10px; align-items: center; border-top: 1px solid var(--border); }
 #memtools input { width: 110px; }
 #memtools .info { color: var(--muted); font-size: 12px; margin-left: auto; }
 #output { flex: 1; padding: 8px 12px; overflow: auto; white-space: pre-wrap; word-break: break-all; min-height: 80px; font-size: 13px; color: #e6edf3; }
