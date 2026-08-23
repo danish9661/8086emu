@@ -68,6 +68,28 @@ versions are dated snapshots of `main`.
   throughput (debug native). 6502 / Z80 / rv32 `step()` were already lean
   (single fetch, no per-step timer, cheap interrupt check) and are unchanged.
 
+### Fixed
+- Z80 `IN r,(C)` now actually loads the port (BC) value into the register /
+  `(HL)`; previously it discarded the read and left the register unchanged.
+- Z80 `OUT (C),r` now writes the register / `(HL)` to the port (BC); previously
+  it *read* the port (swapped with `IN`). The two `exec_ed` arms were
+  transposed.
+- Z80 `ADD HL,BC/DE/HL/SP` (`0x09/0x19/0x29/0x39`) now execute (they were a
+  silent NOP in the main decoder — only the IX/IY variant existed); a new
+  `add_hl` helper sets H/N/V/C flags and leaves S/Z untouched.
+- Z80 `RST n` (`0x00`–`0x38`) now pushes the return address and jumps to the
+  vector; it was previously a NOP and had no assembler support. The assembler
+  now encodes `RST n` as `0xC7 | (n & 0x38)` for `n ∈ {0,8,…,56}`.
+- Z80 assembler `ORG` now emits padding for forward jumps (it previously only
+  adjusted the first-pass address and never produced the gap), so interrupt
+  vectors and `ORG`-placed ISRs land at the correct addresses.
+- rv32 CSR instructions (`CSRRW/CSRRS/CSRRC` and immediate forms, opcode
+  `0x73`, funct3 ≠ 0) now execute against a `csr[0..4096]` storage array
+  (read-old / write-new with correct `rs1 = 0` no-write semantics) instead of
+  being silently ignored. Snapshot/restore now covers the CSR file. The
+  assembler gained `CSRRW/CSRRS/CSRRC/CSRRWI/CSRRSI/CSRRCI` (plus shorthand
+  `CSRWI/CSRSI/CSRCI`) and the `CSRR rd,csr` / `CSRW csr,rs` pseudos.
+
 ## [2026-08-22] - Initial multi-CPU feature set
 - Cores: 8086, 8085, 8051, Z80, 6502, rv32i (+M).
 - 8086 INT 10h text/graphics framebuffer + x87 FPU subset.

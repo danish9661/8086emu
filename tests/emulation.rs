@@ -2645,3 +2645,119 @@ fn m6502_brk_vectors() {
     emu.step();
     assert_eq!(emu.pc(), 0x0200, "BRK vectors through FFFEh");
 }
+
+// ---------------------------------------------------------------------------
+// Coverage-audit fixes (see audit.md): Z80 IN/OUT (C), ADD HL,rp, RST; rv32 CSR
+// ---------------------------------------------------------------------------
+
+#[test]
+fn z80_rst_vectors() {
+    let src = "ORG 0\n RST 08h\n HALT\n ORG 08h\n LD A, 0ABh\n HALT\n END\n";
+    let mut emu = make_emulator("z80").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "A"), 0xAB, "RST 08h jumps to vector and LD runs");
+}
+
+#[test]
+fn z80_add_hl_sp() {
+    let src = "ORG 0\n LD SP, 0100h\n LD HL, 0200h\n ADD HL, SP\n HALT\n END\n";
+    let mut emu = make_emulator("z80").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "H"), 0x03, "ADD HL,SP high byte (0x200+0x100=0x300)");
+    assert_eq!(reg(&emu.regs(), "L"), 0x00, "ADD HL,SP low byte");
+}
+
+#[test]
+fn z80_in_out_c() {
+    // OUT (C),A writes A to port (BC); IN A,(C) reads it back.
+    let src = "ORG 0\n LD BC, 0015h\n LD A, 7Eh\n OUT (C), A\n IN A, (C)\n HALT\n END\n";
+    let mut emu = make_emulator("z80").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(reg(&emu.regs(), "A"), 0x7E, "IN A,(C) returns the value OUT (C),A wrote");
+    assert_eq!(emu.port_read(0x15), 0x7E, "OUT (C),A updated the I/O port");
+}
+
+#[test]
+fn rv32_csr_instructions() {
+    // NOTE: addi immediates are 12-bit signed, so 0x1234 truncates; use 0x122.
+    let src = "\
+ORG 0
+addi x1, x0, 0x122
+csrrw x2, 0x340, x1      ; x2 = old(0); csr[0x340] = 0x122
+csrr  x3, 0x340          ; x3 = 0x122
+addi  x4, x0, 0x1
+csrrs x5, 0x340, x4      ; x5 = 0x122; csr |= 1 -> 0x123
+addi  x6, x0, 0x5
+csrrc x7, 0x340, x6      ; x7 = 0x123; csr &= ~5 -> 0x122
+csrwi x0, 0x340, 0x9     ; csr[0x340] = 9
+csrr  x8, 0x340          ; x8 = 9
+addi a7, x0, 93
+ecall
+END
+";
+    let mut emu = make_emulator("rv32").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert!(emu.is_halted(), "ecall exit halts");
+    assert_eq!(reg(&emu.regs(), "x2"), 0, "CSRRW returns the old CSR value");
+    assert_eq!(reg(&emu.regs(), "x3"), 0x122, "CSRR reads CSR");
+    assert_eq!(reg(&emu.regs(), "x5"), 0x122, "CSRRS returns the old value before the set");
+    assert_eq!(reg(&emu.regs(), "x7"), 0x123, "CSRRC returns the old value before the clear");
+    assert_eq!(reg(&emu.regs(), "x8"), 0x9, "CSRWI writes the immediate");
+}
+
+#[test]
+fn rv32_csr_survives_snapshot() {
+    // Set a CSR then idle-loop (do NOT halt) so the snapshot is not halted.
+    let src = "\
+ORG 0
+addi x1, x0, 0x55
+csrrw x0, 0x340, x1
+jal x0, 0
+END
+";
+    let mut emu = make_emulator("rv32").unwrap();
+    let code = emu.assemble(src).expect("asm");
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(10);
+    let snap = emu.snapshot();
+    let mut emu2 = make_emulator("rv32").unwrap();
+    emu2.restore(&snap);
+    // Read the CSR back in the restored (non-halted) machine.
+    let c = emu2.assemble("ORG 0\ncsrr x9, 0x340\njal x0, 0\nEND\n").unwrap();
+    emu2.mem_write(0, &c);
+    emu2.set_pc(0);
+    emu2.run(10);
+    assert_eq!(reg(&emu2.regs(), "x9"), 0x55, "CSR value survives snapshot/restore");
+}
+
+// ---------------------------------------------------------------------------
+// Test hardening: self-modifying code (decode-cache invalidate on poke)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn x86_poke_code_invalidates_cache() {
+    let mut emu = make_emulator("8086").unwrap();
+    let a = emu.assemble("ORG 100h\nMOV AX, 5\nHLT\nEND\n").unwrap();
+    emu.mem_write(0, &a);
+    emu.set_pc(0x100);
+    emu.step();
+    assert_eq!(reg(&emu.regs(), "AX"), 5, "first instruction executes");
+    let b = emu.assemble("ORG 100h\nMOV AX, 7\nHLT\nEND\n").unwrap();
+    emu.mem_write(0, &b);
+    emu.set_pc(0x100);
+    emu.step();
+    assert_eq!(reg(&emu.regs(), "AX"), 7, "poked 8086 code must take effect");
+}

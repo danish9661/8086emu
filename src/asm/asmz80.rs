@@ -128,6 +128,11 @@ fn encode(mnem: &str, operand: &str, syms: &HashMap<String, u32>, cur: u32, orig
             Ok(vec![0x10, e as u8])
         }
         "CALL" => encode_call(operand, syms, cur, origin),
+        "RST" => {
+            let n = parse_expr(operand.trim(), syms, cur, origin)? as u8;
+            if n % 8 != 0 || n > 0x38 { return Err("RST target must be 0,8,...,56".into()); }
+            Ok(vec![0xC7 | (n & 0x38)])
+        }
         "RET" => {
             if operand.trim().is_empty() { Ok(vec![0xC9]) }
             else if let Some(cc) = cc_idx(operand.trim()) { Ok(vec![0xC0 | (cc << 3)]) }
@@ -359,7 +364,7 @@ pub fn assemble(source: &str) -> (Vec<u8>, Vec<AsmErr>, Vec<LineInfo>) {
         let up = mnem.to_ascii_uppercase();
         if up == "ORG" {
             match parse_expr(&ops.join(" "), &syms, addr, 0) {
-                Ok(v) => addr = v,
+                Ok(v) => { addr = v; seq.push((lineno + 1, Stmt::Org(v))); }
                 Err(e) => errs.push(AsmErr::new(lineno + 1, e)),
             }
             continue;

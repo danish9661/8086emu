@@ -305,6 +305,11 @@ impl CpuZ80 {
             0x1B => self.set_de(self.de().wrapping_sub(1)),
             0x2B => self.set_hl(self.hl().wrapping_sub(1)),
             0x3B => self.sp = self.sp.wrapping_sub(1),
+            // ADD HL,rp
+            0x09 => { self.add_hl(self.bc()); }
+            0x19 => { self.add_hl(self.de()); }
+            0x29 => { self.add_hl(self.hl()); }
+            0x39 => { self.add_hl(self.sp); }
             // LD r,r and (HL)
             0x40..=0x7F => {
                 if op == 0x76 { self.halted = true; }
@@ -341,6 +346,8 @@ impl CpuZ80 {
             0xC0 | 0xC8 | 0xD0 | 0xD8 | 0xE0 | 0xE8 | 0xF0 | 0xF8 => { if self.cond((op >> 3) & 7) { self.pc = self.pop(); } }
             0xCD => { let nn = self.fetch16(); self.push(self.pc); self.pc = nn; }
             0xC4 | 0xCC | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC => { let nn = self.fetch16(); if self.cond((op >> 3) & 7) { self.push(self.pc); self.pc = nn; } }
+            // RST n (n = 0x00,0x08,...,0x38)
+            0xC7 | 0xCF | 0xD7 | 0xDF | 0xE7 | 0xEF | 0xF7 | 0xFF => { let n = (op & 0x38) as u16; self.push(self.pc); self.pc = n; }
             // PUSH / POP
             0xC5 => self.push(self.bc()),
             0xD5 => self.push(self.de()),
@@ -382,8 +389,18 @@ impl CpuZ80 {
             0x56 => self.im = 1,
             0x5E => self.im = 2,
             0x45 | 0x4D | 0x55 | 0x5D | 0x65 | 0x6D | 0x75 | 0x7D => { self.pc = self.pop(); self.iff1 = self.iff2; }
-            0x40..=0x7F if (op & 0xC7) == 0x40 => { let r = (op >> 3) & 7; let v = if r == 6 { self.rd(self.hl()) } else { self.r8(r) }; self.in_port((self.bc()) | 0); let _ = v; }
-            0x41..=0x7F if (op & 0xC7) == 0x41 => { let r = (op >> 3) & 7; let v = self.in_port(self.bc()); if r == 6 { self.wr(self.hl(), v); } else { self.set_r8(r, v); } }
+            0x40..=0x7F if (op & 0xC7) == 0x40 => {
+                // IN r,(C): read port (BC) into r (or (HL) when r == 6)
+                let r = (op >> 3) & 7;
+                let v = self.in_port(self.bc());
+                if r == 6 { self.wr(self.hl(), v); } else { self.set_r8(r, v); }
+            }
+            0x41..=0x7F if (op & 0xC7) == 0x41 => {
+                // OUT (C),r: write r (or (HL) when r == 6) to port (BC)
+                let r = (op >> 3) & 7;
+                let v = if r == 6 { self.rd(self.hl()) } else { self.r8(r) };
+                self.out_port(self.bc(), v);
+            }
             0x43 | 0x53 | 0x63 | 0x73 => { let rp = (op >> 4) & 3; let v = self.rp(rp); let nn = self.fetch16(); self.wr(nn, v as u8); self.wr(nn.wrapping_add(1), (v >> 8) as u8); }
             0x4B | 0x5B | 0x6B | 0x7B => { let rp = (op >> 4) & 3; let nn = self.fetch16(); let lo = self.rd(nn); let hi = self.rd(nn.wrapping_add(1)); self.set_rp(rp, ((hi as u16) << 8) | lo as u16); }
             0x4A | 0x5A | 0x6A | 0x7A => { let carry = true; let rp = (op >> 4) & 3; let val = self.rp(rp); self.add16(val, carry); }
@@ -400,6 +417,18 @@ impl CpuZ80 {
         }
     }
 
+    fn add_hl(&mut self, val: u16) {
+        let hl = self.hl() as u32;
+        let v = val as u32;
+        let (r, c) = hl.overflowing_add(v);
+        let h = ((hl & 0xFFF) + (v & 0xFFF)) > 0xFFF;
+        let ov = ((hl ^ r) & (v ^ r) & 0x8000) != 0;
+        self.set_hl(r as u16);
+        self.set_flag(H, h);
+        self.set_flag(PV, ov);
+        self.set_flag(N, false);
+        self.set_flag(C, c);
+    }
     fn add16(&mut self, val: u16, _carry_ignored: bool) {
         let hl = self.hl() as u32;
         let v = val as u32;

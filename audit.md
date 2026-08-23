@@ -161,9 +161,17 @@ code segment.
 | # | Severity | Component | Description | Status |
 |---|---|---|---|---|
 | 1 | Low (benchmark only) | `examples/run.rs` | `--bench` for **Z80** matched the case-sensitive arm `"Z80"` while `--isa` supplies lowercase `"z80"`, so it fell through to the 8086 `jmp again` loop, which the Z80 assembler rejects. Z80 benchmarking was silently broken. | **Fixed** (`bench_loop` arm -> `"z80"`). Corrected throughput ~50 M steps/s. |
+| 2 | **High (correctness)** | `src/z80.rs` `exec_ed` | `IN r,(C)` (mask `0x40`) discarded the port read into a throwaway, so the register was never updated; `OUT (C),r` (mask `0x41`) *read* the port instead of writing the register. Swapped behavior — I/O was broken. | **Fixed** (`In r,(C)` reads port (BC) into r/(HL); `Out (C),r` writes r/(HL) to port (BC)). |
+| 3 | **High (correctness)** | `src/z80.rs` `exec_main` | `ADD HL,BC/DE/HL/SP` (opcodes `0x09/0x19/0x29/0x39`) had no exec arm in the main decoder (only the IX/IY `exec_xy` variant existed), so they were silently treated as NOP. | **Fixed** (added `add_hl` helper + four exec arms; H/N/V/C flags set, S/Z untouched). |
+| 4 | **High (correctness)** | `src/z80.rs` `exec_main` + `src/asm/asmz80.rs` | `RST n` (restarts `0x00`–`0x38`) was not implemented in the core or assembler — any `RST` decoded to a NOP and assembled to an error. | **Fixed** (exec arm pushes PC then jumps to `n`; assembler encodes `0xC7 \| (n & 0x38)`, accepts `0,8,…,56`). |
+| 5 | **High (correctness)** | `src/rv32.rs` `step` `0x73` | CSR instructions (funct3 ≠ 0) were disassembled but silently no-op'd (fell through the `ECALL`/`EBREAK` checks without executing). | **Fixed** (added `csr: [u32; 4096]` storage; CSRRW/CSRRS/CSRRC + immediate forms read-old/write-new with correct rs1=0 no-write semantics; covered by snapshot/restore). Assembler gained `CSRRW/CSRRS/CSRRC/CSRRWI/CSRRSI/CSRRCI` (+ shorthand `CSRWI/CSRSI/CSRCI`) and pseudos `CSRR`/`CSRW`. |
+| 6 | Medium | `src/asm/asmz80.rs` | `ORG` only adjusted the first-pass address but never emitted a `Stmt::Org`, so forward `ORG` (needed for Z80 interrupt-vector placement) produced no padding — code was always contiguous from 0. | **Fixed** (first pass now pushes `Stmt::Org(v)`, so the emit pass `resize`s/pads to the new address). |
 
-No core correctness defects were introduced by the audit; the section 3/5
-optimizations were previously committed and tested.
+No **unfixed** core correctness defects remain from this audit. The section 3/5
+optimizations were previously committed and tested; the defects above were
+found and fixed by a later coverage pass (regression tests added in
+`tests/emulation.rs`: `z80_rst_vectors`, `z80_add_hl_sp`, `z80_in_out_c`,
+`rv32_csr_instructions`, `rv32_csr_survives_snapshot`, `x86_poke_code_invalidates_cache`).
 
 ---
 

@@ -1,14 +1,17 @@
-# AGENTS.md — multi-cpu-emu (8086 / 8085 / 8051 emulator)
+# AGENTS.md — multi-cpu-emu (8086 / 8085 / 8051 / 6502 / Z80 / rv32i emulator)
 
 Guidance for AI agents and contributors working in this repository.
 
 ## Project overview
 
-A single Rust crate (`multi-cpu-emu`) that emulates three classic microprocessors:
+A single Rust crate (`multi-cpu-emu`) that emulates six classic microprocessors:
 
 - **Intel 8086** — 16-bit, segmented, 1 MiB address space
 - **Intel 8085** — 8-bit, 64 KiB, accumulator-centric
 - **Intel 8051 (MCS-51)** — 8-bit, SFRs, bit-addressable RAM, timers
+- **MOS 6502** — 8-bit, 64 KiB, zero-page + stack, decimal mode
+- **Zilog Z80** — 8-bit, 64 KiB, full 8080 + Z80 instruction set, IX/IY, R/I
+- **RISC-V rv32i** — 32-bit, 1 MiB flat space, base integer ISA (+ M ext, CSR)
 
 The crate compiles to **one WASM module** (via `wasm-bindgen`) plus native
 `rlib`/`cdylib`. A full web IDE (`docs/`) consumes the WASM build. There is
@@ -222,6 +225,55 @@ pub trait Cpu {
   ISR returns (until released); edge mode (ITx=1) latches on `request_interrupt`
   and clears on service like the real chip.
 
+### 6502 (`m6502.rs`)
+- Registers: A, X, Y, SP, PC, P (N/V/B/D/I/Z/C). Memory: 64 KiB (`Mem`),
+  256-byte zero page, 256-byte stack page at 0x0100.
+- Full 8-bit ISA: LDA/STA/LDX/LDY/LDX/LDY, LDX/LDY, TAX/TAY/TSX/TXS/TXS/TYA,
+  ADC/SBC (with decimal mode when D set), CMP/CPX/CPY, AND/ORA/EOR/BIT,
+  ASL/LSR/ROL/ROR, INC/DEC, INX/INY/DEX/DEY, JMP (abs + indirect), JSR/RTS,
+  branches (BCC/BCS/BEQ/BNE/BMI/BPL/BVC/BVS), PHP/PLP/PHA/PLA, CLC/SEC/CLI/SEI
+  /CLV/CLD/SED, BRK, NOP. Zero-page and indexed addressing fully supported.
+- `BRK` vectors through 0xFFFE/0xFFFF; `RTI` restores the pushed status.
+- IRQ/NMI raised via `Emulator::request_interrupt` / wasm `interrupt()`.
+- Output: programs print via a monitor convention; see `tests/` for examples.
+
+### Z80 (`z80.rs`)
+- Registers: A, B, C, D, E, H, L, A'/B'/C'/D'/E'/H'/L'/F' (shadow), IX, IY,
+  SP, PC, I, R; flags S/Z/H/P/V/N/C.
+- Memory: 64 KiB. Full 8-bit ISA: LD r,r / LD r,(HL) / LD (HL),r / LD r,n,
+  LD rr,nn, LD (rr),A, LD A,(rr), LD (nn),A, LD A,(nn), LD rr,(nn),
+  LD (nn),rr, PUSH/POP rr (incl. AF/IX/IY), EX/EXX, LDI/LDIR/LDD/LDDR,
+  CPI/CPIR/CPD/CPDR, ADD/ADC/SUB/SBC/AND/OR/XOR/CP A,r/(HL)/n, INC/DEC
+  r/(HL)/rr, RLCA/RRCA/RLA/RRA/RLC/RRC/RL/RR/SLA/SRA/SRL/BIT/RES/SET,
+  DAA/CPL/CCF/SCF, ADD/ADC/SBC HL,rr (incl. SP), NEG, RLCA..., RLD/RRD,
+  JP/JR/DJNZ/CALL/RET/RET cc/CALL cc/RST n (n = 0,8,…,56),
+  IN r,(C) / OUT (C),r / IN A,(n) / OUT (n),A, INI/OUTI/IND/OUTD and blocks,
+  EI/DI, IM 0/1/2, HALT.
+- Port model: 256-byte I/O space (`CpuZ80::ports`); `OUT (C),r` writes the
+  register to port (BC), `IN r,(C)` reads port (BC) — both via `out_port` /
+  `in_port` (so `Emulator::port_read/write` observe them). `OUT (n),A` writes
+  A to port ((A<<8)|n); `IN A,(n)` reads it back.
+- Interrupts: maskable (IM 0/1/2) and NMI; `Emulator::request_interrupt` /
+  wasm `interrupt()`. `RETI`/`RETN` restore IFF state.
+- Assembler (`asmz80.rs`) covers the above; `ORG` places code (forward ORG
+  pads with zeros), `RST n` assembles to `0xC7 | (n & 0x38)`.
+
+### rv32i (`rv32.rs`)
+- Registers: x0–x31 (x0 hardwired zero), PC (32-bit), `csr[0..4096]` (CSR file,
+  plain storage). Flat little-endian 1 MiB address space.
+- Base ISA (RV32I) + M extension: LUI/AUIPC, JAL/JALR, branches, loads/stores
+  (LB/LH/LW/LBU/LHU, SB/SH/SW), ADDI/SLTI*/XORI/ORI/ANDI/SLLI/SRLI/SRAI,
+  ADD/SUB/SLL/SLT*/XOR/OR/AND/SRL/SRA, MUL/DIV/REM (signed + unsigned).
+- CSR instructions (opcode 0x73, funct3≠0): CSRRW/CSRRS/CSRRC and immediate
+  forms CSRRWI/CSRRSI/CSRRCI (assembler also accepts shorthand CSRWI/CSRSI/
+  CSRCI), plus pseudos `CSRR rd, csr` (read) and `CSRW csr, rs` (write).
+  Reads return the old value into `rd`; immediate forms take a 5-bit zimm.
+  CSRs are modeled as plain storage (privileged side effects such as mstatus
+  interrupt masking and mtvec redirection are NOT modeled).
+- `ECALL` implements a tiny semihosting ABI (a7 = syscall; 64 = write
+  fd/a1/a2, 93 = exit); `EBREAK` halts. Assembler (`asmrv32.rs`) covers all
+  of the above.
+
 ## Assembler design (src/asm)
 
 - Line-oriented, case-insensitive, `;` comments, labels (`name:` or `name EQU
@@ -244,7 +296,7 @@ pub trait Cpu {
 Exposed class `Emulator`:
 
 ```
-new(isa: "8086" | "8085" | "8051") -> Emulator
+new(isa: "8086" | "8085" | "8051" | "6502" | "z80" | "rv32") -> Emulator
 assemble(source: &str) -> Vec<u8>        // machine code (error via exception/result)
 assemble_info(source: &str) -> Vec<String> // per-line "ADDR  BYTES" strings (IDE gutter)
 load(code: &[u8], origin: u32)           // place code in memory

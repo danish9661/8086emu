@@ -203,6 +203,15 @@ fn rtype(opcode: u32, rd: usize, f3: u32, rs1: usize, rs2: usize, f7: u32) -> Ve
     insn.to_le_bytes().to_vec()
 }
 
+fn csr_insn(rd: usize, f3: u32, rs1: usize, csr: u32) -> Vec<u8> {
+    let insn = 0x73u32
+        | (((rd as u32) & 0x1f) << 7)
+        | ((f3 & 0x7) << 12)
+        | (((rs1 as u32) & 0x1f) << 15)
+        | ((csr & 0xfff) << 20);
+    insn.to_le_bytes().to_vec()
+}
+
 fn enc_instr(mnem: &str, ops: &[String], syms: &HashMap<String, u32>, cur: u32, origin: u32) -> Result<Vec<u8>, String> {
     let r = |s: &str| reg_index(s).ok_or_else(|| format!("bad register '{s}'"));
     let iv = |s: &str| parse_expr(s, syms, cur, origin);
@@ -259,6 +268,26 @@ fn enc_instr(mnem: &str, ops: &[String], syms: &HashMap<String, u32>, cur: u32, 
         "FENCE" => Ok(0x0000000fu32.to_le_bytes().to_vec()),
         "ECALL" => Ok(0x00000073u32.to_le_bytes().to_vec()),
         "EBREAK" => Ok(0x00100073u32.to_le_bytes().to_vec()),
+        // CSR instructions (opcode 0x73, funct3 != 0)
+        "CSRRW" => Ok(csr_insn(r(&op0()?)?, 1, r(&op2()?)?, iv(&op1()?)? & 0xfff)),
+        "CSRRS" => Ok(csr_insn(r(&op0()?)?, 2, r(&op2()?)?, iv(&op1()?)? & 0xfff)),
+        "CSRRC" => Ok(csr_insn(r(&op0()?)?, 3, r(&op2()?)?, iv(&op1()?)? & 0xfff)),
+        "CSRRWI" | "CSRWI" => Ok(csr_insn(r(&op0()?)?, 5, (iv(&op2()?)? & 0x1f) as usize, iv(&op1()?)? & 0xfff)),
+        "CSRRSI" | "CSRSI" => Ok(csr_insn(r(&op0()?)?, 6, (iv(&op2()?)? & 0x1f) as usize, iv(&op1()?)? & 0xfff)),
+        "CSRRCI" | "CSRCI" => Ok(csr_insn(r(&op0()?)?, 7, (iv(&op2()?)? & 0x1f) as usize, iv(&op1()?)? & 0xfff)),
+        "CSRR" => {
+            // csrr rd, csr  (or csrr rd, csr, x0)
+            let rd = r(&op0()?)?;
+            let csr = iv(&op1()?)? & 0xfff;
+            let rs = if ops.get(2).is_some() { r(&op2()?)? } else { 0 };
+            Ok(csr_insn(rd, 2, rs, csr))
+        }
+        "CSRW" => {
+            // csrw csr, rs  (rd = x0)
+            let csr = iv(&op0()?)? & 0xfff;
+            let rs = r(&op1()?)?;
+            Ok(csr_insn(0, 1, rs, csr))
+        }
         _ => Err(format!("unsupported instruction: {mnem}")),
     }
 }

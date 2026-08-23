@@ -33,6 +33,8 @@ pub struct CpuRv32 {
     /// writable code the cached bytes are re-read and compared, so self-modifying
     /// code stays correct. Invalidated on `reset`/`restore`.
     dec: Option<(u32, u32, RvDec)>,
+    /// Control/status registers (full 4 KiB space), plain storage.
+    pub csr: [u32; 4096],
 }
 
 impl Default for CpuRv32 {
@@ -45,6 +47,7 @@ impl Default for CpuRv32 {
             out: Output::default(),
             halted_reason: None,
             dec: None,
+            csr: [0u32; 4096],
         };
         c.reset();
         c
@@ -241,6 +244,7 @@ impl Cpu for CpuRv32 {
         self.halted_reason = None;
         self.out = Output::default();
         self.dec = None;
+        self.csr = [0u32; 4096];
     }
 
     fn step(&mut self) -> bool {
@@ -376,6 +380,7 @@ impl Cpu for CpuRv32 {
             }
             0x0f => {} // fence: no-op
             0x73 => {
+                let f3 = (insn >> 12) & 0x7;
                 if insn == 0x00000073 {
                     // ECALL: tiny semihosting ABI
                     let num = self.x[17]; // a7
@@ -397,7 +402,24 @@ impl Cpu for CpuRv32 {
                 } else if insn == 0x00100073 {
                     self.halt = true;
                     self.halted_reason = Some("ebreak".into());
+                } else if f3 != 0 {
+                    // CSR instructions (CSRRW/CSRRS/CSRRC and immediate forms)
+                    let rd = ((insn >> 7) & 0x1f) as usize;
+                    let rs1 = ((insn >> 15) & 0x1f) as usize;
+                    let csr = ((insn >> 20) & 0xfff) as usize;
+                    let old = self.csr[csr];
+                    match f3 {
+                        1 => { self.csr[csr] = self.x[rs1]; }
+                        2 => { if rs1 != 0 { self.csr[csr] |= self.x[rs1]; } }
+                        3 => { if rs1 != 0 { self.csr[csr] &= !self.x[rs1]; } }
+                        5 => { self.csr[csr] = rs1 as u32; }
+                        6 => { if rs1 != 0 { self.csr[csr] |= rs1 as u32; } }
+                        7 => { if rs1 != 0 { self.csr[csr] &= !(rs1 as u32); } }
+                        _ => {}
+                    }
+                    if rd != 0 { self.x[rd] = old; }
                 }
+                // f3 == 0 but not ECALL/EBREAK => other privileged ops; ignored
             }
             _ => {
                 self.halt = true;
@@ -450,6 +472,9 @@ impl Cpu for CpuRv32 {
         }
         v.push(if self.halt { 1 } else { 0 });
         v.extend_from_slice(&self.mem.data);
+        for c in &self.csr {
+            v.extend_from_slice(&c.to_le_bytes());
+        }
         v
     }
     fn restore(&mut self, data: &[u8]) {
@@ -469,6 +494,9 @@ impl Cpu for CpuRv32 {
         for b in &mut self.mem.data {
             *b = data[o];
             o += 1;
+        }
+        for c in &mut self.csr {
+            *c = get4(data, &mut o);
         }
     }
     fn is_halted(&self) -> bool { self.halt }
