@@ -181,6 +181,10 @@ pub trait Cpu {
     fn flags(&self) -> FlagSet;
     fn mem_read(&self, addr: u32, len: usize) -> Vec<u8>;
     fn mem_write(&mut self, addr: u32, data: &[u8]);
+    /// Drop any cached decoder state. Called after an external store (debugger
+    /// / loader poke) so the next step re-decodes, keeping self-modifying code
+    /// correct even for ROM-loaded images that trust their decode cache.
+    fn invalidate_icache(&mut self) {}
     fn snapshot(&self) -> Vec<u8>;
     fn restore(&mut self, data: &[u8]);
     fn is_halted(&self) -> bool;

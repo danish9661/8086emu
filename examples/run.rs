@@ -303,10 +303,10 @@ fn run_bench(emu: &mut multi_cpu_emu::Emulator, isa: &str, steps: u32) {
         }
     };
     let entry = if isa == "8086" { 0x100 } else { 0 };
-    if isa == "rv32" {
-        // real RISC-V code is read-only; loading as ROM also exercises the
-        // decode-cache trust fast path (skip the per-step instruction fetch).
-        emu.load_rom(&code, 0);
+    if isa == "rv32" || isa == "8086" {
+        // Real code is read-only; loading as ROM exercises the decode-cache
+        // trust fast path (skip the per-step instruction re-fetch/verify).
+        emu.load_rom(&code, entry);
     } else {
         emu.mem_write(0, &code);
     }

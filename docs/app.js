@@ -1376,7 +1376,10 @@ function assemble() {
     const src = editor.value;
     const code = emu.assemble(src);
     newEmulator();
-    emu.load(code, 0);
+    // Load as ROM: the program image is immutable, so the 8086/rv32 cores can
+    // trust their decode caches (skip the per-step re-fetch) — much faster
+    // interactive stepping/running. External memory edits clear the ROM mark.
+    emu.load_rom(code, 0);
     emu.set_pc(entry());
     codeMap = emu.assemble_info(src);
     errorsBox.style.display = 'none';

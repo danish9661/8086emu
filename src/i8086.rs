@@ -1151,14 +1151,20 @@ impl Cpu8086 {
         // compare; only reuse the cached decode if they are byte-identical.
         // This is correct for self-modifying code and needs no write hooking.
         let op = if let Some((p, po, so, rp, ip_after)) = &self.dec_cache {
-            let mut same = po.len() <= 8;
-            if same {
-                for i in 0..po.len() {
-                    if self.mem.read(phys_ip as usize + i) != po[i] { same = false; break; }
+            // In ROM the bytes are immutable, so the cached decode can be
+            // trusted without re-reading/verifying the opcode (fast path).
+            let rom = self.mem.in_rom(phys_ip as usize);
+            let mut same = rom;
+            if !rom {
+                same = po.len() <= 8;
+                if same {
+                    for i in 0..po.len() {
+                        if self.mem.read(phys_ip as usize + i) != po[i] { same = false; break; }
+                    }
+                } else {
+                    let cur: Vec<u8> = (0..po.len()).map(|i| self.mem.read(phys_ip as usize + i)).collect();
+                    same = cur == *po;
                 }
-            } else {
-                let cur: Vec<u8> = (0..po.len()).map(|i| self.mem.read(phys_ip as usize + i)).collect();
-                same = cur == *po;
             }
             if *p == phys_ip && same {
                 self.seg_ov = *so;
@@ -2465,6 +2471,10 @@ impl Cpu for Cpu8086 {
         for (i, b) in data.iter().enumerate() {
             self.mem.poke(addr as usize + i, *b);
         }
+    }
+
+    fn invalidate_icache(&mut self) {
+        self.dec_cache = None;
     }
 
     fn snapshot(&self) -> Vec<u8> {

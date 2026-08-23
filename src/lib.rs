@@ -156,6 +156,10 @@ impl Emulator {
 
     pub fn mem_write(&mut self, addr: u32, data: &[u8]) {
         self.cpu().mem_write(addr, data);
+        // External writes (debugger / loader pokes) may mutate code, so drop
+        // the cached decode; the next step re-decodes. ROM marking is left
+        // intact (a BIOS image is loaded into its ROM region via mem_write).
+        self.cpu().invalidate_icache();
     }
 
     pub fn snapshot(&self) -> Vec<u8> {

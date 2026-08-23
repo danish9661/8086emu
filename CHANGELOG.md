@@ -6,6 +6,24 @@ versions are dated snapshots of `main`.
 
 ## [Unreleased]
 
+### Performance
+- 8086 (and rv32) cores now **trust their decode cache for ROM-loaded images**:
+  `exec` skips the per-step prefix+opcode re-read/verify when the instruction
+  address is inside the read-only ROM range (`Mem::in_rom`). Programs loaded via
+  `load_rom` (the web IDE now does this) therefore decode once and never
+  re-fetch, giving a measurable step-rate gain (release: 8086 ~128M→~136M
+  steps/s, larger in debug where the re-read was unoptimized). External
+  `mem_write` pokes call `invalidate_icache` so self-modifying code — including
+  edits to a ROM-loaded image — stays correct.
+- The earlier hypothesis that an explicit bounds-check / `mem.len()-1` mask
+  field would speed up `Mem` was **invalidated by benchmarking**: run-to-run
+  variance (±5–10%) dwarfs any delta, confirming LLVM already elides the
+  bounds check. A const-generic `Mem<N>` (the only way to structurally remove
+  the check) is not viable because `i8085`/`mcs51`/`disasm` build `Mem` from
+  runtime sizes (`i8085::reset(size)`). The cores are at the safe-Rust speed
+  ceiling; further gains would require algorithmic work (e.g. extending the
+  decode cache to 8085/6502/8051/z80).
+
 ### Added
 - `audit.md`: security, memory/leakage, per-step overhead, performance
   benchmarks, determinism, and known-limitation audit of the cores.
