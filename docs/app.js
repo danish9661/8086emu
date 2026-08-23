@@ -676,6 +676,105 @@ $('inputOk').onclick = submitInput;
 $('inputCancel').onclick = () => { closeInput(); refresh(); };
 $('inputField').onkeydown = (e) => { if (e.key === 'Enter') submitInput(); };
 
+// ---------- About modal (overview, usage, shortcuts) ----------
+const ABOUT = `
+<section>
+  <h4>Overview</h4>
+  <p><b>multi-cpu-emu</b> is a single Rust crate that emulates six classic
+  microprocessors and compiles to one WebAssembly module, powering this
+  in-browser IDE. No server, no install — assemble, run, and debug entirely
+  in your browser.</p>
+</section>
+<section>
+  <h4>Supported CPUs</h4>
+  <table class="ab-tbl">
+    <tr><th>ISA</th><th>Bits</th><th>Space</th><th>Highlights</th></tr>
+    <tr><td>Intel 8086</td><td>16</td><td>1 MiB, segmented</td><td>DOS INT 21h / BIOS INT 10h, IVT, hardware IRQs</td></tr>
+    <tr><td>Intel 8085</td><td>8</td><td>64 KiB</td><td>flags S/Z/AC/P/CY, TRAP/RST 7.5/6.5/5.5, SID/SOD</td></tr>
+    <tr><td>Intel 8051</td><td>8</td><td>64 KiB code</td><td>SFRs, bit-ops, timers, serial, INT0/INT1</td></tr>
+    <tr><td>MOS 6502</td><td>8</td><td>64 KiB</td><td>zero-page, decimal mode, BRK/RTI</td></tr>
+    <tr><td>Zilog Z80</td><td>8</td><td>64 KiB</td><td>8080 + Z80 set, IX/IY, IM 0/1/2, block ops</td></tr>
+    <tr><td>RISC-V rv32i</td><td>32</td><td>1 MiB flat</td><td>RV32I + M, CSR, ECALL semihosting</td></tr>
+  </table>
+</section>
+<section>
+  <h4>Quick start</h4>
+  <ol>
+    <li>Pick an <b>ISA</b> from the dropdown (top-left).</li>
+    <li>Write assembly in the editor (or click <b>Example</b> to cycle samples).</li>
+    <li>Press <b>Assemble</b> (F7) — errors show in the gutter and the bar below.</li>
+    <li><b>Step</b> (F8) one instruction, or <b>Run</b> (F5) until halt/stop.</li>
+    <li>Inspect registers, flags, disassembly, memory, ports, and output in the tabs.</li>
+    <li><b>Reset</b> returns to the initial state; <b>Step-Back</b> undoes a step.</li>
+  </ol>
+</section>
+<section>
+  <h4>Assembler syntax</h4>
+  <ul>
+    <li><code>; comment</code> — inline comments.</li>
+    <li>Labels: <code>name:</code> or <code>name EQU expr</code>.</li>
+    <li>Directives: <code>ORG</code>, <code>DB</code>, <code>DW</code>, <code>EQU</code>, <code>END</code>.</li>
+    <li>Numbers: decimal, <code>0x</code> hex, <code>h</code> suffix, <code>b</code> binary, <code>q</code> octal, <code>'c'</code> char.</li>
+    <li>Programs load at <code>ORG 100h</code> (8086) / <code>ORG 0</code> (others).</li>
+  </ul>
+</section>
+<section>
+  <h4>I/O &amp; devices</h4>
+  <p>Peripherals are driven purely by <code>OUT</code>/<code>IN</code> to fixed ports
+  (see the <b>Devices</b> tab for 8086/8085/8051):</p>
+  <table class="ab-tbl">
+    <tr><th>Port</th><th>Device</th></tr>
+    <tr><td>10h</td><td>Traffic light (bits 0/1/2 = red/yellow/green)</td></tr>
+    <tr><td>11h, 12h</td><td>7-segment display (digits 0–15)</td></tr>
+    <tr><td>13h</td><td>Stepper motor (4-bit coil pattern)</td></tr>
+    <tr><td>14h</td><td>Printer (writes a byte)</td></tr>
+    <tr><td>16h, 17h</td><td>Robot grid (X / Y position)</td></tr>
+    <tr><td>20h–27h</td><td>8×8 LED matrix</td></tr>
+  </table>
+  <p>Text output conventions per ISA: <b>8086</b> → DOS <code>INT 21h</code>;
+  <b>8085</b> → <code>OUT 01h</code>; <b>8051</b> → <code>SBUF</code>.</p>
+</section>
+<section>
+  <h4>Interrupts</h4>
+  <p>Use the IRQ bar for the selected ISA: 8086 NMI/INTR, 8085 TRAP/RST 7.5/6.5/5.5/INTR
+  (+ SID/SOD), 8051 INT0/INT1 (+ serial RX), Z80 NMI/INT (+ IM 0/1/2).</p>
+</section>
+<section>
+  <h4>Keyboard shortcuts</h4>
+  <table class="ab-tbl ab-keys">
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td>F7</td><td>Assemble &amp; load</td></tr>
+    <tr><td>F8</td><td>Step one instruction</td></tr>
+    <tr><td>F10</td><td>Step over a CALL</td></tr>
+    <tr><td>F5</td><td>Run</td></tr>
+    <tr><td>Esc</td><td>Stop running / close dialogs</td></tr>
+    <tr><td>Ctrl+S</td><td>Save source to browser</td></tr>
+    <tr><td>click disasm</td><td>toggle a breakpoint</td></tr>
+  </table>
+</section>
+<section>
+  <h4>Save · Load · Share</h4>
+  <p><b>Save State</b> downloads a snapshot of the full CPU; <b>Load State</b>
+  restores it (deterministic, works across refreshes). <b>Share Link</b> encodes
+  the current source in the URL so others can open your program directly.</p>
+</section>
+<section>
+  <h4>Source &amp; repo</h4>
+  <p>Single Rust crate <code>multi-cpu-emu</code> → WASM. Reference design inspired by
+  the MIT-licensed <code>modern8086</code> emulator. Built with
+  <code>wasm-pack --target web</code>.</p>
+</section>
+`;
+function showAbout() {
+  const m = $('aboutModal');
+  $('aboutBody').innerHTML = ABOUT;
+  m.style.display = 'flex';
+}
+function closeAbout() { $('aboutModal').style.display = 'none'; }
+$('aboutBtn').onclick = showAbout;
+$('aboutClose').onclick = closeAbout;
+$('aboutModal').addEventListener('click', (e) => { if (e.target === $('aboutModal')) closeAbout(); });
+
 function entry() { return ISA_INFO[isa].entry; }
 
 function fmt(v, w = 4) { return v.toString(16).toUpperCase().padStart(w, '0'); }
@@ -1751,7 +1850,10 @@ document.addEventListener('keydown', (e) => {
     case 'F10': e.preventDefault(); stepOver(); break;
     case 'F5': startRun(); break;
     case 'F4': e.preventDefault(); stopRun(); newEmulator(); resetDevices(); refresh(); toast('CPU reset'); break;
-    case 'Escape': stopRun(); break;
+    case 'Escape':
+      if ($('aboutModal').style.display !== 'none') { closeAbout(); break; }
+      stopRun();
+      break;
   }
 });
 

@@ -36,6 +36,9 @@
       <button id="asmBtn" class="primary" title="Assemble and load (F7)" data-i18n="assemble">Assemble</button>
     </div>
     <div class="hgroup">
+      <button id="aboutBtn" title="About this emulator: supported CPUs, usage, shortcuts">About</button>
+    </div>
+    <div class="hgroup">
       <button id="stepBtn" title="Step one instruction (F8)" disabled data-i18n="step">Step</button>
       <button id="overBtn" title="Step over a CALL (F10): run the whole call in one step" disabled data-i18n="stepOver">Step-Over</button>
       <button id="backBtn" title="Undo the last Step (snapshot restore)" disabled data-i18n="stepBack">Step-Back</button>
@@ -202,6 +205,16 @@
   </main>
 
   <div id="errpop"></div>
+
+  <div id="aboutModal" class="modal" style="display:none">
+    <div class="modal-box about">
+      <div class="about-head">
+        <h3>About multi-cpu-emu</h3>
+        <button id="aboutClose" class="x" title="Close (Esc)">✕</button>
+      </div>
+      <div class="about-body" id="aboutBody"></div>
+    </div>
+  </div>
 
   <div id="inputModal" class="modal" style="display:none">
     <div class="modal-box">

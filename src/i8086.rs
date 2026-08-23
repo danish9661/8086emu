@@ -761,15 +761,16 @@ impl Cpu8086 {
                 if self.dl() == 0xFF { self.int_read(false); }   // direct read
                 else { self.out.put_char(self.dl() as char); }   // direct write
             }
-            (0x21, 0x09) => {
-                let mut a = self.phys(self.ds, self.dx);
-                loop {
-                    let c = self.mem.read(a);
-                    a += 1;
-                    if c == b'$' { break; }
-                    self.out.put_char(c as char);
-                }
-            }
+             (0x21, 0x09) => {
+                 let mut a = self.phys(self.ds, self.dx);
+                 let end = self.mem.size();
+                 while a < end {
+                     let c = self.mem.read(a);
+                     a += 1;
+                     if c == b'$' { break; }
+                     self.out.put_char(c as char);
+                 }
+             }
             (0x21, 0x0C) => { // flush buffer, then optionally read (AL=01/06/07/08)
                 self.keybuf.clear();
                 match self.al() {
