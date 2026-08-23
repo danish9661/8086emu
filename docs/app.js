@@ -611,6 +611,7 @@ const MAX_HISTORY = 200;        // bounded ring of CPU states
 let prevRegMap = {};            // previous register values for change highlighting
 let watches = loadWatches();    // watch expressions (registers / memory), persisted
 let watchPrev = [];             // previous values for watch change highlighting
+let currentTab = 'regs';        // active right-column tab (perf: only it is rendered)
 
 function loadWatches() {
   try {
@@ -678,100 +679,120 @@ function entry() { return ISA_INFO[isa].entry; }
 
 function fmt(v, w = 4) { return v.toString(16).toUpperCase().padStart(w, '0'); }
 
-function refresh() {
-  const regs = emu.regs();
-  const flags = emu.flags();
-  const pc = emu.pc();
+ function refresh() {
+   const regs = emu.regs();
+   const flags = emu.flags();
+   const pc = emu.pc();
 
-  // --- registers (with change highlighting) ---
-  let html = '';
-  const pcPhys = ISA_INFO[isa].memBase(pc);
-  const markChanged = (n, v) => {
-    const ch = prevRegMap[n] !== undefined && prevRegMap[n] !== v;
-    prevRegMap[n] = v;
-    return ch;
-  };
-  if (isa === '8086') {
-    const pairs = [['AX','AH','AL'],['BX','BH','BL'],['CX','CH','CL'],['DX','DH','DL']];
-    for (const [r, h, l] of pairs) {
-      const v = val(regs, r);
-      html += chip(r, fmt(v), `${h}=${fmt(v >> 8, 2)} ${l}=${fmt(v & 0xFF, 2)}`, false, markChanged(r, v));
-    }
-    for (const r of ['SI','DI','BP','SP','CS','DS','ES','SS']) {
-      const v = val(regs, r);
-      html += chip(r, fmt(v), null, false, markChanged(r, v));
-    }
-    let fv = 0;
-    if (flags.includes('CF')) fv |= 0x001;
-    if (flags.includes('PF')) fv |= 0x004;
-    if (flags.includes('AF')) fv |= 0x010;
-    if (flags.includes('ZF')) fv |= 0x040;
-    if (flags.includes('SF')) fv |= 0x080;
-    if (flags.includes('IF')) fv |= 0x200;
-    if (flags.includes('DF')) fv |= 0x400;
-    if (flags.includes('OF')) fv |= 0x800;
-    const ipv = val(regs, 'IP');
-    html += chip('IP', fmt(ipv), null, false, markChanged('IP', ipv));
-    html += chip('FLAGS', fmt(fv), null, false, markChanged('FLAGS', fv));
-  } else if (isa === '8085') {
-    for (const r of ['A','B','C','D','E','H','L','SP']) { const v = val(regs, r); html += chip(r, fmt(v, 2), null, false, markChanged(r, v)); }
-    const pcv = val(regs, 'PC');
-    html += chip('PC', fmt(pcv), null, true, markChanged('PC', pcv));
-  } else {
-    for (const r of ['A','B','DPTR','SP','PC','PSW']) { const v = val(regs, r); html += chip(r, fmt(v, r === 'B' || r === 'A' ? 2 : 4), null, r === 'PC', markChanged(r, v)); }
-    for (let i = 0; i < 8; i++) { const v = val(regs, 'R' + i); html += chip('R' + i, fmt(v, 2), null, false, markChanged('R' + i, v)); }
-    const bk = val(regs, 'BANK');
-    html += chip('BANK', fmt(bk, 1), null, false, markChanged('BANK', bk));
-  }
-  regsBox.innerHTML = html;
+   // Status bar + run-control button states are always visible, so update them
+   // on every refresh regardless of which tab is active.
+   $('sbPc').textContent = ISA_INFO[isa].pcLabel(pc, regs);
+   $('sbSteps').textContent = steps;
+   $('sbState').textContent = emu.halted() ? 'halted' : (emu.waiting_input() ? 'waiting for input' : (runTimer ? 'running…' : 'ready'));
+   $('stepBtn').disabled = runTimer || emu.halted();
+   $('overBtn').disabled = runTimer || emu.halted();
+   $('backBtn').disabled = runTimer || history.length === 0;
+   $('runBtn').disabled = runTimer || emu.halted();
+   $('stopBtn').disabled = !runTimer;
 
-  // --- flags ---
-  flagsBox.innerHTML = FLAG_MAP[isa].map(([key, label]) =>
-    `<span class="flag ${flags.includes(label) ? 'on' : ''}">${label}</span>`).join('');
+   // 8085 SOD output pin lives in the header IRQ bar, so update it every refresh.
+   if (isa === '8085') {
+     try {
+       const sod = emu.sod();
+       const el = $('sodLed');
+       if (el) { el.textContent = 'SOD:' + sod; el.classList.toggle('on', sod !== 0); }
+     } catch (e) {}
+   }
 
-  // --- memory dump ---
-  renderMem(pcPhys);
+   // The output buffer is drained on every refresh (so output is never lost
+   // while another tab is showing); its DOM is only repainted on the Output tab.
+   const fresh = emu.out();
+   if (fresh) accumOut += fresh;
 
-  // --- output ---
-  const fresh = emu.out();
-  if (fresh) accumOut += fresh;
-  outputBox.textContent = accumOut;
+   renderTab(currentTab, regs, flags, pc);
+ }
 
-  // --- text screen (8086 INT 10h / 0xB8000) ---
-  renderScreen();
-  renderGfx();
+ // Render only the panels belonging to the active tab. This is the core perf
+ // fix: a single step no longer rebuilds every panel's DOM, only the visible
+ // one. Switching tabs calls showTab() which re-renders the newly shown group.
+ function renderTab(name, regs, flags, pc) {
+   if (name === 'regs') {
+     renderRegs(regs, flags);
+   } else if (name === 'code') {
+     renderDisasm(pc);
+     renderWatch(regs);
+   } else if (name === 'mem') {
+     renderMem(ISA_INFO[isa].memBase(pc));
+     renderMemMap(emu, isa);
+   } else if (name === 'io') {
+     renderPorts();
+     renderPeripherals(emu, isa);
+   } else if (name === 'out') {
+     outputBox.textContent = accumOut;
+     renderScreen();
+     renderGfx();
+   } else if (name === 'dev') {
+     renderDevices(emu, isa);
+   }
+ }
 
-  // --- peripherals (ports 10h..27h) ---
-  renderDevices(emu, isa);
-  renderMemMap(emu, isa);
-  renderPeripherals(emu, isa);
+ function showTab(name) {
+   currentTab = name;
+   document.querySelectorAll('.tabgroup').forEach(g =>
+     g.classList.toggle('active', g.dataset.tab === name));
+   document.querySelectorAll('.tabs .tab').forEach(t =>
+     t.classList.toggle('active', t.dataset.tab === name));
+   // Re-render the now-visible group so it is never stale.
+   renderTab(name, emu.regs(), emu.flags(), emu.pc());
+ }
 
-   // --- ports ---
-  renderPorts();
+ function renderRegs(regs, flags) {
+   const markChanged = (n, v) => {
+     const ch = prevRegMap[n] !== undefined && prevRegMap[n] !== v;
+     prevRegMap[n] = v;
+     return ch;
+   };
+   let html = '';
+   if (isa === '8086') {
+     const pairs = [['AX','AH','AL'],['BX','BH','BL'],['CX','CH','CL'],['DX','DH','DL']];
+     for (const [r, h, l] of pairs) {
+       const v = val(regs, r);
+       html += chip(r, fmt(v), `${h}=${fmt(v >> 8, 2)} ${l}=${fmt(v & 0xFF, 2)}`, false, markChanged(r, v));
+     }
+     for (const r of ['SI','DI','BP','SP','CS','DS','ES','SS']) {
+       const v = val(regs, r);
+       html += chip(r, fmt(v), null, false, markChanged(r, v));
+     }
+     let fv = 0;
+     if (flags.includes('CF')) fv |= 0x001;
+     if (flags.includes('PF')) fv |= 0x004;
+     if (flags.includes('AF')) fv |= 0x010;
+     if (flags.includes('ZF')) fv |= 0x040;
+     if (flags.includes('SF')) fv |= 0x080;
+     if (flags.includes('IF')) fv |= 0x200;
+     if (flags.includes('DF')) fv |= 0x400;
+     if (flags.includes('OF')) fv |= 0x800;
+     const ipv = val(regs, 'IP');
+     html += chip('IP', fmt(ipv), null, false, markChanged('IP', ipv));
+     html += chip('FLAGS', fmt(fv), null, false, markChanged('FLAGS', fv));
+   } else if (isa === '8085') {
+     for (const r of ['A','B','C','D','E','H','L','SP']) { const v = val(regs, r); html += chip(r, fmt(v, 2), null, false, markChanged(r, v)); }
+     const pcv = val(regs, 'PC');
+     html += chip('PC', fmt(pcv), null, true, markChanged('PC', pcv));
+   } else {
+     for (const r of ['A','B','DPTR','SP','PC','PSW']) { const v = val(regs, r); html += chip(r, fmt(v, r === 'B' || r === 'A' ? 2 : 4), null, r === 'PC', markChanged(r, v)); }
+     for (let i = 0; i < 8; i++) { const v = val(regs, 'R' + i); html += chip('R' + i, fmt(v, 2), null, false, markChanged('R' + i, v)); }
+     const bk = val(regs, 'BANK');
+     html += chip('BANK', fmt(bk, 1), null, false, markChanged('BANK', bk));
+   }
+   regsBox.innerHTML = html;
+   renderFlags(flags);
+ }
 
-  // --- 8085 SOD output pin ---
-  if (isa === '8085') {
-    try {
-      const sod = emu.sod();
-      const el = $('sodLed');
-      if (el) { el.textContent = 'SOD:' + sod; el.classList.toggle('on', sod !== 0); }
-    } catch (e) {}
-  }
-
-  // --- disassembly (8086) + watch window ---
-  renderDisasm(pc);
-  renderWatch(regs);
-
-  // --- status ---
-  $('sbPc').textContent = ISA_INFO[isa].pcLabel(pc, regs);
-  $('sbSteps').textContent = steps;
-  $('sbState').textContent = emu.halted() ? 'halted' : (emu.waiting_input() ? 'waiting for input' : (runTimer ? 'running…' : 'ready'));
-  $('stepBtn').disabled = runTimer || emu.halted();
-  $('overBtn').disabled = runTimer || emu.halted();
-  $('backBtn').disabled = runTimer || history.length === 0;
-  $('runBtn').disabled = runTimer || emu.halted();
-  $('stopBtn').disabled = !runTimer;
-}
+ function renderFlags(flags) {
+   flagsBox.innerHTML = FLAG_MAP[isa].map(([key, label]) =>
+     `<span class="flag ${flags.includes(label) ? 'on' : ''}">${label}</span>`).join('');
+ }
 
 function renderScreen() {
   const box = $('screen');
@@ -1626,8 +1647,23 @@ $('isa').onchange = () => {
   $('z80memPanel').style.display = isa === 'Z80' ? '' : 'none';
   if (isa === 'Z80') z80Dump();
   renderSource();
-  refresh();
+  updateTabsForIsa();
+  // If the active tab is no longer valid for this ISA, fall back to Registers.
+  if (currentTab === 'dev' && (isa !== '8086' && isa !== 'Z80')) showTab('regs');
+  else refresh();
 };
+
+// Show/hide the Devices tab: only meaningful for 8086 (on-chip peripherals)
+// and Z80 (memory editor). Other ISAs have no content there.
+function updateTabsForIsa() {
+  const devTab = $('devTab');
+  if (devTab) devTab.classList.toggle('hidden', !(isa === '8086' || isa === 'Z80'));
+}
+
+// Tab navigation: only one right-column group is visible at a time.
+document.querySelectorAll('.tabs .tab').forEach(t => {
+  t.addEventListener('click', () => showTab(t.dataset.tab));
+});
 
 $('irqTrap').onclick = () => { emu.interrupt('TRAP', 0); refresh(); };
 $('irq75').onclick = () => { emu.interrupt('RST75', 0); refresh(); };
@@ -1715,6 +1751,8 @@ document.addEventListener('keydown', (e) => {
   $('intrBar51').style.display = 'none';
   $('intrBar86').style.display = '';   // default ISA is 8086
   $('intrBarZ80').style.display = 'none';
- $('romaddr').value = isa === '8086' ? 'F0000' : '0';
- if (window.applyI18n) window.applyI18n();
- refresh();
+  $('romaddr').value = isa === '8086' ? 'F0000' : '0';
+  if (window.applyI18n) window.applyI18n();
+  updateTabsForIsa();
+  showTab(currentTab);
+  refresh();

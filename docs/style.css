@@ -98,6 +98,20 @@ main {
 
 /* right column */
 .right { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+/* tabbed navigation */
+.tabs { display: flex; gap: 2px; flex-wrap: wrap; flex: none; padding: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+.tabs .tab {
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  padding: 6px 12px; color: var(--muted); font-size: 12px; letter-spacing: .3px;
+}
+.tabs .tab:hover { color: var(--text); background: #161b22; }
+.tabs .tab.active {
+  background: var(--panel); color: #fff; border-color: var(--border);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tabs .tab.hidden { display: none; }
+.tabgroup { display: none; flex-direction: column; gap: 10px; min-height: 0; }
+.tabgroup.active { display: flex; }
 .rgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; padding: 10px; }
 #ports { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px; }
 #ports .port {

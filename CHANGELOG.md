@@ -22,6 +22,15 @@ versions are dated snapshots of `main`.
 - IDE: 8085 SID/SOD indicators, 8051 serial RX injector, Z80 memory hex editor.
 
 ### Changed
+- Web IDE (`docs/`): the right-hand column is no longer a single 12-panel
+  stack that forces endless scrolling. The panels are now organized into tabs
+  (Registers, Disassembly, Memory, I/O, Output, Devices) with only the active
+  tab shown. This also fixes a performance problem: `refresh()` previously
+  rebuilt *every* panel's DOM (registers, flags, 256-byte memory dump, text
+  screen, graphics, all devices, memory map, peripherals, ports, 40-line
+  disassembly, watch) on every single step/run tick. It now renders only the
+  visible tab, so interactive stepping and the run loop do far less work per
+  refresh. The Devices tab auto-hides for ISAs that have no device view.
 - rv32: added a re-read-verified decode cache in `step()`. The decoded
   instruction word is *trusted* (the 4-byte `fetch` is skipped) when the PC is
   inside the read-only ROM range — `Mem::write` silently ignores ROM writes, so

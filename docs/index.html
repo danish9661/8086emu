@@ -93,73 +93,100 @@
     </section>
 
     <section class="right">
-      <div class="panel">
-        <h2><span data-i18n="registers">Registers</span></h2>
-        <div id="regs" class="rgrid"></div>
-      </div>
-      <div class="panel">
-        <h2><span data-i18n="flags">Flags</span></h2>
-        <div id="flags"></div>
-      </div>
-      <div class="panel">
-        <h2><span data-i18n="disasm">Disassembly</span> <span class="hint">click a line to toggle a breakpoint</span></h2>
-        <pre id="disasmView" class="mono"></pre>
-      </div>
-      <div class="panel">
-        <h2><span data-i18n="watch">Watch</span> <span class="hint"><input id="watchInput" value="" spellcheck="false" placeholder="AX, [0x200], 100h, AL" size="20"><button id="watchAdd" title="Add watch">+</button></span></h2>
-        <div id="watchList" class="mono"></div>
-      </div>
-      <div class="panel">
-        <h2><span data-i18n="memory">Memory</span></h2>
-        <div id="memtools">
-          <button id="mempgUp" title="Previous 256 bytes">&#9664;</button>
-          <input id="memaddr" value="0" spellcheck="false" title="Base address (hex)">
-          <button id="mempgDn" title="Next 256 bytes">&#9654;</button>
-          <span class="info" id="meminfo"></span>
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="regs" data-i18n="registers">Registers</button>
+        <button class="tab" data-tab="code" data-i18n="disasm">Disassembly</button>
+        <button class="tab" data-tab="mem" data-i18n="memory">Memory</button>
+        <button class="tab" data-tab="io" data-i18n="ports">I/O</button>
+        <button class="tab" data-tab="out" data-i18n="output">Output</button>
+        <button class="tab" data-tab="dev" id="devTab">Devices</button>
+      </nav>
+
+      <div class="tabgroup active" data-tab="regs">
+        <div class="panel">
+          <h2><span data-i18n="registers">Registers</span></h2>
+          <div id="regs" class="rgrid"></div>
         </div>
-        <div id="memview"></div>
-      </div>
-      <div class="panel">
-        <h2><span data-i18n="memmap">Memory map</span></h2>
-        <div id="memmap" class="mono"></div>
-        <div id="romload">
-          <label>ROM @ <input id="romaddr" value="0" spellcheck="false" size="6" title="ROM load address (hex)"></label>
-          <button id="romBtn" title="Load a ROM/firmware image (marked read-only)">Load ROM…</button>
+        <div class="panel">
+          <h2><span data-i18n="flags">Flags</span></h2>
+          <div id="flags"></div>
         </div>
       </div>
-      <div class="panel">
-        <h2><span data-i18n="ports">I/O Ports</span> <span class="hint"><button id="portsClearBtn">Clear</button></span></h2>
-        <div id="ports"></div>
-      </div>
-      <div class="panel">
-        <h2><span data-i18n="peripherals">Peripheral registers</span></h2>
-        <div id="peripherals" class="chips"></div>
-      </div>
-      <div class="panel">
-        <h2><span data-i18n="output">Program output</span> <span class="hint"><button id="clearOutBtn">Clear</button></span></h2>
-        <div id="output"></div>
-      </div>
-      <div class="panel" id="screenPanel" style="display:none">
-        <h2>Text screen (INT 10h / 0xB8000)</h2>
-        <pre id="screen" class="screen"></pre>
-      </div>
-      <div class="panel" id="gfxPanel" style="display:none">
-        <h2><span data-i18n="gfxscreen">Graphics screen (INT 10h)</span></h2>
-        <canvas id="gfx" width="320" height="200" class="gfx"></canvas>
-      </div>
-      <div class="panel" id="devicePanel" style="display:none">
-        <h2>Peripherals <span class="hint"><button id="devResetBtn">Reset</button></span></h2>
-        <div id="devices" class="dgrid"></div>
-      </div>
-      <div class="panel" id="z80memPanel" style="display:none">
-        <h2>Z80 Memory Editor <span class="hint">edit bytes, then Apply</span></h2>
-        <div id="memtools">
-          <label>Base <input id="z80memBase" value="0" spellcheck="false" size="6" title="Base address (hex)"></label>
-          <button id="z80memDump" title="Reload the hex dump from memory">Dump</button>
-          <button id="z80memApply" title="Write the edited bytes back to memory">Apply</button>
+
+      <div class="tabgroup" data-tab="code">
+        <div class="panel">
+          <h2><span data-i18n="disasm">Disassembly</span> <span class="hint">click a line to toggle a breakpoint</span></h2>
+          <pre id="disasmView" class="mono"></pre>
         </div>
-        <textarea id="z80mem" spellcheck="false" wrap="off" rows="12" class="hex"></textarea>
+        <div class="panel">
+          <h2><span data-i18n="watch">Watch</span> <span class="hint"><input id="watchInput" value="" spellcheck="false" placeholder="AX, [0x200], 100h, AL" size="20"><button id="watchAdd" title="Add watch">+</button></span></h2>
+          <div id="watchList" class="mono"></div>
+        </div>
       </div>
+
+      <div class="tabgroup" data-tab="mem">
+        <div class="panel">
+          <h2><span data-i18n="memory">Memory</span></h2>
+          <div id="memtools">
+            <button id="mempgUp" title="Previous 256 bytes">&#9664;</button>
+            <input id="memaddr" value="0" spellcheck="false" title="Base address (hex)">
+            <button id="mempgDn" title="Next 256 bytes">&#9654;</button>
+            <span class="info" id="meminfo"></span>
+          </div>
+          <div id="memview"></div>
+        </div>
+        <div class="panel">
+          <h2><span data-i18n="memmap">Memory map</span></h2>
+          <div id="memmap" class="mono"></div>
+          <div id="romload">
+            <label>ROM @ <input id="romaddr" value="0" spellcheck="false" size="6" title="ROM load address (hex)"></label>
+            <button id="romBtn" title="Load a ROM/firmware image (marked read-only)">Load ROM…</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabgroup" data-tab="io">
+        <div class="panel">
+          <h2><span data-i18n="ports">I/O Ports</span> <span class="hint"><button id="portsClearBtn">Clear</button></span></h2>
+          <div id="ports"></div>
+        </div>
+        <div class="panel">
+          <h2><span data-i18n="peripherals">Peripheral registers</span></h2>
+          <div id="peripherals" class="chips"></div>
+        </div>
+      </div>
+
+      <div class="tabgroup" data-tab="out">
+        <div class="panel">
+          <h2><span data-i18n="output">Program output</span> <span class="hint"><button id="clearOutBtn">Clear</button></span></h2>
+          <div id="output"></div>
+        </div>
+        <div class="panel" id="screenPanel" style="display:none">
+          <h2>Text screen (INT 10h / 0xB8000)</h2>
+          <pre id="screen" class="screen"></pre>
+        </div>
+        <div class="panel" id="gfxPanel" style="display:none">
+          <h2><span data-i18n="gfxscreen">Graphics screen (INT 10h)</span></h2>
+          <canvas id="gfx" width="320" height="200" class="gfx"></canvas>
+        </div>
+      </div>
+
+      <div class="tabgroup" data-tab="dev">
+        <div class="panel" id="devicePanel" style="display:none">
+          <h2>Peripherals <span class="hint"><button id="devResetBtn">Reset</button></span></h2>
+          <div id="devices" class="dgrid"></div>
+        </div>
+        <div class="panel" id="z80memPanel" style="display:none">
+          <h2>Z80 Memory Editor <span class="hint">edit bytes, then Apply</span></h2>
+          <div id="memtools">
+            <label>Base <input id="z80memBase" value="0" spellcheck="false" size="6" title="Base address (hex)"></label>
+            <button id="z80memDump" title="Reload the hex dump from memory">Dump</button>
+            <button id="z80memApply" title="Write the edited bytes back to memory">Apply</button>
+          </div>
+          <textarea id="z80mem" spellcheck="false" wrap="off" rows="12" class="hex"></textarea>
+        </div>
+      </div>
+
       <div id="helps">Keys: <kbd>F7</kbd> assemble · <kbd>F8</kbd> step · <kbd>F10</kbd> step-over · <kbd>F5</kbd> run · <kbd>Esc</kbd> stop · <kbd>Ctrl+S</kbd> save · output conventions: 8086 <b>INT 21h</b>, 8085 <b>OUT 01h</b>, 8051 <b>SBUF</b> · click a port to set it</div>
     </section>
   </main>
