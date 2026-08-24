@@ -1221,8 +1221,17 @@ function evalCond(expr) {
   if (!expr) return true;
   const m = expr.match(/^(.*?)\s*(==|!=|<=|>=|<|>)\s*(.*)$/);
   if (!m) return true; // no comparison -> ignore condition
-  const l = evalWatch(m[1].trim(), emu.regs()).num;
-  const r = evalWatch(m[3].trim(), emu.regs()).num;
+  // A bracketed side ([addr]) is a memory read; a bare numeric constant is a
+  // literal value. This keeps "CX == 0x10" comparing to the value 0x10 (not
+  // memory at 0x10), while "[0x200] == 0xAB" still reads memory.
+  const side = (s) => {
+    s = s.trim();
+    if (s.startsWith('[') && s.endsWith(']')) return evalWatch(s, emu.regs()).num;
+    if (parseAddr(s) !== null) return parseAddr(s);
+    return evalWatch(s, emu.regs()).num;
+  };
+  const l = side(m[1].trim());
+  const r = side(m[3].trim());
   if (Number.isNaN(l) || Number.isNaN(r)) return false;
   switch (m[2]) {
     case '==': return l === r;

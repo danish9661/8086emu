@@ -38,6 +38,10 @@ versions are dated snapshots of `main`.
 - rv32i M-extension (`MUL`/`MULH`/`MULHSU`/`MULHU`/`DIV`/`DIVU`/`REM`/`REMU`)
   in the core and assembler.
 - IDE: 8085 SID/SOD indicators, 8051 serial RX injector, Z80 memory hex editor.
+- IDE: **About** dialog (button in the header) documenting the supported CPUs,
+  quick-start, assembler syntax, I/O/device ports, interrupts, keyboard
+  shortcuts, save/load/share, and the source/repo. Closes on `Esc` or
+  outside-click.
 
 ### Changed
 - Web IDE (`docs/`): the right-hand column is no longer a single 12-panel
@@ -107,6 +111,15 @@ versions are dated snapshots of `main`.
   being silently ignored. Snapshot/restore now covers the CSR file. The
   assembler gained `CSRRW/CSRRS/CSRRC/CSRRWI/CSRRSI/CSRRCI` (plus shorthand
   `CSRWI/CSRSI/CSRCI`) and the `CSRR rd,csr` / `CSRW csr,rs` pseudos.
+- 8086 `INT 21h AH=09` (print `$`-terminated string) now bounds the scan to the
+  end of physical memory, so a program that forgets the `$` terminator
+  terminates instead of trapping the wasm runtime with an unbounded read loop.
+- IDE: conditional-breakpoint expressions (`evalCond`) previously routed both
+  sides through `evalWatch`, which treats a bare numeric constant (e.g. `0x10`)
+  as a **memory address** and dereferences it. `CX == 0x10` therefore compared
+  against `mem[0x10]` rather than the value `0x10`. Bare numeric constants are
+  now treated as literal values; `[addr]` is still a memory read, so
+  `[0x200] == 0xAB` continues to read memory as before.
 
 ## [2026-08-22] - Initial multi-CPU feature set
 - Cores: 8086, 8085, 8051, Z80, 6502, rv32i (+M).
