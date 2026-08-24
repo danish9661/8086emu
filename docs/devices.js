@@ -86,7 +86,11 @@ export function renderDevices(emu, isa) {
   if (!panel) return;
   const box = document.getElementById('devicePanel');
   if (isa !== '8086' && isa !== '8085' && isa !== '8051') {
-    box.style.display = 'none';
+    box.style.display = '';
+    panel.innerHTML =
+      '<div class="hint">Peripheral devices (traffic light, 7-segment, stepper, ' +
+      'printer, robot, LED matrix) are available for the 8086, 8085, and 8051. ' +
+      'Choose one of those ISAs to drive them via OUT/IN ports.</div>';
     return;
   }
   box.style.display = '';
@@ -156,7 +160,7 @@ export function renderDevices(emu, isa) {
 }
 
 // Static memory-map overview per ISA for the "Memory map" panel.
- export function renderMemMap(emu, isa) {
+export function renderMemMap(emu, isa) {
    const el = document.getElementById('memmap');
    if (!el) return;
    const fmt = (a) => a.toString(16).toUpperCase().padStart(4, '0');
