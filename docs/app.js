@@ -1097,11 +1097,10 @@ function editWatch(i) {
       emu.set_reg(up, v);
     }
   } else {
-    let addr = null;
-    if (expr.startsWith('[') && expr.endsWith(']')) addr = parseAddr(expr.slice(1, -1));
-    else addr = parseAddr(expr);
-    if (addr === null || addr < 0) { toast('Not editable'); return; }
-    emu.mem_write(addr, new Uint8Array([v & 0xFF, (v >> 8) & 0xFF]));
+    const inner = (expr.startsWith('[') && expr.endsWith(']')) ? expr.slice(1, -1) : expr;
+    const addr = evalExpr(inner, emu.regs(), false);
+    if (Number.isNaN(addr) || addr < 0) { toast('Not editable'); return; }
+    emu.mem_write(addr & 0xFFFFF, new Uint8Array([v & 0xFF, (v >> 8) & 0xFF]));
   }
   refresh();
 }
@@ -1177,42 +1176,123 @@ function parseAddr(s) {
   return null;
 }
 
+// ---- richer watch / breakpoint expression language ----
+// A watch or breakpoint side may be: a register (AX, IP), a sub-register
+// (AH/AL), an individual flag (ZF, CF, …), the FLAGS word, a memory
+// dereference [expr], a number (0x.., h/b/q suffix, decimal), or any
+// arithmetic/bitwise combination (+, -, *, /, %, &, |, ^, ~, <<, >>, ()).
+// In a *watch*, a bare numeric (e.g. `100h`) is treated as a memory address
+// (legacy behaviour, matching "[addr]"); in breakpoint sides and inside
+// "[...]" a bare number is a literal value.
+
+const EXPR_FLAG_NAMES = ['CF','PF','AF','ZF','SF','TF','IF','DF','OF'];
+const EXPR_FLAG_585 = ['S','Z','AC','P','CY'];
+
+function flagsWordOf() {
+  const fl = emu.flags();
+  let fv = 0;
+  if (fl.includes('CF')) fv |= 0x001;
+  if (fl.includes('PF')) fv |= 0x004;
+  if (fl.includes('AF')) fv |= 0x010;
+  if (fl.includes('ZF')) fv |= 0x040;
+  if (fl.includes('SF')) fv |= 0x080;
+  if (fl.includes('TF')) fv |= 0x100;
+  if (fl.includes('IF')) fv |= 0x200;
+  if (fl.includes('DF')) fv |= 0x400;
+  if (fl.includes('OF')) fv |= 0x800;
+  return fv;
+}
+
+function tokenizeExpr(s) {
+  const toks = [];
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === '0' && (s[i+1] === 'x' || s[i+1] === 'X')) {
+      let j = i + 2; while (j < s.length && /[0-9a-fA-F]/.test(s[j])) j++;
+      toks.push({ t: 'num', v: parseInt(s.slice(i + 2, j), 16) }); i = j; continue;
+    }
+    if (/[0-9]/.test(c)) {
+      let j = i; while (j < s.length && /[0-9a-fA-F]/.test(s[j])) j++;
+      const numStr = s.slice(i, j); let k = j;
+      if (s[k] === 'h' || s[k] === 'H') { toks.push({ t: 'num', v: parseInt(numStr, 16) }); i = k + 1; continue; }
+      if (s[k] === 'b' || s[k] === 'B') { toks.push({ t: 'num', v: parseInt(numStr, 2) }); i = k + 1; continue; }
+      if (s[k] === 'q' || s[k] === 'Q') { toks.push({ t: 'num', v: parseInt(numStr, 8) }); i = k + 1; continue; }
+      toks.push({ t: 'num', v: parseInt(numStr, 10) }); i = j; continue;
+    }
+    if (/[A-Za-z_.@]/.test(c)) {
+      let j = i; while (j < s.length && /[A-Za-z0-9_.@]/.test(s[j])) j++;
+      toks.push({ t: 'id', v: s.slice(i, j).toUpperCase() }); i = j; continue;
+    }
+    if ('+-*/%&|^~()[]<>'.includes(c)) {
+      if ((c === '<' || c === '>') && s[i + 1] === c) { toks.push({ t: 'op', v: c + c }); i += 2; continue; }
+      toks.push({ t: 'op', v: c }); i++; continue;
+    }
+    i++;
+  }
+  return toks;
+}
+
+function exprResolveId(id, regs) {
+  const SUB = { AH:['AX',8], AL:['AX',0], BH:['BX',8], BL:['BX',0], CH:['CX',8], CL:['CX',0], DH:['DX',8], DL:['DX',0] };
+  if (SUB[id]) { const [p, sh] = SUB[id]; return (val(regs, p) >> sh) & 0xFF; }
+  if (EXPR_FLAG_NAMES.includes(id) || EXPR_FLAG_585.includes(id)) return emu.flags().includes(id) ? 1 : 0;
+  if (id === 'FLAGS') return flagsWordOf();
+  if (WATCH_REGS[isa].includes(id)) return val(regs, id);
+  return NaN;
+}
+
+function exprReadMem(addr) {
+  const b = new Uint8Array(emu.mem(addr & 0xFFFFF, 2));
+  return b[0] | (b[1] << 8);
+}
+
+function evalExpr(expr, regs, bareMemory) {
+  const toks = tokenizeExpr(expr);
+  if (bareMemory && toks.length === 1 && toks[0].t === 'num') return exprReadMem(toks[0].v);
+  let pos = 0;
+  const peek = () => toks[pos];
+  const next = () => toks[pos++];
+  const expect = (v) => { if (toks[pos] && toks[pos].v === v) pos++; };
+  function primary() {
+    const tk = peek();
+    if (!tk) return NaN;
+    if (tk.t === 'op' && tk.v === '(') { next(); const v = parseExpr(); expect(')'); return v; }
+    if (tk.t === 'op' && tk.v === '[') { next(); const a = parseExpr(); expect(']'); return exprReadMem(a); }
+    if (tk.t === 'op' && (tk.v === '-' || tk.v === '~')) { next(); const v = primary(); return tk.v === '-' ? -v : ~v; }
+    if (tk.t === 'num') { next(); return tk.v; }
+    if (tk.t === 'id') { next(); return exprResolveId(tk.v, regs); }
+    return NaN;
+  }
+  function factor() {
+    let v = primary();
+    while (peek() && peek().t === 'op' && ['*','/','%','<<','>>'].includes(peek().v)) {
+      const op = next().v; const r = primary();
+      v = op === '*' ? v*r : op === '/' ? (r === 0 ? 0 : (v / r) | 0)
+        : op === '%' ? (r === 0 ? 0 : v % r)
+        : op === '<<' ? (v << r) : (v >> r);
+    }
+    return v;
+  }
+  function term() {
+    let v = factor();
+    while (peek() && peek().t === 'op' && ['+','-','|','^','&'].includes(peek().v)) {
+      const op = next().v; const r = factor();
+      v = op === '+' ? v+r : op === '-' ? v-r : op === '|' ? (v|r) : op === '^' ? (v^r) : (v&r);
+    }
+    return v;
+  }
+  function parseExpr() { return term(); }
+  const r = parseExpr();
+  return Number.isFinite(r) ? (r >>> 0) : NaN;
+}
+
 function evalWatch(expr, regs) {
   const e = expr.trim();
-  const up = e.toUpperCase();
-  // sub-registers (AH/AL/…) are derived from their 16-bit parent
-  const SUB = { AH:['AX',8], AL:['AX',0], BH:['BX',8], BL:['BX',0], CH:['CX',8], CL:['CX',0], DH:['DX',8], DL:['DX',0] };
-  if (SUB[up]) {
-    const [p, sh] = SUB[up];
-    const v = (val(regs, p) >> sh) & 0xFF;
-    return { text: up, value: fmt(v, 2), num: v };
-  }
-  if (up === 'FLAGS' && isa === '8086') {
-    const fl = emu.flags();
-    let fv = 0;
-    if (fl.includes('CF')) fv |= 0x001;
-    if (fl.includes('PF')) fv |= 0x004;
-    if (fl.includes('AF')) fv |= 0x010;
-    if (fl.includes('ZF')) fv |= 0x040;
-    if (fl.includes('SF')) fv |= 0x080;
-    if (fl.includes('IF')) fv |= 0x200;
-    if (fl.includes('DF')) fv |= 0x400;
-    if (fl.includes('OF')) fv |= 0x800;
-    return { text: 'FLAGS', value: fmt(fv), num: fv };
-  }
-  if (WATCH_REGS[isa].includes(up)) {
-    const v = val(regs, up);
-    return { text: up, value: fmt(v), num: v };
-  }
-  let addr = null;
-  if (e.startsWith('[') && e.endsWith(']')) addr = parseAddr(e.slice(1, -1));
-  else addr = parseAddr(e);
-  if (addr !== null && addr >= 0) {
-    const b = new Uint8Array(emu.mem(addr, 2));
-    const v = b[0] | (b[1] << 8);
-    return { text: '[' + fmt(addr) + ']', value: fmt(v), num: v };
-  }
-  return { text: e, value: '?', num: NaN };
+  const num = evalExpr(e, regs, true);
+  if (Number.isNaN(num)) return { text: e.toUpperCase(), value: '?', num: NaN };
+  return { text: e.toUpperCase(), value: fmt(num & 0xFFFF, 4), num };
 }
 
 // conditional breakpoint expression: "LHS op RHS" (op: == != <= >= < >)
@@ -1220,18 +1300,12 @@ function evalCond(expr) {
   expr = expr.trim();
   if (!expr) return true;
   const m = expr.match(/^(.*?)\s*(==|!=|<=|>=|<|>)\s*(.*)$/);
-  if (!m) return true; // no comparison -> ignore condition
-  // A bracketed side ([addr]) is a memory read; a bare numeric constant is a
-  // literal value. This keeps "CX == 0x10" comparing to the value 0x10 (not
-  // memory at 0x10), while "[0x200] == 0xAB" still reads memory.
-  const side = (s) => {
-    s = s.trim();
-    if (s.startsWith('[') && s.endsWith(']')) return evalWatch(s, emu.regs()).num;
-    if (parseAddr(s) !== null) return parseAddr(s);
-    return evalWatch(s, emu.regs()).num;
-  };
-  const l = side(m[1].trim());
-  const r = side(m[3].trim());
+  if (!m) return true;
+  // Both sides are full expressions; brackets mean memory, bare numbers are
+  // literal values, so "CX == 0x10" compares to the value and "[BX+2] != 0"
+  // reads memory.
+  const l = evalExpr(m[1].trim(), emu.regs(), false);
+  const r = evalExpr(m[3].trim(), emu.regs(), false);
   if (Number.isNaN(l) || Number.isNaN(r)) return false;
   switch (m[2]) {
     case '==': return l === r;

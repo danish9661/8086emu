@@ -37,6 +37,65 @@ export function resetDevices() {
   robotTrail = [];
   lastRobot = null;
   lastStep = 0;
+  for (const id in floaters) { floaters[id].win.remove(); delete floaters[id]; }
+}
+
+// ---- device pop-out floaters -------------------------------------------
+// Any device can be detached into a draggable floating window (like the
+// reference modern8086 IDE). The window position persists in localStorage;
+// while popped out the device keeps updating live during Run.
+const POP_KEY = 'mce_popped';
+const POS_KEY = 'mce_floater_pos';
+const floaters = {};
+function getPopped() { try { return new Set(JSON.parse(localStorage.getItem(POP_KEY) || '[]')); } catch { return new Set(); } }
+function setPopped(s) { try { localStorage.setItem(POP_KEY, JSON.stringify([...s])); } catch {} }
+function getPos() { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}'); } catch { return {}; } }
+function setPos(p) { try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch {} }
+function deviceTitle(id) {
+  return ({ traffic:'Traffic light', seven:'7-segment', stepper:'Stepper', printer:'Printer', robot:'Robot grid', led:'LED matrix', timing:'Clock / timers' })[id] || id;
+}
+function ensureFloater(id) {
+  if (floaters[id]) return floaters[id];
+  const win = document.createElement('div');
+  win.className = 'floater';
+  const pos = getPos()[id] || { x: 140, y: 140 };
+  win.style.left = pos.x + 'px';
+  win.style.top = pos.y + 'px';
+  win.innerHTML = `<div class="floater-head">${deviceTitle(id)}<button class="fl-close" title="Return to panel">✕</button></div><div class="floater-body"></div>`;
+  document.body.appendChild(win);
+  const head = win.querySelector('.floater-head');
+  head.addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('fl-close')) return;
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY, ox = win.offsetLeft, oy = win.offsetTop;
+    const mv = (ev) => { win.style.left = (ox + ev.clientX - sx) + 'px'; win.style.top = (oy + ev.clientY - sy) + 'px'; };
+    const up = () => {
+      document.removeEventListener('mousemove', mv);
+      document.removeEventListener('mouseup', up);
+      const p = getPos(); p[id] = { x: win.offsetLeft, y: win.offsetTop }; setPos(p);
+    };
+    document.addEventListener('mousemove', mv);
+    document.addEventListener('mouseup', up);
+  });
+  win.querySelector('.fl-close').addEventListener('click', () => closeFloater(id));
+  const f = { win, body: win.querySelector('.floater-body') };
+  floaters[id] = f;
+  return f;
+}
+function closeFloater(id) {
+  if (floaters[id]) { floaters[id].win.remove(); delete floaters[id]; }
+  const s = getPopped(); s.delete(id); setPopped(s);
+}
+function togglePop(id) {
+  const s = getPopped();
+  if (s.has(id)) { closeFloater(id); } else { s.add(id); setPopped(s); ensureFloater(id); }
+}
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('.dev-pop');
+    if (!b) return;
+    togglePop(b.dataset.dev);
+  });
 }
 
 function seg7svg(mask) {
@@ -133,7 +192,7 @@ export function renderDevices(emu, isa) {
 
   // cycle-accurate clock / timer view
   const cycles = emu.cycles();
-  let timing = `<div class="dev"><h3>Clock / timers <span class="p">real-time</span></h3><div class="mono">cycles: ${cycles}</div>`;
+  let timing = `<div class="dev" id="dev-timing"><h3>Clock / timers <span class="p">real-time</span><button class="dev-pop" data-dev="timing" title="Pop out">↗</button></h3><div class="mono">cycles: ${cycles}</div>`;
   if (isa === '8086') {
     timing += `<div class="mono">PIT0: ${emu.pit_count(0)}  PIT1: ${emu.pit_count(1)}  PIT2: ${emu.pit_count(2)}</div>`;
     timing += `<div class="mono">PIT input 1.19318 MHz; CPU 4x -> 1 tick / 4 cycles</div>`;
@@ -150,13 +209,22 @@ export function renderDevices(emu, isa) {
   timing += `</div>`;
 
   panel.innerHTML =
-    `<div class="dev"><h3>Traffic light <span class="p">10h</span></h3>${traffic}</div>` +
-    `<div class="dev"><h3>7-segment <span class="p">11h/12h</span></h3>${seven}</div>` +
-    `<div class="dev"><h3>Stepper <span class="p">13h</span></h3>${stepper}</div>` +
-    `<div class="dev"><h3>Printer <span class="p">14h</span></h3>${printer}</div>` +
-    `<div class="dev"><h3>Robot grid <span class="p">16h/17h</span></h3>${robot}</div>` +
-    `<div class="dev"><h3>LED matrix <span class="p">20h-27h</span></h3>${led}</div>` +
+    `<div class="dev" id="dev-traffic"><h3>Traffic light <span class="p">10h</span><button class="dev-pop" data-dev="traffic" title="Pop out">↗</button></h3>${traffic}</div>` +
+    `<div class="dev" id="dev-seven"><h3>7-segment <span class="p">11h/12h</span><button class="dev-pop" data-dev="seven" title="Pop out">↗</button></h3>${seven}</div>` +
+    `<div class="dev" id="dev-stepper"><h3>Stepper <span class="p">13h</span><button class="dev-pop" data-dev="stepper" title="Pop out">↗</button></h3>${stepper}</div>` +
+    `<div class="dev" id="dev-printer"><h3>Printer <span class="p">14h</span><button class="dev-pop" data-dev="printer" title="Pop out">↗</button></h3>${printer}</div>` +
+    `<div class="dev" id="dev-robot"><h3>Robot grid <span class="p">16h/17h</span><button class="dev-pop" data-dev="robot" title="Pop out">↗</button></h3>${robot}</div>` +
+    `<div class="dev" id="dev-led"><h3>LED matrix <span class="p">20h-27h</span><button class="dev-pop" data-dev="led" title="Pop out">↗</button></h3>${led}</div>` +
     timing;
+
+  // Keep popped-out floaters live and hide the in-panel copy while popped.
+  const popped = getPopped();
+  for (const id of popped) {
+    const src = panel.querySelector('#dev-' + id);
+    if (!src) continue;
+    src.style.display = 'none';
+    ensureFloater(id).body.innerHTML = src.innerHTML;
+  }
 }
 
 // Static memory-map overview per ISA for the "Memory map" panel.

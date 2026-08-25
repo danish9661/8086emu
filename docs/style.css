@@ -202,6 +202,16 @@ kbd { background: #21262d; border: 1px solid var(--border); border-radius: 4px; 
 .dev { background: #0e131c; border: 1px solid #232c3a; border-radius: 6px; padding: 8px; }
 .dev h3 { margin: 0 0 8px; font-size: 12px; color: #9fb0c6; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .dev h3 .p { margin-left: auto; font-weight: 400; color: #6b7689; font-size: 11px; }
+.dev-pop { margin-left: 6px; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: 1px solid #2a3346; background: #161c28; color: #9fb3c8; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1; flex: 0 0 auto; }
+.dev-pop:hover { background: #23304a; color: #fff; }
+
+/* popped-out device floaters */
+.floater { position: fixed; z-index: 60; width: 240px; background: #131922; border: 1px solid #2a3346; border-radius: 8px; box-shadow: 0 8px 26px rgba(0,0,0,.5); }
+.floater-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #1b2230; border-bottom: 1px solid #2a3346; border-radius: 8px 8px 0 0; cursor: move; font-size: 12px; font-weight: 600; color: #cfe2ff; gap: 8px; }
+.floater-head .fl-close { width: 18px; height: 18px; border: none; background: transparent; color: #9fb3c8; cursor: pointer; font-size: 12px; border-radius: 4px; flex: 0 0 auto; }
+.floater-head .fl-close:hover { background: #314056; color: #fff; }
+.floater-body { padding: 10px; max-height: 70vh; overflow: auto; }
+.floater-body .dev { border: none; background: transparent; padding: 0; }
 .dev .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; color: #b9c6da; line-height: 1.5; }
 #romload { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 #romload input { width: 72px; background: #0b0f16; color: #cdd; border: 1px solid #2a3442; border-radius: 4px; padding: 3px 5px; font-family: ui-monospace, Menlo, monospace; }

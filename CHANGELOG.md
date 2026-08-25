@@ -42,6 +42,18 @@ versions are dated snapshots of `main`.
   quick-start, assembler syntax, I/O/device ports, interrupts, keyboard
   shortcuts, save/load/share, and the source/repo. Closes on `Esc` or
   outside-click.
+- IDE: **richer watch / breakpoint expression language**. A small expression
+  evaluator (`evalExpr` in `docs/app.js`) supports registers (`AX`, `AH`, …),
+  CPU flags (`ZF`, `CF`, …), arithmetic (`+ - * / %`), bitwise (`& | ^ ~`),
+  shifts (`<< >>`), parentheses, unary minus/complement (`-X`, `~X`), and
+  computed memory reads (`[0x200]`, `[BX+2]`). The watch input placeholder now
+  reads `[0x200]`. The same evaluator powers conditional breakpoints, so
+  `AX+BX == 3` and `[BX+2] != 0` work as expected.
+- IDE: **device pop-out floaters**. Each device panel (traffic light, 7-segment,
+  stepper, printer, robot, LED matrix, clock/timers) has a `↗` button that
+  detaches it into a draggable, floating window (à la the reference
+  `modern8086` IDE). Floater position persists in `localStorage`, the floater
+  stays live during Run, and re-opening the panel returns it.
 
 ### Changed
 - Web IDE (`docs/`): the right-hand column is no longer a single 12-panel
@@ -120,6 +132,14 @@ versions are dated snapshots of `main`.
   against `mem[0x10]` rather than the value `0x10`. Bare numeric constants are
   now treated as literal values; `[addr]` is still a memory read, so
   `[0x200] == 0xAB` continues to read memory as before.
+- IDE: the watch / breakpoint **expression evaluator was completely broken** —
+  an internal parse helper was named `expr`, which shadowed the `expr` parameter
+  of `evalExpr`, so every evaluation saw the string argument as `undefined` and
+  returned `NaN` (watches showed `?`, conditional breakpoints never triggered).
+  The helper is renamed to `parseExpr`.
+- IDE: shift operators `<<` / `>>` were never tokenized (the operator scanner
+  omitted `<` / `>`), so `AX << 1` silently dropped the shift and returned `AX`.
+  The tokenizer now recognizes `<<` / `>>` as single operators.
 
 ## [2026-08-22] - Initial multi-CPU feature set
 - Cores: 8086, 8085, 8051, Z80, 6502, rv32i (+M).
