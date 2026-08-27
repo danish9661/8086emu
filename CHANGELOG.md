@@ -54,6 +54,10 @@ versions are dated snapshots of `main`.
   detaches it into a draggable, floating window (à la the reference
   `modern8086` IDE). Floater position persists in `localStorage`, the floater
   stays live during Run, and re-opening the panel returns it.
+- IDE: verified the 8086 framebuffer render paths with a DOM-mock smoke test —
+  `renderScreen` (INT 10h text mode) emits the 80×25 character/attribute spans
+  with the cursor highlight and VGA colours, and `renderGfx` (mode 13h) paints
+  the 320×200×4 pixel buffer to the canvas.
 
 ### Changed
 - Web IDE (`docs/`): the right-hand column is no longer a single 12-panel
@@ -137,6 +141,13 @@ versions are dated snapshots of `main`.
   of `evalExpr`, so every evaluation saw the string argument as `undefined` and
   returned `NaN` (watches showed `?`, conditional breakpoints never triggered).
   The helper is renamed to `parseExpr`.
+- IDE: **visual refresh** to match the cleaner `modern8086` aesthetic. UI chrome
+  now uses a system sans-serif typeface with monospace reserved for code surfaces
+  (editor, disassembly, registers, memory, text/graphics screen, ports); a
+  cohesive token palette (panel / line / radius / shadow), gradient accent
+  buttons, elevated "plugin-card" device panels with port-badge headers and
+  pop-out buttons, refined tabs, `:focus-visible` outlines, custom scrollbars,
+  and a CRT-glow text screen.
 - IDE: shift operators `<<` / `>>` were never tokenized (the operator scanner
   omitted `<` / `>`), so `AX << 1` silently dropped the shift and returned `AX`.
   The tokenizer now recognizes `<<` / `>>` as single operators.
