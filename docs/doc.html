@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Documentation — multi-cpu-emu</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <style>
+    :root {
+      --bg: #0c1017; --bg-2: #141a24; --panel: #1a2230;
+      --fg: #d7dee9; --muted: #8b95a8; --border: #2a3242;
+      --accent: #3d8bfd; --green: #3fb950; --amber: #e3a008; --red: #f85149;
+      --purple: #a371f7; --cyan: #39c5cf;
+      --radius: 8px; --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, monospace;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--fg); line-height: 1.65; font-size: 15px;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── layout ── */
+    .page { max-width: 920px; margin: 0 auto; padding: 0 20px 60px; }
+    .hero {
+      text-align: center; padding: 48px 0 36px;
+      border-bottom: 1px solid var(--border); margin-bottom: 36px;
+    }
+    .hero h1 { font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+    .hero h1 span { color: var(--accent); }
+    .hero p { color: var(--muted); font-size: 16px; max-width: 640px; margin: 0 auto 16px; }
+    .hero .badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    .badge {
+      display: inline-block; padding: 3px 10px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; letter-spacing: .3px;
+      border: 1px solid var(--border); color: var(--muted);
+    }
+    .badge.license { border-color: var(--green); color: var(--green); }
+    .badge.wasm { border-color: var(--purple); color: var(--purple); }
+    .badge.isa { border-color: var(--cyan); color: var(--cyan); }
+
+    /* ── nav / toc ── */
+    .toc {
+      background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 16px 20px; margin-bottom: 32px;
+    }
+    .toc h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+    .toc ul { list-style: none; columns: 2; column-gap: 24px; }
+    .toc li { break-inside: avoid; margin-bottom: 4px; }
+    .toc a { font-size: 14px; color: var(--fg); }
+    .toc a:hover { color: var(--accent); }
+
+    /* ── sections ── */
+    section { margin-bottom: 36px; }
+    section > h2 {
+      font-size: 20px; color: #fff; font-weight: 700; margin-bottom: 14px;
+      padding-bottom: 8px; border-bottom: 1px solid var(--border);
+    }
+    section > h3 {
+      font-size: 16px; color: var(--accent); font-weight: 600; margin: 18px 0 8px;
+    }
+    h4 { font-size: 14px; color: var(--fg); font-weight: 600; margin: 14px 0 6px; }
+    p { margin-bottom: 12px; }
+    ul, ol { margin: 0 0 12px 20px; }
+    li { margin-bottom: 4px; }
+
+    /* ── code ── */
+    code {
+      font-family: var(--mono); font-size: 13px;
+      background: var(--bg-2); padding: 1px 5px; border-radius: 3px;
+      color: var(--cyan);
+    }
+    pre {
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 14px 18px; overflow-x: auto; font-family: var(--mono);
+      font-size: 13px; line-height: 1.55; color: var(--fg); margin-bottom: 14px;
+    }
+    pre code { background: none; padding: 0; }
+
+    /* ── tables ── */
+    .table-wrap { overflow-x: auto; margin-bottom: 14px; }
+    table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    }
+    th {
+      text-align: left; padding: 8px 12px; font-weight: 600; color: var(--muted);
+      border-bottom: 2px solid var(--border); font-size: 12px; text-transform: uppercase;
+      letter-spacing: .5px; white-space: nowrap;
+    }
+    td {
+      padding: 7px 12px; border-bottom: 1px solid var(--border); vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
+    td code { white-space: nowrap; }
+
+    /* ── kbd ── */
+    kbd {
+      display: inline-block; padding: 1px 6px; font-family: var(--mono);
+      font-size: 12px; background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 3px; color: var(--fg);
+    }
+
+    /* ── cards ── */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 14px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 14px 16px; transition: border-color .15s;
+    }
+    .card:hover { border-color: var(--accent); }
+    .card h4 { margin: 0 0 6px; color: #fff; font-size: 14px; }
+    .card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .card .chip {
+      display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
+      font-weight: 600; margin-bottom: 6px;
+    }
+    .chip-16 { background: rgba(61,139,253,.15); color: var(--accent); }
+    .chip-8 { background: rgba(57,197,207,.15); color: var(--cyan); }
+    .chip-32 { background: rgba(163,113,247,.15); color: var(--purple); }
+
+    /* ── callout ── */
+    .callout {
+      border-left: 3px solid var(--accent); background: rgba(61,139,253,.08);
+      padding: 10px 14px; border-radius: 0 var(--radius) var(--radius) 0; margin-bottom: 14px;
+      font-size: 14px;
+    }
+    .callout.warn { border-color: var(--amber); background: rgba(227,160,8,.08); }
+    .callout code { background: rgba(255,255,255,.08); }
+
+    /* ── footer ── */
+    footer {
+      text-align: center; padding: 20px; color: var(--muted); font-size: 12px;
+      border-top: 1px solid var(--border); margin-top: 40px;
+    }
+
+    /* ── responsive ── */
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 24px; }
+      .toc ul { columns: 1; }
+      .cards { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+<!-- ═══════════════════ HERO ═══════════════════ -->
+<div class="hero">
+  <h1><span>multi-cpu-emu</span></h1>
+  <p>A browser-based IDE and emulator for six classic microprocessors. Write assembly, assemble, step through instructions, and debug — all in one page.</p>
+  <div class="badges">
+    <span class="badge license">MIT License</span>
+    <span class="badge wasm">Rust → WASM</span>
+    <span class="badge isa">6 ISAs</span>
+    <span class="badge">v0.1.0</span>
+  </div>
+</div>
+
+<!-- ═══════════════════ TOC ═══════════════════ -->
+<nav class="toc">
+  <h2>Contents</h2>
+  <ul>
+    <li><a href="#quickstart">Quick Start</a></li>
+    <li><a href="#isas">Supported ISAs</a></li>
+    <li><a href="#controls">Controls &amp; Shortcuts</a></li>
+    <li><a href="#syntax">Assembly Syntax</a></li>
+    <li><a href="#devices">Devices &amp; Peripherals</a></li>
+    <li><a href="#debug">Debugging Features</a></li>
+    <li><a href="#i18n">Languages</a></li>
+    <li><a href="#api">WASM API Reference</a></li>
+    <li><a href="#build">Building from Source</a></li>
+    <li><a href="#examples">Example Programs</a></li>
+  </ul>
+</nav>
+
+<!-- ═══════════════════ QUICK START ═══════════════════ -->
+<section id="quickstart">
+  <h2>Quick Start</h2>
+  <ol>
+    <li>Open the <a href="./index.html">emulator</a> in your browser.</li>
+    <li>Select an ISA from the dropdown (default: Intel 8086).</li>
+    <li>Write assembly in the editor, or click <kbd>Example</kbd> to load a sample program.</li>
+    <li>Press <kbd>F7</kbd> or click <kbd>Assemble</kbd> to compile and load.</li>
+    <li>Press <kbd>F8</kbd> or click <kbd>Step</kbd> to execute one instruction at a time.</li>
+    <li>Press <kbd>F5</kbd> or click <kbd>Run</kbd> to execute continuously until HLT.</li>
+    <li>Switch to the <strong>Registers</strong> tab to watch register values change in real time.</li>
+  </ol>
+  <div class="callout">
+    <strong>Tip:</strong> Your source code is auto-saved to the browser's localStorage. Press <kbd>Ctrl+S</kbd> to save manually. A <kbd>Share</kbd> button copies a URL with your code encoded in it.
+  </div>
+</section>
+
+<!-- ═══════════════════ ISAs ═══════════════════ -->
+<section id="isas">
+  <h2>Supported ISAs</h2>
+  <div class="cards">
+    <div class="card">
+      <span class="chip chip-16">16-bit</span>
+      <h4>Intel 8086</h4>
+      <p>16-bit x86 with segmented memory (CS:DS:ES:SS). DOS INT 21h and BIOS INT 10h subset. 1 MiB address space. COM-format entry at 0x100.</p>
+    </div>
+    <div class="card">
+      <span class="chip chip-8">8-bit</span>
+      <h4>Intel 8085</h4>
+      <p>8-bit accumulator architecture. Full ISA including SIM/RIM, DAA, and hardware interrupts (TRAP, RST 7.5/6.5/5.5, INTR). SID/SOD pins.</p>
+    </div>
+    <div class="card">
+      <span class="chip chip-8">8-bit</span>
+      <h4>Intel 8051 (MCS-51)</h4>
+      <p>8-bit MCU with SFRs, 4 register banks, bit-addressable RAM, Timer 0/1, serial port, and 5 interrupt sources (INT0/INT1, TF0/TF1, serial).</p>
+    </div>
+    <div class="card">
+      <span class="chip chip-8">8-bit</span>
+      <h4>MOS 6502</h4>
+      <p>8-bit with zero-page fast access, hardware stack at 0x0100, decimal mode, indexed addressing. BRK/RTI interrupt model.</p>
+    </div>
+    <div class="card">
+      <span class="chip chip-8">8-bit</span>
+      <h4>Zilog Z80</h4>
+      <p>Full 8080 superset plus IX/IY index registers, shadow registers (A'F'/BC'/DE'/HL'), block transfers (LDIR/LDDR), bit instructions, IM 0/1/2.</p>
+    </div>
+    <div class="card">
+      <span class="chip chip-32">32-bit</span>
+      <h4>RISC-V RV32I</h4>
+      <p>32-bit base integer ISA with M extension (MUL/DIV/REM), CSR instructions, ECALL semihosting (write/exit). Flat 1 MiB address space.</p>
+    </div>
+  </div>
+
+  <h3>ISA-Specific Details</h3>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>ISA</th><th>Entry Point</th><th>Memory</th><th>Output Port</th><th>Assembler Directives</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>8086</td><td><code>0x100</code> (COM)</td><td>1 MiB segmented</td><td><code>INT 21h</code> / <code>INT 10h</code></td><td><code>ORG</code>, <code>DB</code>, <code>DW</code>, <code>EQU</code>, <code>END</code></td></tr>
+      <tr><td>8085</td><td><code>0x0000</code></td><td>64 KiB</td><td><code>OUT 01h</code></td><td><code>ORG</code>, <code>DB</code>, <code>DW</code>, <code>EQU</code>, <code>END</code></td></tr>
+      <tr><td>8051</td><td><code>0x0000</code></td><td>64 KiB code + SFRs</td><td><code>MOV SBUF,A</code></td><td><code>ORG</code>, <code>DB</code>, <code>DW</code>, <code>EQU</code>, <code>END</code></td></tr>
+      <tr><td>6502</td><td><code>0x0000</code></td><td>64 KiB</td><td>Port <code>$01</code></td><td><code>ORG</code>, <code>DB</code>, <code>DW</code>, <code>EQU</code>, <code>END</code></td></tr>
+      <tr><td>Z80</td><td><code>0x0000</code></td><td>64 KiB</td><td><code>OUT (1),A</code></td><td><code>ORG</code>, <code>DB</code>, <code>DW</code>, <code>EQU</code>, <code>END</code></td></tr>
+      <tr><td>RV32I</td><td><code>0x0000</code></td><td>1 MiB flat</td><td><code>ECALL</code> (semihosting)</td><td><code>ORG</code>, <code>.word</code>, <code>.byte</code>, <code>.half</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ═══════════════════ CONTROLS ═══════════════════ -->
+<section id="controls">
+  <h2>Controls &amp; Keyboard Shortcuts</h2>
+
+  <h3>Toolbar Buttons</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Button</th><th>Shortcut</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>Assemble</kbd></td><td><kbd>F7</kbd></td><td>Compile source and load into memory</td></tr>
+      <tr><td><kbd>Step</kbd></td><td><kbd>F8</kbd></td><td>Execute one instruction</td></tr>
+      <tr><td><kbd>Over</kbd></td><td><kbd>F10</kbd></td><td>Step over CALL — runs the entire call in one step</td></tr>
+      <tr><td><kbd>Back</kbd></td><td>—</td><td>Undo last step (time-travel via snapshot restore)</td></tr>
+      <tr><td><kbd>Run</kbd></td><td><kbd>F5</kbd></td><td>Run continuously until HLT or Stop</td></tr>
+      <tr><td><kbd>Stop</kbd></td><td><kbd>Esc</kbd></td><td>Halt continuous execution</td></tr>
+      <tr><td><kbd>Reset</kbd></td><td><kbd>F4</kbd></td><td>Reset CPU to initial state</td></tr>
+      <tr><td><kbd>Save</kbd></td><td>—</td><td>Download a snapshot of the current CPU state</td></tr>
+      <tr><td><kbd>Load</kbd></td><td>—</td><td>Restore CPU state from a saved snapshot</td></tr>
+      <tr><td><kbd>Share</kbd></td><td>—</td><td>Copy a shareable link with code encoded in the URL</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Editor Shortcuts</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Key</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>Ctrl+S</kbd></td><td>Save source to browser localStorage</td></tr>
+      <tr><td><kbd>Tab</kbd></td><td>Insert 4-space indent</td></tr>
+      <tr><td><kbd>F7</kbd></td><td>Assemble (works from editor focus)</td></tr>
+      <tr><td><kbd>F8</kbd></td><td>Step (works from editor focus)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Disassembly Interactions</h3>
+  <ul>
+    <li><strong>Click</strong> a line → toggle a breakpoint (red marker)</li>
+    <li><strong>Shift+click</strong> → set a conditional breakpoint (e.g. <code>CX==0</code>, <code>mem[0x200]==5</code>)</li>
+    <li><strong>Double-click</strong> → run-to-cursor (run until that instruction is reached)</li>
+  </ul>
+</section>
+
+<!-- ═══════════════════ SYNTAX ═══════════════════ -->
+<section id="syntax">
+  <h2>Assembly Syntax</h2>
+  <p>All assemblers share a common line-oriented, case-insensitive syntax. <code>;</code> starts a comment. Labels are defined with <code>name:</code> or <code>name EQU expr</code>.</p>
+
+  <h3>Number Formats</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Format</th><th>Example</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>Decimal</td><td><code>42</code></td><td>Base 10</td></tr>
+      <tr><td>Hex (prefix)</td><td><code>0x2A</code></td><td>Base 16</td></tr>
+      <tr><td>Hex (suffix)</td><td><code>2Ah</code></td><td>Base 16</td></tr>
+      <tr><td>Binary</td><td><code>10101b</code></td><td>Base 2</td></tr>
+      <tr><td>Octal</td><td><code>52q</code></td><td>Base 8</td></tr>
+      <tr><td>Character</td><td><code>'A'</code></td><td>ASCII value (65)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Directives</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Directive</th><th>Syntax</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>ORG</code></td><td><code>ORG 100h</code></td><td>Set the origin address for assembled code</td></tr>
+      <tr><td><code>DB</code></td><td><code>DB 'Hello',0</code></td><td>Define byte(s)</td></tr>
+      <tr><td><code>DW</code></td><td><code>DW 1234h</code></td><td>Define word (16-bit, little-endian)</td></tr>
+      <tr><td><code>EQU</code></td><td><code>PORTA EQU 0FFh</code></td><td>Define a constant symbol</td></tr>
+      <tr><td><code>END</code></td><td><code>END</code></td><td>Mark end of source (optional)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>8086-Specific Syntax</h3>
+  <pre><code>ORG 100h
+MOV AX, OFFSET msg     ; direct addressing
+MOV BX, [SI+4]         ; indexed addressing
+ADD AX, BX             ; register-to-register
+PUSH DS                ; push segment register
+INT 21h                ; DOS service call
+msg DB 'Hello$'        ; $-terminated string</code></pre>
+
+  <h3>8085-Specific Syntax</h3>
+  <pre><code>MVI A, 41h             ; load immediate
+LXI H, 2000h           ; load register pair
+MOV B, M               ; load from memory via HL
+OUT 01h                ; output to port 01h
+RST 7.5                ; restart interrupt</code></pre>
+
+  <h3>8051-Specific Syntax</h3>
+  <pre><code>MOV A, #41h            ; load accumulator (immediate)
+MOV SBUF, A            ; transmit via serial port
+SJMP $                 ; spin loop
+SETB P1.0              ; set port bit
+CJNE A, #0FFh, loop    ; compare and jump if not equal</code></pre>
+
+  <h3>Z80-Specific Syntax</h3>
+  <pre><code>LD A, 41h              ; load accumulator
+LD BC, 1000h           ; load register pair
+ADD A, B               ; add register to accumulator
+OUT (1), A             ; output to port
+IM 1                   ; set interrupt mode 1
+LDIR                   ; block copy (DE←HL, BC count)</code></pre>
+
+  <h3>6502-Specific Syntax</h3>
+  <pre><code>LDA #41                ; load accumulator immediate
+STA $0200              ; store to absolute address
+LDX #10                ; load X index
+INX                    ; increment X
+BNE loop               ; branch if not zero
+BRK                    ; software interrupt</code></pre>
+
+  <h3>RISC-V RV32I Syntax</h3>
+  <pre><code>ADDI x1, x0, 42        ; x1 = 42
+LW   x2, 0(x1)         ; load word from memory
+SW   x2, 4(x1)         ; store word to memory
+BEQ  x1, x2, label     ; branch if equal
+ECALL                  ; environment call (semihosting)</code></pre>
+</section>
+
+<!-- ═══════════════════ DEVICES ═══════════════════ -->
+<section id="devices">
+  <h2>Devices &amp; Peripherals</h2>
+  <p>The emulator includes simulated hardware devices accessible via I/O ports. Click the <strong>Devices</strong> tab to see them, or pop them out as floating windows by clicking the float icon.</p>
+
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Device</th><th>Port(s)</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Traffic Light</strong></td><td><code>0x10</code></td><td>Bits 0/1/2 control red/yellow/green lamps</td></tr>
+      <tr><td><strong>7-Segment Display</strong></td><td><code>0x11</code> (low), <code>0x12</code> (high)</td><td>Two-digit hex display (0–F per digit)</td></tr>
+      <tr><td><strong>Stepper Motor</strong></td><td><code>0x13</code></td><td>4-bit coil pattern → 8 rotor positions (45° steps)</td></tr>
+      <tr><td><strong>Printer</strong></td><td><code>0x14</code> (data), <code>0x15</code> (status)</td><td>Text accumulator; status returns 0x80 = ready</td></tr>
+      <tr><td><strong>Robot Grid</strong></td><td><code>0x16</code> (X), <code>0x17</code> (Y)</td><td>16×16 grid with visited-position trail</td></tr>
+      <tr><td><strong>LED Matrix</strong></td><td><code>0x20</code>–<code>0x27</code></td><td>8×8 monochrome matrix; each port = one row</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout">
+    <strong>ISA-Specific Ports:</strong> 8086 uses <code>INT 21h</code> / <code>INT 10h</code> for I/O. 8085 uses <code>OUT 01h</code> for character output. 8051 writes to <code>SBUF</code> for serial output. 6502 writes to port <code>$01</code>. Z80 uses <code>OUT (1),A</code>.
+  </div>
+</section>
+
+<!-- ═══════════════════ DEBUG ═══════════════════ -->
+<section id="debug">
+  <h2>Debugging Features</h2>
+
+  <h3>Time-Travel Debugging</h3>
+  <p>Every step automatically saves a snapshot. Click <strong>Back</strong> to undo the last instruction and restore the previous CPU state. This works for as long as you have history (up to 200 steps).</p>
+
+  <h3>Breakpoints</h3>
+  <ul>
+    <li><strong>Click</strong> a disassembly line to toggle an unconditional breakpoint.</li>
+    <li><strong>Shift+click</strong> to set a conditional breakpoint with an expression.</li>
+    <li><strong>Double-click</strong> to run-to-cursor.</li>
+  </ul>
+
+  <h3>Conditional Breakpoint Expressions</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Expression</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>CX==0</code></td><td>Break when CX equals 0</td></tr>
+      <tr><td><code>AX>10</code></td><td>Break when AX is greater than 10</td></tr>
+      <tr><td><code>mem[0x200]==5</code></td><td>Break when memory at 0x200 equals 5</td></tr>
+      <tr><td><code>IP==0x100</code></td><td>Break when IP reaches 0x100</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Watch Expressions</h3>
+  <p>Switch to the <strong>Watch</strong> tab to monitor registers or memory locations in real time. Type a register name (e.g. <code>AX</code>) or memory expression (e.g. <code>[0x200]</code>) and press <kbd>+</kbd>. Values that change between steps are highlighted in amber.</p>
+
+  <h3>Snapshot Save/Load</h3>
+  <p>Click <strong>Save</strong> to download a binary snapshot of the entire CPU state (registers, flags, memory, breakpoints, watch expressions). Click <strong>Load</strong> to restore a previously saved snapshot. Snapshots are backward-compatible — old format files load fine.</p>
+
+  <h3>Share Links</h3>
+  <p>Click <strong>Share</strong> to copy a URL with your source code, breakpoints, and watch expressions encoded in it. Anyone with the link can open the same program in their browser.</p>
+
+  <h3>Hardware Interrupts</h3>
+  <p>Each ISA exposes relevant interrupt buttons in the header bar:</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>ISA</th><th>Available Interrupts</th></tr></thead>
+    <tbody>
+      <tr><td>8086</td><td><kbd>NMI</kbd> (non-maskable), <kbd>INTR</kbd> (maskable via IF)</td></tr>
+      <tr><td>8085</td><td><kbd>TRAP</kbd>, <kbd>7.5</kbd>, <kbd>6.5</kbd>, <kbd>5.5</kbd>, <kbd>INTR</kbd>, <kbd>SID</kbd> (input pin)</td></tr>
+      <tr><td>8051</td><td><kbd>INT0</kbd>, <kbd>INT1</kbd>, plus RX serial injection</td></tr>
+      <tr><td>Z80</td><td><kbd>NMI</kbd>, <kbd>INT</kbd>, Interrupt Mode selector (IM 0/1/2)</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ═══════════════════ I18N ═══════════════════ -->
+<section id="i18n">
+  <h2>Languages</h2>
+  <p>The interface is available in 5 languages. Select from the <strong>Lang</strong> dropdown:</p>
+  <ul>
+    <li><strong>EN</strong> — English</li>
+    <li><strong>ES</strong> — Spanish (Español)</li>
+    <li><strong>DE</strong> — German (Deutsch)</li>
+    <li><strong>FR</strong> — French (Français)</li>
+    <li><strong>HI</strong> — Hindi (हिन्दी)</li>
+  </ul>
+</section>
+
+<!-- ═══════════════════ API ═══════════════════ -->
+<section id="api">
+  <h2>WASM API Reference</h2>
+  <p>The emulator is compiled to a single WASM module. The JavaScript API is exposed via the <code>Emulator</code> class:</p>
+
+  <h3>Constructor</h3>
+  <pre><code>const emu = new Emulator("8086"); // "8086"|"8085"|"8051"|"6502"|"Z80"|"rv32"</code></pre>
+
+  <h3>Core Methods</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Method</th><th>Returns</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>assemble(src)</code></td><td><code>Vec&lt;u8&gt;</code></td><td>Assemble source to machine code</td></tr>
+      <tr><td><code>assemble_info(src)</code></td><td><code>Vec&lt;String&gt;</code></td><td>Per-line "ADDR BYTES" for the gutter</td></tr>
+      <tr><td><code>load(code, origin)</code></td><td>—</td><td>Load machine code at origin, set PC</td></tr>
+      <tr><td><code>step()</code></td><td>—</td><td>Execute one instruction</td></tr>
+      <tr><td><code>run(max)</code></td><td><code>u32</code></td><td>Run up to N steps; returns steps executed</td></tr>
+      <tr><td><code>run_to(pc, max)</code></td><td><code>u32</code></td><td>Run until target PC is next (for step-over)</td></tr>
+      <tr><td><code>pc()</code></td><td><code>u32</code></td><td>Current program counter</td></tr>
+      <tr><td><code>regs()</code></td><td><code>Vec&lt;String&gt;</code></td><td>Register dump ("NAME=value")</td></tr>
+      <tr><td><code>flags()</code></td><td><code>Vec&lt;String&gt;</code></td><td>Active flag names</td></tr>
+      <tr><td><code>mem(addr, len)</code></td><td><code>Vec&lt;u8&gt;</code></td><td>Read memory bytes</td></tr>
+      <tr><td><code>out()</code></td><td><code>String</code></td><td>Drain program output buffer</td></tr>
+      <tr><td><code>halted()</code></td><td><code>bool</code></td><td>True if CPU has halted (HLT)</td></tr>
+      <tr><td><code>reset()</code></td><td>—</td><td>Reset CPU to initial state</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Debug Methods</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Method</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>snapshot()</code></td><td>Serialize full CPU state (deterministic)</td></tr>
+      <tr><td><code>restore(data)</code></td><td>Restore from a snapshot</td></tr>
+      <tr><td><code>disasm(addr, count)</code></td><td>Disassemble N instructions from addr</td></tr>
+      <tr><td><code>set_reg(name, val)</code></td><td>Set a register by name</td></tr>
+      <tr><td><code>set_pc(addr)</code></td><td>Set the program counter</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>I/O Methods</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Method</th><th>ISA</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>port_read(port)</code></td><td>All</td><td>Read an I/O port byte</td></tr>
+      <tr><td><code>port_write(port, val)</code></td><td>All</td><td>Write an I/O port byte</td></tr>
+      <tr><td><code>push_key(ch)</code></td><td>8086</td><td>Queue a type-ahead character for INT 21h</td></tr>
+      <tr><td><code>waiting_input()</code></td><td>8086</td><td>True if blocked on INT 21h read</td></tr>
+      <tr><td><code>interrupt(kind, data)</code></td><td>8085/8051/8086</td><td> Raise a hardware interrupt</td></tr>
+      <tr><td><code>serial_rx(ch)</code></td><td>8051</td><td>Inject a received serial byte</td></tr>
+      <tr><td><code>set_sid(v)</code></td><td>8085</td><td>Set SID input pin</td></tr>
+      <tr><td><code>sod()</code></td><td>8085</td><td>Read SOD output pin</td></tr>
+      <tr><td><code>set_interrupt_mode(m)</code></td><td>Z80</td><td>Set interrupt mode (0/1/2)</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Memory Methods</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Method</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>mem_write(addr, data)</code></td><td>Write bytes to memory</td></tr>
+      <tr><td><code>load_rom(data, addr)</code></td><td>Load a ROM image (read-only)</td></tr>
+      <tr><td><code>set_rom_region(base, len)</code></td><td>Mark a region as ROM</td></tr>
+      <tr><td><code>cycles()</code></td><td>Total clock cycles executed</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>8051-Specific Methods</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Method</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>sfr(addr)</code></td><td>Read an SFR / IRAM byte</td></tr>
+      <tr><td><code>set_sfr(addr, val)</code></td><td>Write an SFR / IRAM byte</td></tr>
+      <tr><td><code>set_ea(active)</code></td><td>Set the EA (external access) pin</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>8086-Specific Methods</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Method</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>gfx()</code></td><td>Graphics framebuffer info (base, width, height)</td></tr>
+      <tr><td><code>video_mode()</code></td><td>Current video mode byte</td></tr>
+      <tr><td><code>screen()</code></td><td>Text-mode framebuffer (80×25 char/attr pairs)</td></tr>
+      <tr><td><code>cursor()</code></td><td>Text cursor position [col, row]</td></tr>
+      <tr><td><code>fs_put(name, data)</code></td><td>Preload a file into DOS virtual filesystem</td></tr>
+      <tr><td><code>fs_get(name)</code></td><td>Read a file from DOS virtual filesystem</td></tr>
+      <tr><td><code>pit_count(n)</code></td><td>PIT channel 0/1/2 reload value</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ═══════════════════ BUILD ═══════════════════ -->
+<section id="build">
+  <h2>Building from Source</h2>
+
+  <h3>Prerequisites</h3>
+  <ul>
+    <li><a href="https://rustup.rs">Rust</a> (with <code>wasm32-unknown-unknown</code> target)</li>
+    <li><a href="https://github.com/nickel-org/nickel.rs">wasm-pack</a>: <code>cargo install wasm-pack</code></li>
+  </ul>
+
+  <h3>Commands</h3>
+  <pre><code># Add the WASM target (once)
+rustup target add wasm32-unknown-unknown
+
+# Build the WASM package
+wasm-pack build --target web --out-dir docs/pkg --release --features wasm
+
+# Run native tests (all 6 ISAs)
+cargo test
+
+# Lint
+cargo clippy --all-targets
+
+# Serve the web demo locally
+python3 -m http.server -d docs 8000
+# Then open http://localhost:8000</code></pre>
+
+  <h3>CLI Runner (headless)</h3>
+  <pre><code>cargo run --example run -- examples/hello.asm          # 8086
+cargo run --example run -- --isa 8085 examples/hello85.asm
+cargo run --example run -- --isa 8051 examples/hello51.asm
+cargo run --example run -- --isa z80 examples/helloz80.asm
+cargo run --example run -- --isa 6502 examples/hello6502.asm
+cargo run --example run -- --isa rv32 examples/hellorv32.asm</code></pre>
+
+  <h3>Project Structure</h3>
+  <pre><code>multi-cpu-emu/
+├── Cargo.toml              # Single crate; feature "wasm" for wasm-bindgen
+├── src/
+│   ├── lib.rs              # Emulator enum over 6 CPU cores
+│   ├── cpu.rs              # Cpu trait, Mem, Output, FlagSet, Reg
+│   ├── i8086.rs            # 8086 core (segmented, INT 21h/10h)
+│   ├── i8085.rs            # 8085 core (full 8-bit ISA)
+│   ├── mcs51.rs            # 8051 core (SFRs, timers, serial)
+│   ├── m6502.rs            # 6502 core (zero-page, decimal mode)
+│   ├── z80.rs              # Z80 core (8080 + Z80 extensions)
+│   ├── rv32.rs             # RV32I core (M ext, CSR)
+│   ├── asm/
+│   │   ├── mod.rs          # Per-ISA assembler dispatch
+│   │   ├── common.rs       # Tokenizer, labels, directives
+│   │   ├── asm8086.rs      # 8086 assembler (multi-pass)
+│   │   ├── asm8085.rs      # 8085 assembler
+│   │   ├── asm8051.rs      # 8051 assembler
+│   │   ├── asm6502.rs      # 6502 assembler
+│   │   ├── asmz80.rs       # Z80 assembler
+│   │   └── asmrv32.rs      # RV32I assembler
+│   └── wasm.rs             # wasm-bindgen surface (feature "wasm")
+├── examples/run.rs         # Native CLI runner
+├── docs/                   # Web IDE (GitHub Pages)
+│   ├── index.html          # Main page
+│   ├── doc.html            # This documentation
+│   ├── style.css           # Theme, layout, responsive
+│   ├── app.js              # IDE logic, debug engine, i18n
+│   ├── devices.js          # Device render + pop-out floaters
+│   ├── i18n.js             # 5-language translations
+│   └── pkg/                # Compiled WASM (committed)
+└── AGENTS.md               # Contributor guide</code></pre>
+</section>
+
+<!-- ═══════════════════ EXAMPLES ═══════════════════ -->
+<section id="examples">
+  <h2>Example Programs</h2>
+  <p>Click the <kbd>Example</kbd> button in the toolbar to cycle through built-in samples for the current ISA.</p>
+
+  <h3>8086 (9 examples)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Hello (INT 21h)</td><td>Print "Hello, 8086!" via DOS AH=09</td></tr>
+      <tr><td>Keyboard input (AH=01)</td><td>Read a key, echo it, print "You pressed: X"</td></tr>
+      <tr><td>Keyboard echo loop (AH=07)</td><td>Read 5 chars without echo, print them back</td></tr>
+      <tr><td>Arithmetic (5×3+2)</td><td>Compute using MUL and ADD</td></tr>
+      <tr><td>Loop &amp; memory (sum)</td><td>Sum 5 numbers using LOOP instruction</td></tr>
+      <tr><td>Flags demo (CMP/Jcc)</td><td>Compare and branch with JB</td></tr>
+      <tr><td>Graphics (INT 10h)</td><td>Mode 13h: diagonal line and color bar</td></tr>
+      <tr><td>Hardware interrupts</td><td>NMI/INTR handlers; press header buttons</td></tr>
+      <tr><td>Peripherals demo</td><td>Drive all devices via OUT instructions</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>8085 (5 examples)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Hello (OUT 01h)</td><td>Print "Hello, 8085!"</td></tr>
+      <tr><td>Arithmetic (A=25+5)</td><td>Simple addition</td></tr>
+      <tr><td>Loop (count 1..9)</td><td>Print digits via OUT 01h</td></tr>
+      <tr><td>Memory (copy block)</td><td>Copy 4 bytes using LDA/STA</td></tr>
+      <tr><td>Interrupts (TRAP/RST)</td><td>Press TRAP/RST buttons to trigger ISRs</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>8051 (6 examples)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Hello (SBUF)</td><td>Print "Hello, 8051!" via serial</td></tr>
+      <tr><td>Arithmetic (A=40−7)</td><td>Subtraction using SUBB</td></tr>
+      <tr><td>Timer counter demo</td><td>Count Timer 0 overflows into R0</td></tr>
+      <tr><td>Interrupts (INT0/INT1)</td><td>External interrupt handlers</td></tr>
+      <tr><td>Bit operations</td><td>SETB/CLR/CPL on port bits</td></tr>
+      <tr><td>Peripherals (MOVX)</td><td>Drive peripherals via MOVX @DPTR</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Z80 (3 examples)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Hello (OUT (1),A)</td><td>Print "Hi" via OUT</td></tr>
+      <tr><td>Sum 1..10</td><td>Sum using B as counter</td></tr>
+      <tr><td>Interrupts (NMI/INT)</td><td>Press NMI/INT buttons</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>6502 (2 examples)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Hello (STA $01)</td><td>Print "Hi" by writing to port $01</td></tr>
+      <tr><td>Sum 1..10</td><td>Sum using X as counter in zero-page</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>RISC-V (2 examples)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>Hello (ECALL write)</td><td>Semihosting write syscall (a7=64)</td></tr>
+      <tr><td>Arithmetic loop</td><td>Sum 1..10 using BLT loop</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ═══════════════════ FOOTER ═══════════════════ -->
+<footer>
+  <p>multi-cpu-emu v0.1.0 · MIT License · <a href="https://github.com/danish9661/8086emu">GitHub</a></p>
+  <p style="margin-top:4px">Written in Rust, compiled to WASM, running in your browser.</p>
+</footer>
+
+</div>
+</body>
+</html>

@@ -763,6 +763,7 @@ const ABOUT = `
   <p>Single Rust crate <code>multi-cpu-emu</code> → WASM. Reference design inspired by
   the MIT-licensed <code>modern8086</code> emulator. Built with
   <code>wasm-pack --target web</code>.</p>
+  <p><a href="./doc.html" target="_blank">Full documentation →</a></p>
 </section>
 `;
 function showAbout() {
