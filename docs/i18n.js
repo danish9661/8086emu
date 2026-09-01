@@ -9,7 +9,7 @@ window.I18N = {
     saveState: 'Save State', loadState: 'Load State', share: 'Share Link',
     registers: 'Registers', flags: 'Flags', disasm: 'Disassembly', watch: 'Watch',
     memory: 'Memory', memmap: 'Memory map', ports: 'I/O Ports',
-    peripherals: 'Peripheral registers', output: 'Program output', gfxscreen: 'Graphics screen (INT 10h)',
+    peripherals: 'Peripheral registers', output: 'Output', gfxscreen: 'Graphics screen (INT 10h)',
   },
   es: {
     example: 'Ejemplo', assemble: 'Ensamblar', step: 'Paso', stepOver: 'Paso-over',
@@ -17,7 +17,7 @@ window.I18N = {
     saveState: 'Guardar estado', loadState: 'Cargar estado', share: 'Enlace',
     registers: 'Registros', flags: 'Banderas', disasm: 'Desensamblado', watch: 'Vigilar',
     memory: 'Memoria', memmap: 'Mapa de memoria', ports: 'Puertos E/S',
-    peripherals: 'Periféricos', output: 'Salida del programa', gfxscreen: 'Pantalla gráfica (INT 10h)',
+    peripherals: 'Periféricos', output: 'Salida', gfxscreen: 'Pantalla gráfica (INT 10h)',
   },
   de: {
     example: 'Beispiel', assemble: 'Assemblieren', step: 'Schritt', stepOver: 'Überspringen',
@@ -25,7 +25,7 @@ window.I18N = {
     saveState: 'Zustand speichern', loadState: 'Zustand laden', share: 'Link teilen',
     registers: 'Register', flags: 'Flags', disasm: 'Disassemblierung', watch: 'Überwachen',
     memory: 'Speicher', memmap: 'Speicherkarte', ports: 'E/A-Ports',
-    peripherals: 'Peripherie', output: 'Programmausgabe', gfxscreen: 'Grafikbildschirm (INT 10h)',
+    peripherals: 'Peripherie', output: 'Ausgabe', gfxscreen: 'Grafikbildschirm (INT 10h)',
   },
   fr: {
     example: 'Exemple', assemble: 'Assembler', step: 'Pas', stepOver: 'Pas-sur',
@@ -33,7 +33,7 @@ window.I18N = {
     saveState: 'Sauver état', loadState: 'Charger état', share: 'Partager',
     registers: 'Registres', flags: 'Drapeaux', disasm: 'Désassemblage', watch: 'Surveiller',
     memory: 'Mémoire', memmap: 'Carte mémoire', ports: 'Ports E/S',
-    peripherals: 'Périphériques', output: 'Sortie du programme', gfxscreen: 'Écran graphique (INT 10h)',
+    peripherals: 'Périphériques', output: 'Sortie', gfxscreen: 'Écran graphique (INT 10h)',
   },
   hi: {
     example: 'उदाहरण', assemble: 'असेंबल', step: 'चरण', stepOver: 'ओवर-चरण',
@@ -41,7 +41,7 @@ window.I18N = {
     saveState: 'स्थिति सहेजें', loadState: 'स्थिति लोड', share: 'लिंक साझा',
     registers: 'रजिस्टर', flags: 'फ्लैग', disasm: 'डिसअसेंबल', watch: 'वॉच',
     memory: 'मेमोरी', memmap: 'मेमोरी मानचित्र', ports: 'आई/ओ पोर्ट',
-    peripherals: 'परिधीय', output: 'प्रोग्राम आउटपुट', gfxscreen: 'ग्राफिक्स स्क्रीन (INT 10h)',
+    peripherals: 'परिधीय', output: 'आउटपुट', gfxscreen: 'ग्राफिक्स स्क्रीन (INT 10h)',
   },
 };
 

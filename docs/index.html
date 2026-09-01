@@ -119,10 +119,9 @@
         <div class="panel">
           <h2><span data-i18n="registers">Registers</span></h2>
           <div id="regs" class="rgrid"></div>
-        </div>
-        <div class="panel">
-          <h2><span data-i18n="flags">Flags</span></h2>
-          <div id="flags"></div>
+          <div style="border-top:1px solid var(--border-soft)">
+            <div id="flags"></div>
+          </div>
         </div>
       </div>
 
@@ -200,7 +199,7 @@
         </div>
       </div>
 
-      <div id="helps">Keys: <kbd>F7</kbd> assemble · <kbd>F8</kbd> step · <kbd>F10</kbd> step-over · <kbd>F5</kbd> run · <kbd>Esc</kbd> stop · <kbd>Ctrl+S</kbd> save · output conventions: 8086 <b>INT 21h</b>, 8085 <b>OUT 01h</b>, 8051 <b>SBUF</b> · click a port to set it</div>
+      <div id="helps"><span class="help-keys"><kbd>F7</kbd> assemble <kbd>F8</kbd> step <kbd>F10</kbd> step-over <kbd>F5</kbd> run <kbd>Esc</kbd> stop <kbd>Ctrl+S</kbd> save</span><span class="help-sep">|</span><span class="help-conv">8086 <b>INT 21h</b> · 8085 <b>OUT 01h</b> · 8051 <b>SBUF</b> · click a port to set it</span></div>
     </section>
   </main>
 
