@@ -3,20 +3,43 @@ name: Publish to npm & GitHub Packages
 # Publishes the WebAssembly build as the `8086emu` npm package.
 #   - npmjs.com         -> uses secret NPM_TOKEN  (scoped to the npm account)
 #   - GitHub Packages   -> uses GITHUB_TOKEN      (auto-provided; scoped @danish9661)
+#   - GitHub Release    -> created with tag v<version> and user-provided description
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build from'
+        required: true
+        type: choice
+        options:
+          - main
+      version:
+        description: 'Version (e.g. 1.2.0)'
+        required: true
+        type: string
+      description:
+        description: 'Release notes'
+        required: true
+        type: string
 
 permissions:
-  contents: read
-  packages: write   # needed to push to GitHub Packages
+  contents: write    # needed to push tags and create releases
+  packages: write    # needed to push to GitHub Packages
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "::error::Invalid version format. Expected x.y.z (e.g. 1.2.0)"
+            exit 1
+          fi
 
       - name: Install Rust (wasm32 target)
         uses: dtolnay/rust-toolchain@stable
@@ -34,6 +57,12 @@ jobs:
       - name: Build wasm package
         run: wasm-pack build --target web --out-dir pkg --release --features wasm
 
+      - name: Set package version
+        working-directory: pkg
+        run: |
+          npm pkg set name=8086emu
+          npm version ${{ inputs.version }} --no-git-tag-version
+
       # ----- publish to npmjs.com as `8086emu` -----
       - uses: actions/setup-node@v4
         with:
@@ -42,9 +71,7 @@ jobs:
 
       - name: Publish to npm (NPM_TOKEN)
         working-directory: pkg
-        run: |
-          npm pkg set name=8086emu
-          npm publish --access public
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -58,3 +85,17 @@ jobs:
           npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ----- create git tag + GitHub Release -----
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ inputs.version }}" -m "Release v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
+          gh release create "v${{ inputs.version }}" \
+            --title "v${{ inputs.version }}" \
+            --notes "${{ inputs.description }}" \
+            --target "${{ inputs.branch }}"
