@@ -14,7 +14,7 @@ on:
         options:
           - main
       version:
-        description: 'Version (e.g. 1.2.0)'
+        description: 'Version (e.g. 1.2 or 1.2.3)'
         required: true
         type: string
       description:
@@ -36,8 +36,8 @@ jobs:
 
       - name: Validate version format
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
-            echo "::error::Invalid version format. Expected x.y.z (e.g. 1.2.0)"
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?$'; then
+            echo "::error::Invalid version format. Expected x.y or x.y.z (e.g. 1.2 or 1.2.3)"
             exit 1
           fi
 
