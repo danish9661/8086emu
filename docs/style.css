@@ -59,6 +59,7 @@ button.primary { background: linear-gradient(180deg, var(--accent), #2f7fe6); bo
 button.primary:hover { background: linear-gradient(180deg, var(--accent-2), var(--accent)); }
 button.danger { background: linear-gradient(180deg, #ff6b6b, #e23b3b); border-color: #e23b3b; color: #fff; }
 header .spacer { flex: 1; }
+[id^="intrBar"]:not([style*="display:none"]) { display: inline-flex !important; align-items: center; gap: 3px; white-space: nowrap; overflow-x: auto; max-width: 100%; }
 #statusbar {
   padding: 4px 14px; background: var(--panel); border-top: 1px solid var(--border);
   display: flex; gap: 18px; font-size: 12px; color: var(--muted); flex-wrap: wrap;
@@ -129,6 +130,8 @@ main {
 #hl .r { color: #c89bff; }
 #hl .l { color: #7ddb8f; }
 #hl .y { color: #5f6b7d; }
+#hl .hl { height: 20px; line-height: 20px; }
+#hl .hl.pc { background: rgba(63,185,80,.10); }
 #editor {
   position: relative; flex: 1; resize: none; background: transparent; border: none; outline: none;
   color: transparent; caret-color: #9ecbff;
@@ -195,9 +198,10 @@ main {
  .rreg.pc .v { color: var(--green); }
  .rreg.changed { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber) inset; }
  .rreg.changed .v { color: var(--amber); }
- #disasmView { margin: 0; padding: 10px; max-height: 260px; overflow: auto; font-size: 12px; line-height: 1.5; cursor: text; }
- #disasmView .drow { white-space: pre; padding: 0 4px; border-radius: 3px; }
- #disasmView .drow .daddr { color: var(--muted); }
+ #disasmView { margin: 0; padding: 10px; max-height: 340px; overflow: auto; font-size: 12px; line-height: 1.5; cursor: text; }
+ #disasmView .drow { white-space: pre; padding: 0 6px; border-radius: 3px; }
+ #disasmView .drow:nth-child(even) { background: rgba(255,255,255,.02); }
+ #disasmView .drow .daddr { color: var(--muted); min-width: 7ch; display: inline-block; }
  #disasmView .drow .dbytes { color: #8b949e; }
  #disasmView .drow .dtext { color: #e6edf3; }
  #disasmView .drow.cur { background: rgba(63,185,80,.18); }
@@ -218,9 +222,9 @@ main {
   background: #21262d; color: #484f58; border: 1px solid var(--border);
 }
 .flag.on { background: #1a3a22; color: var(--green); border-color: var(--green); }
-#memview { padding: 8px 10px; overflow: auto; font-size: 12px; line-height: 18px; white-space: pre; color: #adbac7; }
+#memview { padding: 8px 10px; overflow: auto; font-size: 12px; line-height: 18px; white-space: pre; color: #adbac7; max-height: 340px; }
 #memview .hl { background: #2ea043; color: #fff; border-radius: 3px; }
-#memview .addr { color: #484f58; }
+#memview .addr { color: #5a6878; }
 #memview .mb { cursor: pointer; border-radius: 2px; }
 #memview .mb:hover { background: rgba(88, 166, 255, .25); }
 #memview .mb.ch { background: var(--amber, #e3a008); color: #1b1f24; }

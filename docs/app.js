@@ -1352,7 +1352,8 @@ function renderHl() {
   }
   const regs = HL.regs[isa], mnems = HL.mnem[isa], dirs = HL.dirs;
   hl.textContent = '';
-  const out = editor.value.split('\n').map((line) => {
+  const pcLine = codeMap.findIndex(a => a && parseInt(a, 16) === _gutterPC);
+  const out = editor.value.split('\n').map((line, i) => {
     let r = '', last = 0, m;
     TOKEN_RE.lastIndex = 0;
     while ((m = TOKEN_RE.exec(line))) {
@@ -1374,8 +1375,9 @@ function renderHl() {
       r += `<span class="${cls}">${escHtml(tok)}</span>`;
       last = m.index + tok.length;
     }
-    return r + escHtml(line.slice(last));
-  }).join('\n');
+    const inner = r + escHtml(line.slice(last));
+    return `<div class="hl${i === pcLine ? ' pc' : ''}">${inner}</div>`;
+  }).join('');
   hl.innerHTML = out;
 }
 let _gutterPC = 0;
@@ -1401,6 +1403,9 @@ function highlightGutterPC(pc) {
     const a = parseInt(el.dataset.addr, 16);
     if (a === pc) el.classList.add('cpc');
   });
+  hl.querySelectorAll('.hl.pc').forEach(el => el.classList.remove('pc'));
+  const idx = codeMap.findIndex(a => a && parseInt(a, 16) === pc);
+  if (idx >= 0) { const el = hl.querySelectorAll('.hl')[idx]; if (el) el.classList.add('pc'); }
 }
 gutter.addEventListener('click', (e) => {
   const el = e.target.closest('[data-addr]');
@@ -1587,6 +1592,7 @@ function assemble() {
     errorsBox.innerHTML = '';
     errLine = -1;
     buildGutter();
+    renderHl();
     const hex = Array.from(code).slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join(' ');
     $('sbCode').textContent = `${code.length} bytes${code.length > 12 ? '…' : ''} (${hex}${code.length > 12 ? '…' : ''})`;
     toast(`Assembled ${code.length} bytes, entry ${fmt(entry(), 4)}`);
