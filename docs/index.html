@@ -31,30 +31,28 @@
         </select>
       </label>
     </div>
-    <span class="spacer"></span>
+    <span class="hsep"></span>
     <div class="hgroup">
       <button id="asmBtn" class="primary" title="Assemble and load (F7)" data-i18n="assemble">Assemble</button>
     </div>
-    <div class="hgroup">
-      <button id="aboutBtn" title="About this emulator: supported CPUs, usage, shortcuts">About</button>
-    </div>
+    <span class="hsep"></span>
     <div class="hgroup">
       <button id="stepBtn" title="Step one instruction (F8)" disabled data-i18n="step">Step</button>
-      <button id="overBtn" title="Step over a CALL (F10): run the whole call in one step" disabled data-i18n="stepOver">Step-Over</button>
-      <button id="backBtn" title="Undo the last Step (snapshot restore)" disabled data-i18n="stepBack">Step-Back</button>
-    </div>
-    <div class="hgroup">
+      <button id="overBtn" title="Step over a CALL (F10): run the whole call in one step" disabled data-i18n="stepOver">Over</button>
+      <button id="backBtn" title="Undo the last Step (snapshot restore)" disabled data-i18n="stepBack">Back</button>
       <button id="runBtn" title="Run until halt or Stop (F5)" disabled data-i18n="run">Run</button>
       <button id="stopBtn" title="Stop running" disabled data-i18n="stop">Stop</button>
-    </div>
-    <div class="hgroup">
       <button id="resetBtn" title="Reset CPU" data-i18n="reset">Reset</button>
-      <button id="saveBtn" title="Download a snapshot of the current CPU state" data-i18n="saveState">Save State</button>
-      <button id="loadBtn" title="Restore CPU state from a saved snapshot file" data-i18n="loadState">Load State</button>
-      <button id="shareBtn" title="Copy a shareable link with the current source encoded in the URL" data-i18n="share">Share Link</button>
+    </div>
+    <span class="hsep"></span>
+    <div class="hgroup">
+      <button id="saveBtn" title="Download a snapshot of the current CPU state" data-i18n="saveState">Save</button>
+      <button id="loadBtn" title="Restore CPU state from a saved snapshot file" data-i18n="loadState">Load</button>
+      <button id="shareBtn" title="Copy a shareable link with the current source encoded in the URL" data-i18n="share">Share</button>
+      <button id="aboutBtn" title="About this emulator: supported CPUs, usage, shortcuts">About</button>
     </div>
     <span id="intrBar85" style="display:none">
-      <span style="color:var(--muted);font-size:11px">IRQ:</span>
+      <span class="hsep"></span>
       <button id="irqTrap" title="Non-maskable, works with DI">TRAP</button>
       <button id="irq75" title="RST 7.5 (edge-latched)">7.5</button>
       <button id="irq65" title="RST 6.5">6.5</button>
@@ -64,7 +62,7 @@
       <span class="led" id="sodLed" title="SOD output pin (set by SIM bit 7)">SOD:0</span>
     </span>
     <span id="intrBar51" style="display:none">
-      <span style="color:var(--muted);font-size:11px">IRQ:</span>
+      <span class="hsep"></span>
       <button id="irqInt0" title="INT0 (external interrupt 0, vector 03h)">INT0</button>
       <button id="irqInt1" title="INT1 (external interrupt 1, vector 13h)">INT1</button>
       <label title="Inject a received serial byte (SBUF + RI) — fires the serial ISR when ES is set" style="font-size:11px;color:var(--muted)">RX
@@ -73,12 +71,12 @@
       </label>
     </span>
     <span id="intrBar86" style="display:none">
-      <span style="color:var(--muted);font-size:11px">IRQ:</span>
+      <span class="hsep"></span>
       <button id="irqNmi" title="NMI (non-maskable interrupt, vector 02h)">NMI</button>
       <button id="irqIntr86" title="INTR (maskable via IF, device vector 08h)">INTR</button>
     </span>
     <span id="intrBarZ80" style="display:none">
-      <span style="color:var(--muted);font-size:11px">IRQ:</span>
+      <span class="hsep"></span>
       <button id="irqNmiZ80" title="NMI (non-maskable, jumps to 0066h)">NMI</button>
       <button id="irqIntZ80" title="INT (maskable via IFF1; EI enables, DI disables). IM0/1 -> 0038h, IM2 -> I*100h">INT</button>
       <label title="Interrupt mode (0/1 -> 0038h, 2 -> I*100h + data)" style="font-size:11px;color:var(--muted)">IM

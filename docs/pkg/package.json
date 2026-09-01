@@ -1,8 +1,16 @@
 {
   "name": "multi-cpu-emu",
   "type": "module",
-  "description": "8086 / 8085 / 8051 emulator cores in one Rust crate, compiles to WASM",
+  "collaborators": [
+    "Danish"
+  ],
+  "description": "8086 / 8085 / 8051 / 6502 / Z80 / RISC-V emulator cores in one Rust crate, compiles to WASM",
   "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/danish9661/8086emu"
+  },
   "files": [
     "multi_cpu_emu_bg.wasm",
     "multi_cpu_emu.js",

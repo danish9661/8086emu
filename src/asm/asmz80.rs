@@ -139,6 +139,10 @@ fn encode(mnem: &str, operand: &str, syms: &HashMap<String, u32>, cur: u32, orig
             else { Err("bad RET".into()) }
         }
         "RETI" => Ok(vec![0xED, 0x4D]), "RETN" => Ok(vec![0xED, 0x45]),
+        "IM" => {
+            let n = parse_expr(operand.trim(), syms, cur, origin)? as u8;
+            match n { 0 => Ok(vec![0xED, 0x46]), 1 => Ok(vec![0xED, 0x56]), 2 => Ok(vec![0xED, 0x5E]), _ => Err("IM mode must be 0, 1, or 2".into()) }
+        }
         "OUT" => {
             let inner = operand.split(',').next().unwrap_or("").trim();
             if let Some(n) = inner.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
@@ -159,7 +163,8 @@ fn encode(mnem: &str, operand: &str, syms: &HashMap<String, u32>, cur: u32, orig
         "RLC" | "RRC" | "RL" | "RR" | "SLA" | "SRA" | "SRL" => { let b = bit_op(&m).unwrap(); encode_cb_rot(b, operand, syms) }
         "BIT" | "RES" | "SET" => encode_bits(m.as_str(), operand, syms),
         "LDI" => Ok(vec![0xED, 0xA0]), "LDIR" => Ok(vec![0xED, 0xB0]), "LDD" => Ok(vec![0xED, 0xA8]), "LDDR" => Ok(vec![0xED, 0xB8]),
-        "CPI" => Ok(vec![0xED, 0xA1]), "CPIR" => Ok(vec![0xED, 0xB1]), "NEG" => Ok(vec![0xED, 0x44]), "RLD" => Ok(vec![0xED, 0x67]), "RRD" => Ok(vec![0xED, 0x6F]),
+        "CPI" => Ok(vec![0xED, 0xA1]), "CPIR" => Ok(vec![0xED, 0xB1]), "CPD" => Ok(vec![0xED, 0xA9]), "CPDR" => Ok(vec![0xED, 0xB9]),
+        "NEG" => Ok(vec![0xED, 0x44]), "RLD" => Ok(vec![0xED, 0x67]), "RRD" => Ok(vec![0xED, 0x6F]),
         _ => Err(format!("unsupported Z80 mnemonic '{mnem}'")),
     }
 }
@@ -233,11 +238,14 @@ fn encode_add16(operand: &str, m: &str) -> Result<Vec<u8>, String> {
     let (a, b) = split2(operand);
     let a = a.trim(); let b = b.trim();
     let g = alu_g(m).unwrap();
-    if g != 0 && g != 1 { return Err(format!("{m} not 16-bit here")); }
     let pre = if a.eq_ignore_ascii_case("IX") { Some(0xDD) } else if a.eq_ignore_ascii_case("IY") { Some(0xFD) } else { None };
     let p = if b.eq_ignore_ascii_case("BC") { 0 } else if b.eq_ignore_ascii_case("DE") { 1 } else if b.eq_ignore_ascii_case("HL") || b.eq_ignore_ascii_case("IX") || b.eq_ignore_ascii_case("IY") { 2 } else if b.eq_ignore_ascii_case("SP") { 3 } else { return Err("bad 16-bit add".into()) };
-    let op = 0x09 | (p << 4);
-    match pre { Some(px) => Ok(vec![px, op]), None => Ok(vec![op]) }
+    match g {
+        0 => { let op = 0x09 | (p << 4); match pre { Some(px) => Ok(vec![px, op]), None => Ok(vec![op]) } }
+        1 => { if pre.is_some() { return Err("ADC HL,IX/IY not supported".into()); } Ok(vec![0xED, 0x4A | (p << 4)]) }
+        3 => { if pre.is_some() { return Err("SBC HL,IX/IY not supported".into()); } Ok(vec![0xED, 0x42 | (p << 4)]) }
+        _ => Err(format!("{m} not supported with 16-bit operands")),
+    }
 }
 
 // __Z80ASM_APPEND__

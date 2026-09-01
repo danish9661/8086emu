@@ -809,7 +809,8 @@ function fmt(v, w = 4) { return v.toString(16).toUpperCase().padStart(w, '0'); }
    const fresh = emu.out();
    if (fresh) accumOut += fresh;
 
-   renderTab(currentTab, regs, flags, pc);
+    renderTab(currentTab, regs, flags, pc);
+    highlightGutterPC(pc);
  }
 
  // Render only the panels belonging to the active tab. This is the core perf
@@ -1371,17 +1372,29 @@ function renderHl() {
   }).join('\n');
   hl.innerHTML = out;
 }
-function buildGutter() {
+let _gutterPC = 0;
+function buildGutter(pc) {
+  if (pc !== undefined) _gutterPC = pc;
   const lines = editor.value.split('\n');
   let html = '';
   for (let i = 0; i < lines.length; i++) {
     const c = codeMap[i] || '';
     const addr = c ? parseInt(c, 16) : 0;
     const bp = addr && bpHas(addr) ? (bpCond(addr) ? ' cbp' : ' bp') : '';
-    html += `<div class="${i + 1 === errLine ? 'err' : ''}${bp}" ${addr ? `data-addr="${addr.toString(16)}"` : ''}><span class="n" ${addr ? `data-addr="${addr.toString(16)}"` : ''} title="${addr ? (bpHas(addr) ? 'Breakpoint (Shift-click: edit condition)' : 'Toggle breakpoint (Shift-click: condition)') : ''}">${i + 1}</span>` +
+    const pcCur = addr && addr === _gutterPC ? ' cpc' : '';
+    html += `<div class="${i + 1 === errLine ? 'err' : ''}${bp}${pcCur}" ${addr ? `data-addr="${addr.toString(16)}"` : ''}><span class="n" ${addr ? `data-addr="${addr.toString(16)}"` : ''} title="${addr ? (bpHas(addr) ? 'Breakpoint (Shift-click: edit condition)' : 'Toggle breakpoint (Shift-click: condition)') : ''}">${i + 1}</span>` +
             (c ? `<span class="c">${c}</span>` : '') + '</div>';
   }
   gutter.innerHTML = html;
+}
+function highlightGutterPC(pc) {
+  if (pc === _gutterPC) return;
+  _gutterPC = pc;
+  gutter.querySelectorAll('.cpc').forEach(el => el.classList.remove('cpc'));
+  gutter.querySelectorAll('[data-addr]').forEach(el => {
+    const a = parseInt(el.dataset.addr, 16);
+    if (a === pc) el.classList.add('cpc');
+  });
 }
 gutter.addEventListener('click', (e) => {
   const el = e.target.closest('[data-addr]');
@@ -1722,10 +1735,18 @@ $('devResetBtn').onclick = () => { resetDevices(); renderDevices(emu, isa); toas
 $('clearOutBtn').onclick = () => { accumOut = ''; outputBox.textContent = ''; };
 
 // ---------- snapshot Save / Load ----------
+function buildSnapshotHeader() {
+  const bpObj = {};
+  breakpoints.forEach((cond, addr) => { bpObj[addr.toString(16)] = cond; });
+  return JSON.stringify({ v: 1, bp: bpObj, w: watches });
+}
 $('saveBtn').onclick = () => {
   if (!emu) return;
-  const bytes = emu.snapshot();
-  const blob = new Blob([bytes], { type: 'application/octet-stream' });
+  const cpuBytes = emu.snapshot();
+  const header = new TextEncoder().encode(buildSnapshotHeader());
+  const hdrLen = new Uint8Array(4);
+  new DataView(hdrLen.buffer).setUint32(0, header.length, true);
+  const blob = new Blob([hdrLen, header, cpuBytes], { type: 'application/octet-stream' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `emu-${isa}-state.bin`;
@@ -1743,7 +1764,25 @@ $('loadBtn').onclick = () => {
       const file = e.target.files[0];
       if (!file) return;
       file.arrayBuffer().then((buf) => {
-        emu.restore(new Uint8Array(buf));
+        const view = new DataView(buf);
+        let cpuBytes;
+        if (buf.byteLength > 4) {
+          const hdrLen = view.getUint32(0, true);
+          if (hdrLen > 0 && hdrLen < buf.byteLength - 4 && hdrLen < 65536) {
+            try {
+              const json = new TextDecoder().decode(buf.slice(4, 4 + hdrLen));
+              const hdr = JSON.parse(json);
+              cpuBytes = new Uint8Array(buf, 4 + hdrLen);
+              if (hdr.bp) {
+                breakpoints.clear();
+                for (const [k, v] of Object.entries(hdr.bp)) bpAdd(parseInt(k, 16), v);
+              }
+              if (hdr.w && Array.isArray(hdr.w)) { watches = hdr.w; saveWatches(); }
+              renderSource();
+            } catch { cpuBytes = new Uint8Array(buf); }
+          } else { cpuBytes = new Uint8Array(buf); }
+        } else { cpuBytes = new Uint8Array(buf); }
+        emu.restore(cpuBytes);
         history = [];
         refresh();
         toast('State loaded');
