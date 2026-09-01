@@ -58,10 +58,17 @@ jobs:
         run: wasm-pack build --target web --out-dir pkg --release --features wasm
 
       - name: Set package version
+        id: pkgversion
         working-directory: pkg
         run: |
           npm pkg set name=8086emu
-          npm version ${{ inputs.version }} --no-git-tag-version
+          VER="${{ inputs.version }}"
+          # pad x.y → x.y.z for npm (which requires full semver)
+          if ! echo "$VER" | grep -qE '\.[0-9]+(-|$)'; then
+            VER="${VER}.0"
+          fi
+          npm version "$VER" --no-git-tag-version
+          echo "npm_version=$VER" >> "$GITHUB_OUTPUT"
 
       # ----- publish to npmjs.com as `8086emu` -----
       - uses: actions/setup-node@v4
