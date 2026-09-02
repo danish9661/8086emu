@@ -5,6 +5,12 @@
 
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg};
 use crate::i8155::I8155;
+use crate::ppi8255::Ppi8255;
+use crate::flash::ExternalFlash;
+use crate::rtc::Rtc;
+use crate::adc::Adc0808;
+use crate::lcd::Lcd1602;
+use crate::dma::Dma8237;
 
 const MEM_SIZE: usize = 64 * 1024;
 /// Default external SRAM chip size (8 KiB, like an Intel 6264).
@@ -95,6 +101,17 @@ pub struct Cpu8085 {
     pub sram: Mem,
     pub sram_base: u32,
     pub sram_len: u32,
+    /// 8255 PPI (0xE0..0xE3)
+    pub ppi: Ppi8255,
+    /// External Flash/EEPROM (8 KiB at 0xA000 for 8085)
+    pub flash: ExternalFlash,
+    /// RTC (0x70/0x71) + I2C shim 0x30/0x31
+    pub rtc: Rtc,
+    /// ADC0808 (0x28/0x29) + LCD1602 (0x38/0x39)
+    pub adc: Adc0808,
+    pub lcd: Lcd1602,
+    /// 8237 DMA (0xD0..0xDF)
+    pub dma: Dma8237,
     /// Total host clock cycles (T-states) executed — drives the 8155 timer.
     pub cycles: u64,
     /// Opcode of the most recently decoded instruction (for cycle accounting).
@@ -126,6 +143,12 @@ impl Cpu8085 {
             sram: Mem::new(SRAM_SIZE),
             sram_base: 0x9000,
             sram_len: SRAM_SIZE as u32,
+            ppi: Ppi8255::new(),
+            flash: { let mut f = ExternalFlash::new(); f.configure(0xA000, 0x2000); f },
+            rtc: Rtc::new(),
+            adc: Adc0808::new(),
+            lcd: Lcd1602::new(),
+            dma: Dma8237::new(),
             cycles: 0,
             last_op: 0,
         };
@@ -190,6 +213,8 @@ impl Cpu8085 {
     fn rd(&self, a: usize) -> u8 {
         if (0x8000..=0x80FF).contains(&a) {
             self.i8155.ram_read(a - 0x8000)
+        } else if self.flash.in_range(a as u32) {
+            self.flash.read(a as u32)
         } else if (a as u32) >= self.sram_base && (a as u32) < self.sram_base + self.sram_len {
             self.sram.read(a - self.sram_base as usize)
         } else {
@@ -202,6 +227,8 @@ impl Cpu8085 {
     fn wr(&mut self, a: usize, v: u8) {
         if (0x8000..=0x80FF).contains(&a) {
             self.i8155.ram_write(a - 0x8000, v);
+        } else if self.flash.in_range(a as u32) {
+            self.flash.write(a as u32, v);
         } else if (a as u32) >= self.sram_base && (a as u32) < self.sram_base + self.sram_len {
             self.sram.write(a - self.sram_base as usize, v);
         } else {
@@ -502,7 +529,17 @@ impl Cpu8085 {
                 let port = self.fetch8() as usize;
                 if (0x80..=0x85).contains(&port) {
                     self.i8155.write_reg(port - 0x80, self.a);
-                } else {
+                } else if (0xE0..=0xE3).contains(&port) {
+                    match port { 0xE0=>self.ppi.write_pa(self.a), 0xE1=>self.ppi.write_pb(self.a), 0xE2=>self.ppi.write_pc(self.a), 0xE3=>self.ppi.write_ctrl(self.a), _=>{} }
+                } else if port==0xE9 { self.flash.command(self.a); }
+                else if port==0x70 { self.rtc.write_sel(self.a); }
+                else if port==0x71 { self.rtc.write_data(self.a); }
+                else if port==0x30 { self.rtc.i2c_write(self.a); }
+                else if port==0x28 { self.adc.write_ctrl(self.a); }
+                else if port==0x38 { self.lcd.write_cmd(self.a); }
+                else if port==0x39 { self.lcd.write_data(self.a); }
+                else if (0xD0..=0xDF).contains(&port) { self.dma.write((port-0xD0) as u8, self.a); }
+                else {
                     self.ports[port] = self.a;
                     if port == 0x01 {
                         self.out.put_char(self.a as char);
@@ -513,7 +550,18 @@ impl Cpu8085 {
                 let port = self.fetch8() as usize;
                 self.a = if (0x80..=0x85).contains(&port) {
                     self.i8155.read_reg(port - 0x80)
-                } else {
+                } else if (0xE0..=0xE3).contains(&port) {
+                    match port { 0xE0=>self.ppi.read_pa(), 0xE1=>self.ppi.read_pb(), 0xE2=>self.ppi.read_pc(), 0xE3=>self.ppi.read_ctrl(), _=>0 }
+                } else if port==0xE8 { self.flash.status() }
+                else if port==0x70 { self.rtc.read_sel() }
+                else if port==0x71 { self.rtc.read_data() }
+                else if port==0x31 { self.rtc.i2c_read() }
+                else if port==0x28 { self.adc.read_status() }
+                else if port==0x29 { self.adc.read_data() }
+                else if port==0x38 { self.lcd.read_status() }
+                else if port==0x39 { self.lcd.read_data() }
+                else if (0xD0..=0xDF).contains(&port) { self.dma.read((port-0xD0) as u8) }
+                else {
                     self.ports[port]
                 };
             }
@@ -604,6 +652,9 @@ impl Cpu for Cpu8085 {
             let ts = i8085_tstates(self.last_op);
             self.cycles += ts as u64;
             self.i8155.advance(ts as u64); // I8155::advance self-gates when idle
+            self.adc.tick();
+            self.lcd.tick();
+            self.flash.tick();
             if self.has_interrupt() {
                 self.service_interrupts();
             }
@@ -659,8 +710,8 @@ impl Cpu for Cpu8085 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(16 + MEM_SIZE + 256 + 267 + 8 + SRAM_SIZE + 16);
-        v.push(4);
+        let mut v = Vec::with_capacity(16 + MEM_SIZE + 256 + 267 + 8 + SRAM_SIZE + 200_000);
+        v.push(5); // v5 adds ppi/flash/rtc/adc/lcd/dma
         v.extend_from_slice(&[self.a, self.b, self.c, self.d, self.e, self.h, self.l]);
         v.extend_from_slice(&self.sp.to_le_bytes());
         v.extend_from_slice(&self.pc.to_le_bytes());
@@ -689,6 +740,12 @@ impl Cpu for Cpu8085 {
         let (rb, rl) = self.mem.rom_range();
         v.extend_from_slice(&(rb as u32).to_le_bytes());
         v.extend_from_slice(&(rl as u32).to_le_bytes());
+        v.extend_from_slice(&self.ppi.snapshot());
+        v.extend_from_slice(&self.flash.snapshot());
+        v.extend_from_slice(&self.rtc.snapshot());
+        v.extend_from_slice(&self.adc.snapshot());
+        v.extend_from_slice(&self.lcd.snapshot());
+        v.extend_from_slice(&self.dma.snapshot());
         v
     }
 
@@ -742,6 +799,22 @@ impl Cpu for Cpu8085 {
                 let rb = u32::from_le_bytes([data[n - 8], data[n - 7], data[n - 6], data[n - 5]]);
                 let rl = u32::from_le_bytes([data[n - 4], data[n - 3], data[n - 2], data[n - 1]]);
                 self.mem.set_rom(rb as usize, rl as usize);
+            }
+            if ver >= 5 {
+                // new peripherals appended after v4 data; parse sequentially from end of v4
+                // v4 size is variable due to flash etc, but we appended after, so start = n (end of v4)
+                // Actually data for v5 is after the v4 tail; we can parse from n
+                let mut off = n;
+                if data.len() >= off + 11 { self.ppi.restore(&data[off..off+11]); off+=11; }
+                if data.len() >= off + 12 {
+                    let flen = u32::from_le_bytes([data[off+8],data[off+9],data[off+10],data[off+11]]) as usize;
+                    let ftot = 12+flen+3;
+                    if data.len() >= off+ftot { self.flash.restore(&data[off..off+ftot]); off+=ftot; }
+                }
+                if data.len() >= off+65 { self.rtc.restore(&data[off..off+65]); off+=65; }
+                if data.len() >= off+13 { self.adc.restore(&data[off..off+13]); off+=13; }
+                if data.len() >= off+86 { self.lcd.restore(&data[off..off+86]); off+=86; }
+                if off < data.len() { self.dma.restore(&data[off..]); }
             }
         }
     }

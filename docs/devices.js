@@ -52,7 +52,7 @@ function setPopped(s) { try { localStorage.setItem(POP_KEY, JSON.stringify([...s
 function getPos() { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}'); } catch { return {}; } }
 function setPos(p) { try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch {} }
 function deviceTitle(id) {
-  return ({ traffic:'Traffic light', seven:'7-segment', stepper:'Stepper', printer:'Printer', robot:'Robot grid', led:'LED matrix', timing:'Clock / timers' })[id] || id;
+  return ({ traffic:'Traffic light', seven:'7-segment', stepper:'Stepper', printer:'Printer', robot:'Robot grid', led:'LED matrix', timing:'Clock / timers', ppi:'8255 PPI', flash:'Flash/EEPROM', rtc:'RTC DS1307', adc:'ADC0808', lcd:'LCD 1602', dma:'8237 DMA' })[id] || id;
 }
 function ensureFloater(id) {
   if (floaters[id]) return floaters[id];
@@ -208,6 +208,61 @@ export function renderDevices(emu, isa) {
   }
   timing += `</div>`;
 
+  // 8255 PPI (0xE0..0xE3 Mode 0)
+  const ppiA = rd(0xE0), ppiB = rd(0xE1), ppiC = rd(0xE2), ppiCtrl = rd(0xE3);
+  const ppiHtml = `<div class="mono">PA=${ppiA.toString(16).padStart(2,'0')} PB=${ppiB.toString(16).padStart(2,'0')} PC=${ppiC.toString(16).padStart(2,'0')} ctrl=${ppiCtrl.toString(16).padStart(2,'0')}</div>`+
+                  `<div class="mono">Mode 0: OUT PA/PB/PC per ctrl D4/D1/D3/D0</div>`;
+  const ppiDev = `<div class="dev" id="dev-ppi"><h3>8255 PPI <span class="p">E0h-E3h</span><button class="dev-pop" data-dev="ppi" title="Pop out">↗</button></h3>${ppiHtml}</div>`;
+
+  // External Flash/EEPROM (64 KiB @ E0000h / A000h)
+  let flashHtml = '';
+  try {
+    const fr = emu.flash_region ? emu.flash_region() : null;
+    if (fr) flashHtml = `<div class="mono">Flash @ ${fr[0].toString(16).toUpperCase()}h len ${fr[1].toString(16).toUpperCase()}h</div>`;
+    else flashHtml = `<div class="mono">Flash 32K @ E0000h (8086) / 8K @ A000h (8085) — erased FFh</div>`;
+  } catch { flashHtml = `<div class="mono">Flash status ${rd(0xE8).toString(16)} (E8h WIP/WEL, E9h cmd 06/04/20/60)</div>`; }
+  flashHtml += `<div class="mono">Status E8h=${rd(0xE8).toString(16).padStart(2,'0')} (b0 WIP b1 WEL)</div>`;
+  const flashDev = `<div class="dev" id="dev-flash"><h3>Flash/EEPROM <span class="p">E8h-E9h</span><button class="dev-pop" data-dev="flash" title="Pop out">↗</button></h3>${flashHtml}</div>`;
+
+  // RTC/CMOS (0x70/0x71 BCD, I2C shim 30/31)
+  const rtcSel = rd(0x70);
+  const rtcRegs = [];
+  try {
+    for(let r=0;r<7;r++){ let v; try{ v=emu.rtc_reg?emu.rtc_reg(r): rd(0x71); }catch{ v=0;} rtcRegs.push(v.toString(16).padStart(2,'0')); }
+  } catch { rtcRegs.push('..'); }
+  const rtcHtml = `<div class="mono">CMOS sel 70h=${rtcSel.toString(16).padStart(2,'0')} data 71h=${rd(0x71).toString(16).padStart(2,'0')}</div>`+
+                  `<div class="mono">RTC BCD 00-06h: ${rtcRegs.join(' ')} (sec min hr wday date mon year)</div>`+
+                  `<div class="mono">I2C shim 30h SDA/SCL 31h data</div>`;
+  const rtcDev = `<div class="dev" id="dev-rtc"><h3>RTC DS1307 <span class="p">70h/71h</span><button class="dev-pop" data-dev="rtc" title="Pop out">↗</button></h3>${rtcHtml}</div>`;
+
+  // ADC0808 (0x28/0x29) 8 channels
+  const adcStat = rd(0x28), adcData = rd(0x29);
+  let adcCh = '';
+  try{
+    const vals=[]; for(let i=0;i<8;i++){ let v; try{ v=emu.adc_get?emu.adc_get(i):0; }catch{ v=0;} vals.push(`CH${i}:${v.toString(16).padStart(2,'0')}`); }
+    adcCh = vals.join(' ');
+  }catch{ adcCh='CH0..7'; }
+  const adcHtml = `<div class="mono">Status 28h=${adcStat.toString(16).padStart(2,'0')} (b7 EOC b6 OE) Data 29h=${adcData.toString(16).padStart(2,'0')}</div>`+
+                  `<div class="mono">${adcCh}</div>`+
+                  `<div class="mono">OUT 28h ch|(0x80 START) selects CH0-7</div>`;
+  const adcDev = `<div class="dev" id="dev-adc"><h3>ADC0808 <span class="p">28h/29h</span><button class="dev-pop" data-dev="adc" title="Pop out">↗</button></h3>${adcHtml}</div>`;
+
+  // HD44780 LCD 16x2 (0x38/0x39)
+  let lcdLines = ['',''];
+  try{ const t=emu.lcd_text?emu.lcd_text():null; if(t){ lcdLines=t; } }catch{}
+  const lcdStat = rd(0x38);
+  const lcdHtml = `<div class="mono">Status 38h=${lcdStat.toString(16).padStart(2,'0')} (b7 busy + addr)</div>`+
+                  `<pre class="printer" style="background:#002200;color:#8f8;">${(lcdLines[0]||'                ').replace(/</g,'&lt;')}\n${(lcdLines[1]||'                ').replace(/</g,'&lt;')}</pre>`+
+                  `<div class="mono">OUT 38h cmd (01 clear 80 addr) / 39h data</div>`;
+  const lcdDev = `<div class="dev" id="dev-lcd"><h3>LCD 1602 <span class="p">38h/39h</span><button class="dev-pop" data-dev="lcd" title="Pop out">↗</button></h3>${lcdHtml}</div>`;
+
+  // 8237 DMA (D0h-DFh)
+  const dmaStat = rd(0xD0+8);
+  const dmaHtml = `<div class="mono">Status D8h=${dmaStat.toString(16).padStart(2,'0')} (TC3..0 + REQ)</div>`+
+                  `<div class="mono">CH0  D0h-03h CH1 D4h-07h CH2 D8h-0Bh CH3 DCh-0Fh</div>`+
+                  `<div class="mono">Req D0h 0Dh  Mask 0Eh Mode 0Fh</div>`;
+  const dmaDev = `<div class="dev" id="dev-dma"><h3>8237 DMA <span class="p">D0h-DFh</span><button class="dev-pop" data-dev="dma" title="Pop out">↗</button></h3>${dmaHtml}</div>`;
+
   panel.innerHTML =
     `<div class="dev" id="dev-traffic"><h3>Traffic light <span class="p">10h</span><button class="dev-pop" data-dev="traffic" title="Pop out">↗</button></h3>${traffic}</div>` +
     `<div class="dev" id="dev-seven"><h3>7-segment <span class="p">11h/12h</span><button class="dev-pop" data-dev="seven" title="Pop out">↗</button></h3>${seven}</div>` +
@@ -215,6 +270,7 @@ export function renderDevices(emu, isa) {
     `<div class="dev" id="dev-printer"><h3>Printer <span class="p">14h</span><button class="dev-pop" data-dev="printer" title="Pop out">↗</button></h3>${printer}</div>` +
     `<div class="dev" id="dev-robot"><h3>Robot grid <span class="p">16h/17h</span><button class="dev-pop" data-dev="robot" title="Pop out">↗</button></h3>${robot}</div>` +
     `<div class="dev" id="dev-led"><h3>LED matrix <span class="p">20h-27h</span><button class="dev-pop" data-dev="led" title="Pop out">↗</button></h3>${led}</div>` +
+    ppiDev + flashDev + rtcDev + adcDev + lcdDev + dmaDev +
     timing;
 
   // Keep popped-out floaters live and hide the in-panel copy while popped.
@@ -236,26 +292,36 @@ export function renderMemMap(emu, isa) {
    const sram = emu.sram_region();
    const ext = emu.ext_code_region();
    let rows;
-   if (isa === '8086') {
-     rows = [
-       '00000–9FFFF  RAM (640 KiB)',
-       'A0000–BFFFF  VGA / video',
-       'C0000–EFFFF  ROM / expansion',
-     ];
-     rows.push(rom
-       ? `${fmt(rom[0])}–${fmt(rom[0] + rom[1] - 1)}  ROM (BIOS) — LOADED`
-       : 'F0000–FFFFF  ROM (BIOS) — load via “Load ROM”');
-     rows.push('0000–FFFF    I/O ports (OUT/IN)');
-   } else if (isa === '8085') {
-     rows = [
-       '0000–7FFF   main RAM',
-       '8000–80FF   8155 external RAM',
-       '8000–80FF   8155 I/O (ports 80–85)',
-     ];
-     rows.push(sram
-       ? `${fmt(sram[0])}–${fmt(sram[0] + sram[1] - 1)}  external SRAM — LOADED`
-       : '9000–9FFF   external SRAM (8 KiB)');
-     rows.push('00–FF       I/O ports (OUT/IN)');
+    if (isa === '8086') {
+      rows = [
+        '00000–9FFFF  RAM (640 KiB)',
+        'A0000–BFFFF  VGA / video',
+        'C0000–EFFFF  ROM / expansion',
+      ];
+      rows.push(rom
+        ? `${fmt(rom[0])}–${fmt(rom[0] + rom[1] - 1)}  ROM (BIOS) — LOADED`
+        : 'F0000–FFFFF  ROM (BIOS) — load via “Load ROM”');
+      try {
+        const fr = emu.flash_region ? emu.flash_region() : null;
+        if (fr) rows.push(`${fmt(fr[0])}–${fmt(fr[0]+fr[1]-1)}  Flash/EEPROM — LOADED`);
+        else rows.push('E0000–EFFFF  Flash/EEPROM 64 KiB (E8h/E9h)');
+      } catch { rows.push('E0000–EFFFF  Flash/EEPROM 64 KiB'); }
+      rows.push('0000–FFFF    I/O ports: E0 PPI, 28 ADC, 38 LCD, 70 RTC, D0 DMA');
+    } else if (isa === '8085') {
+      rows = [
+        '0000–7FFF   main RAM',
+        '8000–80FF   8155 external RAM',
+        '8000–80FF   8155 I/O (ports 80–85)',
+      ];
+      rows.push(sram
+        ? `${fmt(sram[0])}–${fmt(sram[0] + sram[1] - 1)}  external SRAM — LOADED`
+        : '9000–9FFF   external SRAM (8 KiB)');
+      try {
+        const fr = emu.flash_region ? emu.flash_region() : null;
+        if (fr) rows.push(`${fmt(fr[0])}–${fmt(fr[0]+fr[1]-1)}  Flash 8-32 KiB`);
+        else rows.push('A000–BFFF   Flash/EEPROM 8 KiB (A000h)');
+      } catch {}
+      rows.push('00–FF       I/O ports: E0 PPI, 28 ADC, 38 LCD, 70 RTC, D0 DMA');
    } else {
      rows = [];
      rows.push(emu.ea_active()

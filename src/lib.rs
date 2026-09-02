@@ -16,6 +16,12 @@ pub mod rv32;
 pub mod pit;
 pub mod pic8259;
 pub mod i8155;
+pub mod ppi8255;
+pub mod flash;
+pub mod rtc;
+pub mod adc;
+pub mod lcd;
+pub mod dma;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -207,11 +213,45 @@ impl Emulator {
     }
 
     /// Read an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins
-    /// merged with the latch, quasi-bidirectional).
+    /// merged with the latch, quasi-bidirectional). For 8086/8085 this also
+    /// reflects PPI/Flash/RTC/ADC/LCD/DMA registers.
     pub fn port_read(&self, port: u8) -> u8 {
         match self {
-            Self::I8085(c) => c.ports[port as usize],
-            Self::I8086(c) => c.ports[port as usize],
+            Self::I8085(c) => {
+                match port {
+                    0xE0 => c.ppi.read_pa(),
+                    0xE1 => c.ppi.read_pb(),
+                    0xE2 => c.ppi.read_pc(),
+                    0xE3 => c.ppi.read_ctrl(),
+                    0xE8 => c.flash.status(),
+                    0x70 => c.rtc.read_sel(),
+                    0x71 => c.rtc.read_data(),
+                    0x31 => c.rtc.i2c_read(),
+                    0x28 => c.adc.read_status(),
+                    0x29 => c.adc.read_data(),
+                    0x38 => c.lcd.read_status(),
+                    p if (0xD0..=0xDF).contains(&p) => c.dma.read(p - 0xD0),
+                    _ if (0x80..=0x85).contains(&port) => c.i8155.read_reg(port as usize - 0x80),
+                    _ => c.ports[port as usize],
+                }
+            }
+            Self::I8086(c) => {
+                match port {
+                    0xE0 => c.ppi.read_pa(),
+                    0xE1 => c.ppi.read_pb(),
+                    0xE2 => c.ppi.read_pc(),
+                    0xE3 => c.ppi.read_ctrl(),
+                    0xE8 => c.flash.status(),
+                    0x70 => c.rtc.read_sel(),
+                    0x71 => c.rtc.read_data(),
+                    0x31 => c.rtc.i2c_read(),
+                    0x28 => c.adc.read_status(),
+                    0x29 => c.adc.read_data(),
+                    0x38 => c.lcd.read_status(),
+                    p if (0xD0..=0xDF).contains(&p) => c.dma.read(p - 0xD0),
+                    _ => c.ports[port as usize],
+                }
+            }
             Self::Mcs51(c) => c.port_read(port),
             Self::Rv32(_) => 0,
             Self::M6502(_) => 0,
@@ -220,11 +260,45 @@ impl Emulator {
     }
 
     /// Write an I/O port byte (8085/8086: port space; 8051: P0-P3 external
-    /// pin state that port reads observe). No print side effects here.
+    /// pin state that port reads observe). For 8086/8085 this also drives
+    /// PPI/Flash/RTC/ADC/LCD/DMA registers.
     pub fn port_write(&mut self, port: u8, v: u8) {
         match self {
-            Self::I8085(c) => c.ports[port as usize] = v,
-            Self::I8086(c) => c.ports[port as usize] = v,
+            Self::I8085(c) => {
+                match port {
+                    0xE0 => c.ppi.write_pa(v),
+                    0xE1 => c.ppi.write_pb(v),
+                    0xE2 => c.ppi.write_pc(v),
+                    0xE3 => c.ppi.write_ctrl(v),
+                    0xE9 => c.flash.command(v),
+                    0x70 => c.rtc.write_sel(v),
+                    0x71 => c.rtc.write_data(v),
+                    0x30 => c.rtc.i2c_write(v),
+                    0x28 => c.adc.write_ctrl(v),
+                    0x38 => c.lcd.write_cmd(v),
+                    0x39 => c.lcd.write_data(v),
+                    p if (0xD0..=0xDF).contains(&p) => c.dma.write(p - 0xD0, v),
+                    p if (0x80..=0x85).contains(&p) => c.i8155.write_reg(p as usize - 0x80, v),
+                    _ => { c.ports[port as usize] = v; if port==0x01 { c.out.put_char(v as char); } }
+                }
+            }
+            Self::I8086(c) => {
+                match port {
+                    0xE0 => c.ppi.write_pa(v),
+                    0xE1 => c.ppi.write_pb(v),
+                    0xE2 => c.ppi.write_pc(v),
+                    0xE3 => c.ppi.write_ctrl(v),
+                    0xE9 => c.flash.command(v),
+                    0x70 => c.rtc.write_sel(v),
+                    0x71 => c.rtc.write_data(v),
+                    0x30 => c.rtc.i2c_write(v),
+                    0x28 => c.adc.write_ctrl(v),
+                    0x38 => c.lcd.write_cmd(v),
+                    0x39 => c.lcd.write_data(v),
+                    p if (0xD0..=0xDF).contains(&p) => c.dma.write(p - 0xD0, v),
+                    _ => { c.ports[port as usize] = v; if port==0x01 { c.out.put_char(v as char); } }
+                }
+            }
             Self::Mcs51(c) => c.port_write(port, v),
             Self::Rv32(_) => {}
             Self::M6502(_) => {}
@@ -277,6 +351,29 @@ impl Emulator {
         if let Emulator::I8085(c) = self { c.set_sram(base, len); }
     }
 
+    /// Configure external Flash/EEPROM window (8086 default 64 KiB @ 0xE0000, 8085 8 KiB @ 0xA000).
+    pub fn set_flash(&mut self, base: u32, len: u32) {
+        match self {
+            Emulator::I8086(c) => c.flash.configure(base, len),
+            Emulator::I8085(c) => c.flash.configure(base, len),
+            _ => {}
+        }
+    }
+    pub fn load_flash(&mut self, data: &[u8], addr: u32) {
+        match self {
+            Emulator::I8086(c) => c.flash.load(data, addr),
+            Emulator::I8085(c) => c.flash.load(data, addr),
+            _ => {}
+        }
+    }
+    pub fn flash_region(&self) -> Option<(u32,u32)> {
+        match self {
+            Emulator::I8086(c) => c.flash.region(),
+            Emulator::I8085(c) => c.flash.region(),
+            _ => None,
+        }
+    }
+
     /// Current reload/count of an 8086 PIT channel (0..2), for the IDE timer
     /// view. Returns 0 for other ISAs.
     pub fn pit_count(&self, n: usize) -> u16 {
@@ -284,6 +381,38 @@ impl Emulator {
             Self::I8086(c) => c.pit_count(n),
             _ => 0,
         }
+    }
+
+    /// 8255 PPI direct access (ports 0xE0..0xE3). Returns PA/PB/PC/ctrl.
+    pub fn ppi_state(&self) -> Option<[u8;4]> {
+        match self {
+            Emulator::I8086(c) => Some([c.ppi.read_pa(), c.ppi.read_pb(), c.ppi.read_pc(), c.ppi.read_ctrl()]),
+            Emulator::I8085(c) => Some([c.ppi.read_pa(), c.ppi.read_pb(), c.ppi.read_pc(), c.ppi.read_ctrl()]),
+            _ => None,
+        }
+    }
+
+    /// ADC0808 channel voltage (0..255). 8086/8085 only.
+    pub fn adc_set(&mut self, ch: usize, val: u8) {
+        match self { Emulator::I8086(c)=>c.adc.set_channel(ch,val), Emulator::I8085(c)=>c.adc.set_channel(ch,val), _=>{} }
+    }
+    pub fn adc_get(&self, ch: usize) -> u8 {
+        match self { Emulator::I8086(c)=>c.adc.get_channel(ch), Emulator::I8085(c)=>c.adc.get_channel(ch), _=>0 }
+    }
+
+    /// HD44780 LCD text (two lines). 8086/8085 only.
+    pub fn lcd_text(&self) -> Option<[String;2]> {
+        match self { Emulator::I8086(c)=>Some(c.lcd.lines()), Emulator::I8085(c)=>Some(c.lcd.lines()), _=>None }
+    }
+
+    /// RTC registers via CMOS ports 0x70/0x71 (DS1307-compatible BCD).
+    pub fn rtc_read(&self, reg: u8) -> u8 {
+        match self { Emulator::I8086(c)=>{ let mut r=c.rtc.clone(); r.write_sel(reg); r.read_data()}, Emulator::I8085(c)=>{ let mut r=c.rtc.clone(); r.write_sel(reg); r.read_data()}, _=>0 }
+    }
+
+    /// 8237 DMA status register (channels TC in low nibble).
+    pub fn dma_status(&self) -> u8 {
+        match self { Emulator::I8086(c)=>c.dma.read(0x08), Emulator::I8085(c)=>c.dma.read(0x08), _=>0 }
     }
 
     /// Preload a file into the 8086 DOS virtual filesystem (name matched

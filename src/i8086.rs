@@ -9,6 +9,12 @@ use std::collections::{HashMap, VecDeque};
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg, RunResult};
 use crate::pic8259::Pic8259;
 use crate::pit::Pit8253;
+use crate::ppi8255::Ppi8255;
+use crate::flash::ExternalFlash;
+use crate::rtc::Rtc;
+use crate::adc::Adc0808;
+use crate::lcd::Lcd1602;
+use crate::dma::Dma8237;
 
 /// Nominal per-instruction host-cycle cost. The 8086's real cycle counts vary
 /// with EA and prefixes; these values give correct *relative* timing so the
@@ -140,6 +146,17 @@ pub struct Cpu8086 {
     pit: Pit8253,
     // 8259 PIC: routes IRQ lines (incl. PIT channel 0) to the INTR pin
     pic: Pic8259,
+    // 8255 PPI (lab kit: ports PA/PB/PC via 0xE0..0xE3)
+    pub ppi: Ppi8255,
+    // External Flash/EEPROM (64 KiB at 0xE0000 for 8086)
+    pub flash: ExternalFlash,
+    // RTC/CMOS (ports 0x70/0x71) + I2C shim 0x30/0x31
+    pub rtc: Rtc,
+    // ADC0808 (0x28/0x29) and HD44780 LCD (0x38/0x39)
+    pub adc: Adc0808,
+    pub lcd: Lcd1602,
+    // 8237 DMA (ports 0x00..0x0F)
+    pub dma: Dma8237,
     // total host clock cycles executed (drives the PIT; nominal per-instruction cost)
     cycles: u64,
 }
@@ -219,6 +236,12 @@ impl Cpu8086 {
             gfx: false,
             pit: Pit8253::new(),
             pic: Pic8259::new(),
+            ppi: Ppi8255::new(),
+            flash: { let mut f = ExternalFlash::new(); f.configure(0xE0000, 0x10000); f },
+            rtc: Rtc::new(),
+            adc: Adc0808::new(),
+            lcd: Lcd1602::new(),
+            dma: Dma8237::new(),
             cycles: 0,
             cs_base: 0, ds_base: 0, es_base: 0, ss_base: 0, fs_base: 0, gs_base: 0,
             dec_cache: None,
@@ -281,13 +304,17 @@ impl Cpu8086 {
     // ----- instruction fetch -----
     #[inline]
     fn fetch8(&mut self) -> u8 {
-        let b = self.mem.read((self.cs_base + self.ip as u32) as usize);
+        let p = (self.cs_base + self.ip as u32) as u32;
+        let b = if self.flash.in_range(p) { self.flash.read(p) } else { self.mem.read(p as usize) };
         self.ip = self.ip.wrapping_add(1);
         b
     }
     #[inline]
     fn fetch16(&mut self) -> u16 {
-        let v = self.mem.read16(self.phys(self.cs, self.ip));
+        let p = self.phys(self.cs, self.ip) as u32;
+        let v = if self.flash.in_range(p) || self.flash.in_range(p+1) {
+            self.flash.read(p) as u16 | ((self.flash.read(p+1) as u16)<<8)
+        } else { self.mem.read16(p as usize) };
         self.ip = self.ip.wrapping_add(2);
         v
     }
@@ -341,10 +368,27 @@ impl Cpu8086 {
         (seg, off)
     }
 
-    fn read_ea8(&mut self, seg: u16, off: u16) -> u8 { self.mem.read(self.phys(seg, off)) }
-    fn read_ea16(&mut self, seg: u16, off: u16) -> u16 { self.mem.read16(self.phys(seg, off)) }
-    fn write_ea8(&mut self, seg: u16, off: u16, v: u8) { self.mem.write(self.phys(seg, off), v) }
-    fn write_ea16(&mut self, seg: u16, off: u16, v: u16) { self.mem.write16(self.phys(seg, off), v) }
+    fn read_ea8(&mut self, seg: u16, off: u16) -> u8 {
+        let p = self.phys(seg, off) as u32;
+        if self.flash.in_range(p) { self.flash.read(p) } else { self.mem.read(p as usize) }
+    }
+    fn read_ea16(&mut self, seg: u16, off: u16) -> u16 {
+        let p = self.phys(seg, off) as u32;
+        if self.flash.in_range(p) || self.flash.in_range(p+1) {
+            self.flash.read(p) as u16 | ((self.flash.read(p+1) as u16) << 8)
+        } else { self.mem.read16(p as usize) }
+    }
+    fn write_ea8(&mut self, seg: u16, off: u16, v: u8) {
+        let p = self.phys(seg, off) as u32;
+        if self.flash.in_range(p) { self.flash.write(p, v); } else { self.mem.write(p as usize, v) }
+    }
+    fn write_ea16(&mut self, seg: u16, off: u16, v: u16) {
+        let p = self.phys(seg, off) as u32;
+        if self.flash.in_range(p) {
+            self.flash.write(p, v as u8);
+            self.flash.write(p+1, (v>>8) as u8);
+        } else { self.mem.write16(p as usize, v) }
+    }
 
     // register-or-memory operand helpers (mod==3 => register)
     fn rm8(&mut self, m: u8, rm: u8, seg: u16, off: u16) -> u8 {
@@ -569,8 +613,10 @@ impl Cpu8086 {
 
     fn key_read(&mut self) -> Option<u8> { self.keybuf.pop_front() }
 
-    fn port_in16(&self, p: usize) -> u16 {
-        self.ports[p] as u16 | (self.ports[(p + 1) & 0xFF] as u16) << 8
+    fn port_in16(&mut self, p: usize) -> u16 {
+        let lo = self.port_in8(p) as u16;
+        let hi = self.port_in8((p + 1) & 0xFF) as u16;
+        lo | hi << 8
     }
     fn port_out8(&mut self, p: usize, v: u8) {
         match p {
@@ -580,6 +626,19 @@ impl Cpu8086 {
             0x41 => self.pit.write_data(1, v),
             0x42 => self.pit.write_data(2, v),
             0x43 => self.pit.write_cmd(v),
+            0xE0 => self.ppi.write_pa(v),
+            0xE1 => self.ppi.write_pb(v),
+            0xE2 => self.ppi.write_pc(v),
+            0xE3 => self.ppi.write_ctrl(v),
+            0xE8 => {} // flash status is RO
+            0xE9 => self.flash.command(v),
+            0x70 => self.rtc.write_sel(v),
+            0x71 => self.rtc.write_data(v),
+            0x30 => self.rtc.i2c_write(v),
+            0x28 => self.adc.write_ctrl(v),
+            0x38 => self.lcd.write_cmd(v),
+            0x39 => self.lcd.write_data(v),
+            p if (0xD0..=0xDF).contains(&p) => self.dma.write((p - 0xD0) as u8, v),
             _ => {
                 self.ports[p] = v;
                 if p == 0x01 {
@@ -595,13 +654,27 @@ impl Cpu8086 {
             _ => self.ports[(p + 1) & 0xFF] = (v >> 8) as u8,
         }
     }
-    fn port_in8(&self, p: usize) -> u8 {
+    fn port_in8(&mut self, p: usize) -> u8 {
         match p {
             0x20 => self.pic.read_cmd(),
             0x21 => self.pic.read_data(),
             0x40 => self.pit.read_data(0),
             0x41 => self.pit.read_data(1),
             0x42 => self.pit.read_data(2),
+            0xE0 => self.ppi.read_pa(),
+            0xE1 => self.ppi.read_pb(),
+            0xE2 => self.ppi.read_pc(),
+            0xE3 => self.ppi.read_ctrl(),
+            0xE8 => self.flash.status(),
+            0xE9 => 0,
+            0x70 => self.rtc.read_sel(),
+            0x71 => self.rtc.read_data(),
+            0x31 => self.rtc.i2c_read(),
+            0x28 => self.adc.read_status(),
+            0x29 => self.adc.read_data(),
+            0x38 => self.lcd.read_status(),
+            0x39 => self.lcd.read_data(),
+            p if (0xD0..=0xDF).contains(&p) => self.dma.read((p - 0xD0) as u8),
             _ => self.ports[p],
         }
     }
@@ -1110,6 +1183,7 @@ impl Cpu8086 {
     }
     pub fn set_clock(&mut self, year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8) {
         self.dos.clock = DosClock { year, month, day, hour, min, sec };
+        self.rtc.set_time(year, month, day, hour, min, sec);
     }
     #[inline] fn al(&self) -> u8 { self.ax as u8 }
     #[inline] fn set_al(&mut self, v: u8) { self.ax = (self.ax & 0xFF00) | v as u16; }
@@ -1489,10 +1563,10 @@ impl Cpu8086 {
                     _ => { if cx == 0 { self.ip = self.ip.wrapping_add_signed(d); } }
                 }
             }
-            0xE4 => { let p = self.fetch8() as usize; self.set_al(self.port_in8(p)); } // IN AL,imm8
-            0xE5 => { let p = self.fetch8() as usize; self.ax = self.port_in16(p); }
-            0xE6 => { let p = self.fetch8() as usize; self.port_out8(p, self.al()); } // OUT imm8,AL
-            0xE7 => { let p = self.fetch8() as usize; self.port_out16(p, self.ax); }
+            0xE4 => { let p = self.fetch8() as usize; let v = self.port_in8(p); self.set_al(v); } // IN AL,imm8
+            0xE5 => { let p = self.fetch8() as usize; let v = self.port_in16(p); self.ax = v; }
+            0xE6 => { let p = self.fetch8() as usize; let a = self.al(); self.port_out8(p, a); } // OUT imm8,AL
+            0xE7 => { let p = self.fetch8() as usize; let v = self.ax; self.port_out16(p, v); }
             0xE8 => { // CALL rel16
                 let d = self.fetch16() as i16;
                 self.push16(self.ip);
@@ -1501,10 +1575,10 @@ impl Cpu8086 {
             0xE9 => { let d = self.fetch16() as i16; self.ip = self.ip.wrapping_add_signed(d); }
             0xEA => { let off = self.fetch16(); let seg = self.fetch16(); self.cs = seg; self.ip = off; }
             0xEB => { let d = self.fetch8() as i8 as i16; self.ip = self.ip.wrapping_add_signed(d); }
-            0xEC => { let p = self.dx as usize & 0xFF; self.set_al(self.port_in8(p)); } // IN AL,DX
-            0xED => { let p = self.dx as usize & 0xFF; self.ax = self.port_in16(p); }
-            0xEE => { let p = self.dx as usize & 0xFF; self.port_out8(p, self.al()); } // OUT DX,AL
-            0xEF => { let p = self.dx as usize & 0xFF; self.port_out16(p, self.ax); }
+            0xEC => { let p = self.dx as usize & 0xFF; let v = self.port_in8(p); self.set_al(v); } // IN AL,DX
+            0xED => { let p = self.dx as usize & 0xFF; let v = self.port_in16(p); self.ax = v; }
+            0xEE => { let p = self.dx as usize & 0xFF; let a = self.al(); self.port_out8(p, a); } // OUT DX,AL
+            0xEF => { let p = self.dx as usize & 0xFF; let v = self.ax; self.port_out16(p, v); }
             0xF0 => {} // LOCK
             0xF4 => { self.halted = true; }
             0xF5 => { self.flags ^= CF; }
@@ -2389,6 +2463,9 @@ impl Cpu for Cpu8086 {
                     self.pic.request(0); // 8253 channel 0 terminal count -> IRQ0
                 }
             }
+            self.adc.tick();
+            self.lcd.tick();
+            self.flash.tick();
             // Only service hardware interrupts when one can actually fire:
             // NMI, a latched external INTR, or a PIC IRQ with IF set.
             let can_intr = self.pending_nmi
@@ -2465,12 +2542,17 @@ impl Cpu for Cpu8086 {
     }
 
     fn mem_read(&self, addr: u32, len: usize) -> Vec<u8> {
-        (0..len).map(|i| self.mem.read(addr as usize + i)).collect()
+        (0..len).map(|i| {
+            let a = addr + i as u32;
+            if self.flash.in_range(a) { self.flash.read(a) } else { self.mem.read(a as usize) }
+        }).collect()
     }
 
     fn mem_write(&mut self, addr: u32, data: &[u8]) {
         for (i, b) in data.iter().enumerate() {
-            self.mem.poke(addr as usize + i, *b);
+            let a = addr + i as u32;
+            if self.flash.in_range(a) { self.flash.write(a, *b); }
+            else { self.mem.poke(a as usize, *b); }
         }
     }
 
@@ -2479,8 +2561,8 @@ impl Cpu for Cpu8086 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53 + 16);
-        v.push(9); // version
+        let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53 + 200_000);
+        v.push(10); // version 10 adds ppi/flash/rtc/adc/lcd/dma
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.fs, self.gs, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -2506,6 +2588,13 @@ impl Cpu for Cpu8086 {
         v.extend_from_slice(&(rb as u32).to_le_bytes());
         v.extend_from_slice(&(rl as u32).to_le_bytes());
         v.extend_from_slice(&self.pic.snapshot());
+        // v10 peripherals
+        v.extend_from_slice(&self.ppi.snapshot());
+        v.extend_from_slice(&self.flash.snapshot());
+        v.extend_from_slice(&self.rtc.snapshot());
+        v.extend_from_slice(&self.adc.snapshot());
+        v.extend_from_slice(&self.lcd.snapshot());
+        v.extend_from_slice(&self.dma.snapshot());
         v
     }
 
@@ -2549,7 +2638,11 @@ impl Cpu for Cpu8086 {
                 self.intr_vector = body.get(start + 2).copied().unwrap_or(0);
             }
             if ver >= 5 {
-                let tail = if ver >= 9 {
+                let tail = if ver >= 10 {
+                    // sequential start of fpu area (avoids flash variable-size tail calc)
+                    let k = if body.len() > MEM_SIZE+1 { (body[MEM_SIZE] as usize) | ((body[MEM_SIZE+1] as usize)<<8) } else { 0 };
+                    35 + MEM_SIZE + 2 + k + 256 + 3
+                } else if ver >= 9 {
                     data.len() - 139 // 67 fpu + 3 cursor/mode + 45 pit + 8 cycles + 8 rom + 8 pic
                 } else if ver >= 8 {
                     data.len() - 131 // 67 fpu + 3 cursor/mode + 45 pit + 8 cycles + 8 rom
@@ -2589,6 +2682,23 @@ impl Cpu for Cpu8086 {
                 }
                 if ver >= 9 {
                     self.pic.restore(&data[tail + 131..tail + 131 + 8]);
+                }
+                if ver >= 10 {
+                    let mut off = tail + 139;
+                    if data.len() >= off + 11 {
+                        self.ppi.restore(&data[off..off+11]); off+=11;
+                    }
+                    if data.len() >= off + 12 {
+                        let flen = u32::from_le_bytes([data[off+8],data[off+9],data[off+10],data[off+11]]) as usize;
+                        let ftot = 12 + flen + 3;
+                        if data.len() >= off + ftot {
+                            self.flash.restore(&data[off..off+ftot]); off+=ftot;
+                        }
+                    }
+                    if data.len() >= off + 65 { self.rtc.restore(&data[off..off+65]); off+=65; }
+                    if data.len() >= off + 13 { self.adc.restore(&data[off..off+13]); off+=13; }
+                    if data.len() >= off + 86 { self.lcd.restore(&data[off..off+86]); off+=86; }
+                    if off < data.len() { self.dma.restore(&data[off..]); }
                 }
             }
         }

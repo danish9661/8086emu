@@ -4,6 +4,11 @@
 export class Emulator {
     free(): void;
     [Symbol.dispose](): void;
+    adc_get(ch: number): number;
+    /**
+     * ADC0808: set channel voltage (0..255) or read it.
+     */
+    adc_set(ch: number, val: number): void;
     /**
      * Assemble source for the current ISA; returns machine code bytes.
      */
@@ -28,6 +33,10 @@ export class Emulator {
      */
     disasm(addr: number, count: number): string[];
     /**
+     * 8237 DMA status register.
+     */
+    dma_status(): number;
+    /**
      * 8051 EA pin state (true = internal code, false = external via XDATA).
      */
     ea_active(): boolean;
@@ -39,6 +48,10 @@ export class Emulator {
      * Active flag names as short strings (e.g. "ZF", "CY").
      */
     flags(): string[];
+    /**
+     * External Flash/EEPROM window (base, len) if configured.
+     */
+    flash_region(): Uint32Array | undefined;
     /**
      * Read a file back from the 8086 DOS virtual filesystem (empty if absent).
      */
@@ -61,9 +74,14 @@ export class Emulator {
      */
     interrupt(kind: string, data: number): void;
     /**
+     * HD44780 LCD text (two 16-char lines) if present.
+     */
+    lcd_text(): string[] | undefined;
+    /**
      * Load raw machine code at `origin` and set PC there.
      */
     load(code: Uint8Array, origin: number): void;
+    load_flash(data: Uint8Array, addr: number): void;
     /**
      * Load a ROM image and mark its range read-only. 8051 routes to external
      * code (XDATA) when EA is low.
@@ -103,6 +121,10 @@ export class Emulator {
      */
     port_write(port: number, val: number): void;
     /**
+     * 8255 PPI state [PA, PB, PC, ctrl] if present.
+     */
+    ppi(): Uint8Array | undefined;
+    /**
      * Queue a type-ahead character for INT 21h/keyboard reads (8086).
      */
     push_key(ch: number): void;
@@ -122,6 +144,10 @@ export class Emulator {
      * Write-protected ROM region (base, len) if configured, else null.
      */
     rom_region(): Uint32Array | undefined;
+    /**
+     * RTC register read via CMOS ports 0x70/0x71.
+     */
+    rtc_reg(reg: number): number;
     /**
      * Run up to `max_steps` instructions; returns steps executed.
      */
@@ -152,6 +178,7 @@ export class Emulator {
      * 8051 EA pin: false => fetch code from external program memory (XDATA).
      */
     set_ea(ea: boolean): void;
+    set_flash(base: number, len: number): void;
     /**
      * Set the Z80 interrupt mode (0/1 -> 0x0038, 2 -> I*0x100 + data).
      */
@@ -236,20 +263,26 @@ export interface InitOutput {
     readonly __wbg_set_gfxinfo_base: (a: number, b: number) => void;
     readonly __wbg_set_gfxinfo_h: (a: number, b: number) => void;
     readonly __wbg_set_gfxinfo_w: (a: number, b: number) => void;
+    readonly emulator_adc_get: (a: number, b: number) => number;
+    readonly emulator_adc_set: (a: number, b: number, c: number) => void;
     readonly emulator_assemble: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_cursor: (a: number) => [number, number];
     readonly emulator_cycles: (a: number) => bigint;
     readonly emulator_disasm: (a: number, b: number, c: number) => [number, number];
+    readonly emulator_dma_status: (a: number) => number;
     readonly emulator_ea_active: (a: number) => number;
     readonly emulator_ext_code_region: (a: number) => [number, number];
     readonly emulator_flags: (a: number) => [number, number];
+    readonly emulator_flash_region: (a: number) => [number, number];
     readonly emulator_fs_get: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_fs_put: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly emulator_gfx: (a: number) => number;
     readonly emulator_halted: (a: number) => number;
     readonly emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly emulator_lcd_text: (a: number) => [number, number];
     readonly emulator_load: (a: number, b: number, c: number, d: number) => void;
+    readonly emulator_load_flash: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_load_rom: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_mem: (a: number, b: number, c: number) => [number, number];
     readonly emulator_mem_write: (a: number, b: number, c: number, d: number) => void;
@@ -259,11 +292,13 @@ export interface InitOutput {
     readonly emulator_pit_count: (a: number, b: number) => number;
     readonly emulator_port_read: (a: number, b: number) => number;
     readonly emulator_port_write: (a: number, b: number, c: number) => void;
+    readonly emulator_ppi: (a: number) => [number, number];
     readonly emulator_push_key: (a: number, b: number) => void;
     readonly emulator_regs: (a: number) => [number, number];
     readonly emulator_reset: (a: number) => void;
     readonly emulator_restore: (a: number, b: number, c: number) => void;
     readonly emulator_rom_region: (a: number) => [number, number];
+    readonly emulator_rtc_reg: (a: number, b: number) => number;
     readonly emulator_run: (a: number, b: number) => number;
     readonly emulator_run_bp: (a: number, b: number, c: number, d: number) => number;
     readonly emulator_run_to: (a: number, b: number, c: number) => number;
@@ -271,6 +306,7 @@ export interface InitOutput {
     readonly emulator_serial_rx: (a: number, b: number) => [number, number];
     readonly emulator_set_clock: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly emulator_set_ea: (a: number, b: number) => void;
+    readonly emulator_set_flash: (a: number, b: number, c: number) => void;
     readonly emulator_set_interrupt_mode: (a: number, b: number) => [number, number];
     readonly emulator_set_pc: (a: number, b: number) => void;
     readonly emulator_set_reg: (a: number, b: number, c: number, d: number) => void;

@@ -5,7 +5,7 @@
     "Danish"
   ],
   "description": "8086 / 8085 / 8051 / 6502 / Z80 / RISC-V emulator cores in one Rust crate, compiles to WASM",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "license": "MIT",
   "repository": {
     "type": "git",

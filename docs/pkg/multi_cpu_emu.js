@@ -12,6 +12,22 @@ export class Emulator {
         wasm.__wbg_emulator_free(ptr, 0);
     }
     /**
+     * @param {number} ch
+     * @returns {number}
+     */
+    adc_get(ch) {
+        const ret = wasm.emulator_adc_get(this.__wbg_ptr, ch);
+        return ret;
+    }
+    /**
+     * ADC0808: set channel voltage (0..255) or read it.
+     * @param {number} ch
+     * @param {number} val
+     */
+    adc_set(ch, val) {
+        wasm.emulator_adc_set(this.__wbg_ptr, ch, val);
+    }
+    /**
      * Assemble source for the current ISA; returns machine code bytes.
      * @param {string} source
      * @returns {Uint8Array}
@@ -77,6 +93,14 @@ export class Emulator {
         return v1;
     }
     /**
+     * 8237 DMA status register.
+     * @returns {number}
+     */
+    dma_status() {
+        const ret = wasm.emulator_dma_status(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * 8051 EA pin state (true = internal code, false = external via XDATA).
      * @returns {boolean}
      */
@@ -105,6 +129,19 @@ export class Emulator {
         const ret = wasm.emulator_flags(this.__wbg_ptr);
         var v1 = getArrayJsValueFromWasm0(ret[0], ret[1]);
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * External Flash/EEPROM window (base, len) if configured.
+     * @returns {Uint32Array | undefined}
+     */
+    flash_region() {
+        const ret = wasm.emulator_flash_region(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        }
         return v1;
     }
     /**
@@ -172,6 +209,19 @@ export class Emulator {
         }
     }
     /**
+     * HD44780 LCD text (two 16-char lines) if present.
+     * @returns {string[] | undefined}
+     */
+    lcd_text() {
+        const ret = wasm.emulator_lcd_text(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayJsValueFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        }
+        return v1;
+    }
+    /**
      * Load raw machine code at `origin` and set PC there.
      * @param {Uint8Array} code
      * @param {number} origin
@@ -180,6 +230,15 @@ export class Emulator {
         const ptr0 = passArray8ToWasm0(code, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.emulator_load(this.__wbg_ptr, ptr0, len0, origin);
+    }
+    /**
+     * @param {Uint8Array} data
+     * @param {number} addr
+     */
+    load_flash(data, addr) {
+        const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.emulator_load_flash(this.__wbg_ptr, ptr0, len0, addr);
     }
     /**
      * Load a ROM image and mark its range read-only. 8051 routes to external
@@ -281,6 +340,19 @@ export class Emulator {
         wasm.emulator_port_write(this.__wbg_ptr, port, val);
     }
     /**
+     * 8255 PPI state [PA, PB, PC, ctrl] if present.
+     * @returns {Uint8Array | undefined}
+     */
+    ppi() {
+        const ret = wasm.emulator_ppi(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
      * Queue a type-ahead character for INT 21h/keyboard reads (8086).
      * @param {number} ch
      */
@@ -324,6 +396,15 @@ export class Emulator {
             wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
         }
         return v1;
+    }
+    /**
+     * RTC register read via CMOS ports 0x70/0x71.
+     * @param {number} reg
+     * @returns {number}
+     */
+    rtc_reg(reg) {
+        const ret = wasm.emulator_rtc_reg(this.__wbg_ptr, reg);
+        return ret;
     }
     /**
      * Run up to `max_steps` instructions; returns steps executed.
@@ -399,6 +480,13 @@ export class Emulator {
      */
     set_ea(ea) {
         wasm.emulator_set_ea(this.__wbg_ptr, ea);
+    }
+    /**
+     * @param {number} base
+     * @param {number} len
+     */
+    set_flash(base, len) {
+        wasm.emulator_set_flash(this.__wbg_ptr, base, len);
     }
     /**
      * Set the Z80 interrupt mode (0/1 -> 0x0038, 2 -> I*0x100 + data).

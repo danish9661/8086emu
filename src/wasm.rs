@@ -310,4 +310,33 @@ impl Emulator {
     pub fn set_clock(&mut self, year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8) -> Result<(), JsValue> {
         to_js(self.inner.set_clock(year, month, day, hour, min, sec))
     }
+
+    // ----- external memory / controllers -----
+
+    /// External Flash/EEPROM window (base, len) if configured.
+    pub fn flash_region(&self) -> Option<Vec<u32>> {
+        self.inner.flash_region().map(|(b,l)| vec![b,l])
+    }
+    pub fn set_flash(&mut self, base: u32, len: u32) { self.inner.set_flash(base, len); }
+    pub fn load_flash(&mut self, data: &[u8], addr: u32) { self.inner.load_flash(data, addr); }
+
+    /// 8255 PPI state [PA, PB, PC, ctrl] if present.
+    pub fn ppi(&self) -> Option<Vec<u8>> {
+        self.inner.ppi_state().map(|a| a.to_vec())
+    }
+
+    /// ADC0808: set channel voltage (0..255) or read it.
+    pub fn adc_set(&mut self, ch: u8, val: u8) { self.inner.adc_set(ch as usize, val); }
+    pub fn adc_get(&self, ch: u8) -> u8 { self.inner.adc_get(ch as usize) }
+
+    /// HD44780 LCD text (two 16-char lines) if present.
+    pub fn lcd_text(&self) -> Option<Vec<String>> {
+        self.inner.lcd_text().map(|a| a.to_vec())
+    }
+
+    /// RTC register read via CMOS ports 0x70/0x71.
+    pub fn rtc_reg(&self, reg: u8) -> u8 { self.inner.rtc_read(reg) }
+
+    /// 8237 DMA status register.
+    pub fn dma_status(&self) -> u8 { self.inner.dma_status() }
 }
