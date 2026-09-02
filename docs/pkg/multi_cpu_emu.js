@@ -195,6 +195,22 @@ export class Emulator {
         return ret !== 0;
     }
     /**
+     * @param {number} addr
+     * @returns {number}
+     */
+    i2c_read(addr) {
+        const ret = wasm.emulator_i2c_read(this.__wbg_ptr, addr);
+        return ret;
+    }
+    /**
+     * 8051 I2C EEPROM
+     * @param {number} addr
+     * @param {number} data
+     */
+    i2c_write(addr, data) {
+        wasm.emulator_i2c_write(this.__wbg_ptr, addr, data);
+    }
+    /**
      * Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
      * "INTR" (data = vector); 8051 = "INT0" | "INT1". Throws on unknown kind.
      * @param {string} kind
@@ -207,6 +223,25 @@ export class Emulator {
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
+    }
+    /**
+     * 8279 display RAM (8 bytes) + push key.
+     * @returns {Uint8Array | undefined}
+     */
+    kb_disp() {
+        const ret = wasm.emulator_kb_disp(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @param {number} k
+     */
+    kb_push(k) {
+        wasm.emulator_kb_push(this.__wbg_ptr, k);
     }
     /**
      * HD44780 LCD text (two 16-char lines) if present.
@@ -575,6 +610,21 @@ export class Emulator {
         return ret;
     }
     /**
+     * @param {number} addr
+     * @returns {number}
+     */
+    spi_read(addr) {
+        const ret = wasm.emulator_spi_read(this.__wbg_ptr, addr);
+        return ret;
+    }
+    /**
+     * @param {number} addr
+     * @param {number} data
+     */
+    spi_write(addr, data) {
+        wasm.emulator_spi_write(this.__wbg_ptr, addr, data);
+    }
+    /**
      * External SRAM window (base, len) if configured (8055), else null.
      * @returns {Uint32Array | undefined}
      */
@@ -592,6 +642,20 @@ export class Emulator {
      */
     step() {
         wasm.emulator_step(this.__wbg_ptr);
+    }
+    /**
+     * @param {number} v
+     */
+    usart_rx(v) {
+        wasm.emulator_usart_rx(this.__wbg_ptr, v);
+    }
+    /**
+     * 8251 USART status / Rx push.
+     * @returns {number}
+     */
+    usart_status() {
+        const ret = wasm.emulator_usart_status(this.__wbg_ptr);
+        return ret;
     }
     /**
      * Current 8086 video mode (0 when not 8086 / unknown). MR=13h -> pixel graphics.

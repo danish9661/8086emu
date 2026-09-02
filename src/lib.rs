@@ -22,6 +22,10 @@ pub mod rtc;
 pub mod adc;
 pub mod lcd;
 pub mod dma;
+pub mod i2c;
+pub mod spi;
+pub mod usart;
+pub mod kbdisplay;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -413,6 +417,39 @@ impl Emulator {
     /// 8237 DMA status register (channels TC in low nibble).
     pub fn dma_status(&self) -> u8 {
         match self { Emulator::I8086(c)=>c.dma.read(0x08), Emulator::I8085(c)=>c.dma.read(0x08), _=>0 }
+    }
+
+    /// 8251 USART status.
+    pub fn usart_status(&self) -> u8 {
+        match self { Emulator::I8086(c)=>c.usart.read_status(), Emulator::I8085(c)=>c.usart.read_status(), _=>0 }
+    }
+    pub fn usart_push_rx(&mut self, v: u8) {
+        match self { Emulator::I8086(c)=>c.usart.push_rx(v), Emulator::I8085(c)=>c.usart.push_rx(v), _=>{} }
+    }
+    /// 8279 keyboard/display: push a keycode (0..0xFF).
+    pub fn kb_push(&mut self, k: u8) {
+        match self { Emulator::I8086(c)=>c.kbdisplay.push_key(k), Emulator::I8085(c)=>c.kbdisplay.push_key(k), _=>{} }
+    }
+    pub fn kb_disp(&self) -> Option<[u8;8]> {
+        match self { Emulator::I8086(c)=>Some(c.kbdisplay.disp), Emulator::I8085(c)=>Some(c.kbdisplay.disp), _=>None }
+    }
+
+    /// 8051 I2C EEPROM (24C02) at XDATA 0xFF60/0xFF61 (ports 0x60/0x61).
+    pub fn i2c_write(&mut self, addr: u8, data: u8) {
+        if let Emulator::Mcs51(c)=self { c.i2c.write_addr(addr); c.i2c.write_data(data); }
+    }
+    pub fn i2c_read(&mut self, addr: u8) -> u8 {
+        if let Emulator::Mcs51(c)=self { c.i2c.write_addr(addr); c.i2c.read_data() } else { 0xFF }
+    }
+    pub fn i2c_dump(&self) -> Option<Vec<u8>> {
+        if let Emulator::Mcs51(c)=self { Some(c.i2c.dump()) } else { None }
+    }
+    /// 8051 SPI Flash (W25Q) at XDATA 0xFF62/0xFF63 (ports 0x62/0x63).
+    pub fn spi_write(&mut self, addr: u8, data: u8) {
+        if let Emulator::Mcs51(c)=self { c.spi.write_addr(addr); c.spi.write_data(data); }
+    }
+    pub fn spi_read(&mut self, addr: u8) -> u8 {
+        if let Emulator::Mcs51(c)=self { c.spi.write_addr(addr); c.spi.read_data() } else { 0xFF }
     }
 
     /// Preload a file into the 8086 DOS virtual filesystem (name matched

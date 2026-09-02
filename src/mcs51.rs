@@ -5,6 +5,8 @@
 //! calibration). Writing SBUF emits a character to the Output buffer.
 
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg};
+use crate::i2c::I2cEeprom;
+use crate::spi::SpiFlash;
 
 const CODE_SIZE: usize = 64 * 1024;
 const XDATA_SIZE: usize = 256 * 1024; // banked external RAM (0x00000..0x3FFFF)
@@ -68,6 +70,10 @@ pub struct Cpu8051 {
     cur_len: u8,
     /// Opcode of the most recently decoded instruction (for cycle accounting).
     last_op: u8,
+    /// I2C EEPROM (24C02) at ports 60h/61h (XDATA FF60h/FF61h) + P1.0/1 bit-bang
+    pub i2c: I2cEeprom,
+    /// SPI Flash (W25Q) at ports 62h/63h (XDATA FF62h/FF63h) + P1.4/5/7 bit-bang
+    pub spi: SpiFlash,
 }
 
 impl Default for Cpu8051 {
@@ -110,6 +116,8 @@ impl Cpu8051 {
             cycles: 0,
             cur_len: 0,
             last_op: 0,
+            i2c: I2cEeprom::new(),
+            spi: SpiFlash::new(),
         };
         c.reset();
         c
@@ -183,13 +191,21 @@ impl Cpu8051 {
             self.iram[addr as usize] = v;
         } else {
             let idx = addr as usize - 0x80;
-            match idx {
-                S_SBUF => { self.start_tx(v); } // schedule transmit (TI fires after baud delay)
-                S_PCON => { self.sfr[idx] = v; } // IDL/PD/SMOD latched; effects read in step()
-                S_XPAGE => { self.xdata_bank = v; self.sfr[idx] = v; }
-                S_ACC => self.set_acc(v),
-                S_PSW => self.set_psw(v),
-                _ => self.sfr[idx] = v,
+            match addr {
+                0x90 => { // P1 — capture bit-bang for I2C/SPI
+                    let old = self.sfr[idx];
+                    self.sfr[idx] = v;
+                    self.i2c.p1_write(old, v);
+                    self.spi.p1_write(old, v);
+                }
+                _ => match idx {
+                    S_SBUF => { self.start_tx(v); } // schedule transmit (TI fires after baud delay)
+                    S_PCON => { self.sfr[idx] = v; } // IDL/PD/SMOD latched; effects read in step()
+                    S_XPAGE => { self.xdata_bank = v; self.sfr[idx] = v; }
+                    S_ACC => self.set_acc(v),
+                    S_PSW => self.set_psw(v),
+                    _ => self.sfr[idx] = v,
+                }
             }
         }
     }
@@ -198,10 +214,26 @@ impl Cpu8051 {
     /// Inject external pin state for P0-P3 (quasi-bidirectional: a port read
     /// returns `latch | pin`).
     pub fn port_write(&mut self, port: u8, v: u8) {
+        if port == 0x60 { self.i2c.write_addr(v); self.ports[port as usize]=v; return; }
+        if port == 0x61 { self.i2c.write_data(v); self.ports[port as usize]=v; return; }
+        if port == 0x62 { self.spi.write_addr(v); self.ports[port as usize]=v; return; }
+        if port == 0x63 { self.spi.write_data(v); self.ports[port as usize]=v; return; }
+        if port == 0x64 { self.spi.write_cmd(v); self.ports[port as usize]=v; return; }
         self.ports[port as usize] = v;
-        if port < 4 { self.port_pins[port as usize] = v; }
+        if port < 4 {
+            let old = self.port_pins[port as usize];
+            self.port_pins[port as usize] = v;
+            if port==1 { // P1 bit-bang
+                self.i2c.p1_write(old, v);
+                self.spi.p1_write(old, v);
+            }
+        }
     }
     pub fn port_read(&self, port: u8) -> u8 {
+        if port == 0x60 { return self.i2c.read_addr(); }
+        if port == 0x61 { let mut c=self.i2c.clone(); let v=c.read_data(); return v; }
+        if port == 0x62 { return self.spi.read_cmd(); }
+        if port == 0x63 { let mut c=self.spi.clone(); return c.read_data(); }
         if port < 4 { self.read_direct(0x80 + port * 0x10) } else { self.ports[port as usize] }
     }
     /// Inject a received serial byte: writes SBUF and sets RI (receive
@@ -887,8 +919,8 @@ impl Cpu for Cpu8051 {
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 256 + 2 + 8 + 1);
-        v.push(8);
+        let mut v = Vec::with_capacity(9 + 128 + 128 + XDATA_SIZE + CODE_SIZE + 4 + 256 + 2 + 8 + 300000);
+        v.push(9); // v9 adds i2c/spi
         v.push(self.halted as u8);
         v.extend_from_slice(&self.pc.to_le_bytes());
         v.push(self.in_svc_low as u8);
@@ -903,6 +935,8 @@ impl Cpu for Cpu8051 {
         v.extend_from_slice(&self.ports);
         v.push(self.ext_int0_held as u8);
         v.push(self.ext_int1_held as u8);
+        v.extend_from_slice(&self.i2c.snapshot());
+        v.extend_from_slice(&self.spi.snapshot());
         v.extend_from_slice(&self.cycles.to_le_bytes());
         v.push(self.ea as u8);
         v
@@ -945,7 +979,25 @@ impl Cpu for Cpu8051 {
         self.cycles = 0;
         self.ea = true;
         let n = data.len();
-        if data[0] >= 7 {
+        if data[0] >= 9 {
+            // v9 layout: ext_int0, ext_int1, i2c(261), spi(variable), cycles(8), ea(1)
+            // off currently after ports (328207)
+            if off + 2 <= n {
+                self.ext_int0_held = data[off] != 0;
+                self.ext_int1_held = data[off+1] != 0;
+                off += 2;
+                if off + 261 <= n { self.i2c.restore(&data[off..off+261]); off+=261; }
+                if off + 4 <= n {
+                    let spi_len = u32::from_le_bytes([data[off],data[off+1],data[off+2],data[off+3]]) as usize;
+                    let spi_tot = 4 + spi_len + 7;
+                    if off + spi_tot <= n { self.spi.restore(&data[off..off+spi_tot]); off+=spi_tot; }
+                }
+                if off + 9 <= n {
+                    let mut cy=[0u8;8]; cy.copy_from_slice(&data[off..off+8]); self.cycles=u64::from_le_bytes(cy); off+=8;
+                    self.ea = data[off]!=0;
+                }
+            }
+        } else if data[0] >= 7 {
             if data[0] >= 8 && n >= 12 {
                 self.ext_int0_held = data[n - 11] != 0;
                 self.ext_int1_held = data[n - 10] != 0;

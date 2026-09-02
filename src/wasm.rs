@@ -339,4 +339,16 @@ impl Emulator {
 
     /// 8237 DMA status register.
     pub fn dma_status(&self) -> u8 { self.inner.dma_status() }
+
+    /// 8251 USART status / Rx push.
+    pub fn usart_status(&self) -> u8 { self.inner.usart_status() }
+    pub fn usart_rx(&mut self, v: u8) { self.inner.usart_push_rx(v); }
+    /// 8279 display RAM (8 bytes) + push key.
+    pub fn kb_disp(&self) -> Option<Vec<u8>> { self.inner.kb_disp().map(|a| a.to_vec()) }
+    pub fn kb_push(&mut self, k: u8) { self.inner.kb_push(k); }
+    /// 8051 I2C EEPROM
+    pub fn i2c_write(&mut self, addr: u8, data: u8) { self.inner.i2c_write(addr, data); }
+    pub fn i2c_read(&mut self, addr: u8) -> u8 { self.inner.i2c_read(addr) }
+    pub fn spi_write(&mut self, addr: u8, data: u8) { self.inner.spi_write(addr, data); }
+    pub fn spi_read(&mut self, addr: u8) -> u8 { self.inner.spi_read(addr) }
 }

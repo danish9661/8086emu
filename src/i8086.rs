@@ -15,6 +15,8 @@ use crate::rtc::Rtc;
 use crate::adc::Adc0808;
 use crate::lcd::Lcd1602;
 use crate::dma::Dma8237;
+use crate::usart::Usart8251;
+use crate::kbdisplay::KbDisplay;
 
 /// Nominal per-instruction host-cycle cost. The 8086's real cycle counts vary
 /// with EA and prefixes; these values give correct *relative* timing so the
@@ -157,6 +159,9 @@ pub struct Cpu8086 {
     pub lcd: Lcd1602,
     // 8237 DMA (ports 0x00..0x0F)
     pub dma: Dma8237,
+    // 8251 USART (0x50/0x51) and 8279 keyboard/display (0x68/0x69)
+    pub usart: Usart8251,
+    pub kbdisplay: KbDisplay,
     // total host clock cycles executed (drives the PIT; nominal per-instruction cost)
     cycles: u64,
 }
@@ -242,6 +247,8 @@ impl Cpu8086 {
             adc: Adc0808::new(),
             lcd: Lcd1602::new(),
             dma: Dma8237::new(),
+            usart: Usart8251::new(),
+            kbdisplay: KbDisplay::new(),
             cycles: 0,
             cs_base: 0, ds_base: 0, es_base: 0, ss_base: 0, fs_base: 0, gs_base: 0,
             dec_cache: None,
@@ -638,6 +645,10 @@ impl Cpu8086 {
             0x28 => self.adc.write_ctrl(v),
             0x38 => self.lcd.write_cmd(v),
             0x39 => self.lcd.write_data(v),
+            0x50 => { self.usart.write_data(v); self.out.put_char(v as char); }
+            0x51 => self.usart.write_ctrl(v),
+            0x68 => self.kbdisplay.write_cmd(v),
+            0x69 => self.kbdisplay.write_data(v),
             p if (0xD0..=0xDF).contains(&p) => self.dma.write((p - 0xD0) as u8, v),
             _ => {
                 self.ports[p] = v;
@@ -674,6 +685,10 @@ impl Cpu8086 {
             0x29 => self.adc.read_data(),
             0x38 => self.lcd.read_status(),
             0x39 => self.lcd.read_data(),
+            0x50 => self.usart.read_data(),
+            0x51 => self.usart.read_status(),
+            0x68 => self.kbdisplay.read_status(),
+            0x69 => self.kbdisplay.read_data(),
             p if (0xD0..=0xDF).contains(&p) => self.dma.read((p - 0xD0) as u8),
             _ => self.ports[p],
         }
@@ -2562,7 +2577,7 @@ impl Cpu for Cpu8086 {
 
     fn snapshot(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53 + 200_000);
-        v.push(10); // version 10 adds ppi/flash/rtc/adc/lcd/dma
+        v.push(11); // v11 adds usart/kbdisplay
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.fs, self.gs, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -2595,6 +2610,8 @@ impl Cpu for Cpu8086 {
         v.extend_from_slice(&self.adc.snapshot());
         v.extend_from_slice(&self.lcd.snapshot());
         v.extend_from_slice(&self.dma.snapshot());
+        v.extend_from_slice(&self.usart.snapshot());
+        v.extend_from_slice(&self.kbdisplay.snapshot());
         v
     }
 
@@ -2698,7 +2715,51 @@ impl Cpu for Cpu8086 {
                     if data.len() >= off + 65 { self.rtc.restore(&data[off..off+65]); off+=65; }
                     if data.len() >= off + 13 { self.adc.restore(&data[off..off+13]); off+=13; }
                     if data.len() >= off + 86 { self.lcd.restore(&data[off..off+86]); off+=86; }
-                    if off < data.len() { self.dma.restore(&data[off..]); }
+                    if ver >= 11 {
+                        if data.len() >= off + 43 { self.dma.restore(&data[off..off+43]); off+=43; }
+                    } else {
+                        if off < data.len() { self.dma.restore(&data[off..]); }
+                    }
+                }
+                if ver >= 11 {
+                    // Re-parse from tail+139 sequentially to extract usart/kbdisplay correctly
+                    let mut off2 = tail + 139;
+                    // skip ppi
+                    if data.len() >= off2+11 { off2+=11; }
+                    // skip flash
+                    if data.len() >= off2+12 {
+                        let flen = u32::from_le_bytes([data[off2+8],data[off2+9],data[off2+10],data[off2+11]]) as usize;
+                        let ftot = 12+flen+3;
+                        if data.len() >= off2+ftot { off2+=ftot; }
+                    }
+                    if data.len() >= off2+65 { off2+=65; }
+                    if data.len() >= off2+13 { off2+=13; }
+                    if data.len() >= off2+86 { off2+=86; }
+                    // dma is variable; we need to know its size to skip it
+                    // dma snapshot: 3 + 4*10 =43 bytes (cmd,status,req + 4* (2+2+2+2+1+1)=40) =43
+                    // So skip 43
+                    if data.len() >= off2+43 { off2+=43; }
+                    // now usart: variable but at least 3 + tx+rx; we can just restore whatever remains
+                    if off2 < data.len() { self.usart.restore(&data[off2..]); }
+                    // kbdisplay after usart: we can't know split, but restore will handle truncated
+                    // For simplicity, if usart consumed all remaining, kbdisplay will be empty; we try second offset
+                    // Instead, usart and kbdisplay are separate snapshots appended; we need to know usart size.
+                    // Usart snapshot size = 3 +1+tx_len +1+rx_len . That's variable.
+                    // So we can't easily split. Instead, we will assume version 11 snapshots have usart then kbdisplay sequentially and we can parse by trying.
+                    // Simpler: for version 11, snapshot order was ppi,flash,rtc,adc,lcd,dma,usart,kbdisplay — each snapshot method knows its own length field where variable.
+                    // Usart snapshot first byte is status, second cmd, third mode, then tx_len, etc. We can read its tx_len to compute size.
+                    // Let's compute usart size if present:
+                    if data.len() > off2 {
+                        let tx_n = if off2+3 < data.len() { data[off2+3] as usize } else { 0 };
+                        let rx_off = off2+4+tx_n;
+                        let rx_n = if rx_off < data.len() { data[rx_off] as usize } else { 0 };
+                        let usart_sz = 4+tx_n+1+rx_n;
+                        if off2+usart_sz <= data.len() {
+                            self.usart.restore(&data[off2..off2+usart_sz]);
+                            off2+=usart_sz;
+                            if off2 < data.len() { self.kbdisplay.restore(&data[off2..]); }
+                        }
+                    }
                 }
             }
         }

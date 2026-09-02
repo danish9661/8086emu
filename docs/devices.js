@@ -52,7 +52,7 @@ function setPopped(s) { try { localStorage.setItem(POP_KEY, JSON.stringify([...s
 function getPos() { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}'); } catch { return {}; } }
 function setPos(p) { try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch {} }
 function deviceTitle(id) {
-  return ({ traffic:'Traffic light', seven:'7-segment', stepper:'Stepper', printer:'Printer', robot:'Robot grid', led:'LED matrix', timing:'Clock / timers', ppi:'8255 PPI', flash:'Flash/EEPROM', rtc:'RTC DS1307', adc:'ADC0808', lcd:'LCD 1602', dma:'8237 DMA' })[id] || id;
+  return ({ traffic:'Traffic light', seven:'7-segment', stepper:'Stepper', printer:'Printer', robot:'Robot grid', led:'LED matrix', timing:'Clock / timers', ppi:'8255 PPI', flash:'Flash/EEPROM', rtc:'RTC DS1307', adc:'ADC0808', lcd:'LCD 1602', dma:'8237 DMA', usart:'8251 USART', kbd:'8279 Kbd/Disp', i2c:'I2C EEPROM', spi:'SPI Flash' })[id] || id;
 }
 function ensureFloater(id) {
   if (floaters[id]) return floaters[id];
@@ -263,6 +263,33 @@ export function renderDevices(emu, isa) {
                   `<div class="mono">Req D0h 0Dh  Mask 0Eh Mode 0Fh</div>`;
   const dmaDev = `<div class="dev" id="dev-dma"><h3>8237 DMA <span class="p">D0h-DFh</span><button class="dev-pop" data-dev="dma" title="Pop out">↗</button></h3>${dmaHtml}</div>`;
 
+  // 8251 USART (50h/51h) and 8279 keyboard/display (68h/69h) — 8086/8085 kits
+  const usartStat = rd(0x51), usartData = rd(0x50);
+  const usartHtml = `<div class="mono">Status 51h=${usartStat.toString(16).padStart(2,'0')} (b0 TxRDY b1 RxRDY) Data 50h=${usartData.toString(16).padStart(2,'0')}</div>`+
+                    `<div class="mono">OUT 50h Tx / IN 50h Rx, 51h mode/cmd</div>`;
+  const usartDev = (isa==='8086'||isa==='8085') ? `<div class="dev" id="dev-usart"><h3>8251 USART <span class="p">50h/51h</span><button class="dev-pop" data-dev="usart" title="Pop out">↗</button></h3>${usartHtml}</div>` : '';
+
+  const kbdStat = rd(0x68), kbdData = rd(0x69);
+  let disp = [0,0,0,0,0,0,0,0];
+  try{ const d=emu.kb_disp?emu.kb_disp():null; if(d) disp=[...d]; }catch{}
+  const kbdHtml = `<div class="mono">Status 68h=${kbdStat.toString(16).padStart(2,'0')} (b7 IRQ + cnt) Data 69h=${kbdData.toString(16).padStart(2,'0')}</div>`+
+                  `<div class="mono">Disp: ${disp.map(b=>b.toString(16).padStart(2,'0')).join(' ')}</div>`+
+                  `<div class="mono">OUT 68h cmd (00 clear) / 69h disp, IN 69h key</div>`;
+  const kbdDev = (isa==='8086'||isa==='8085') ? `<div class="dev" id="dev-kbd"><h3>8279 Kbd/Disp <span class="p">68h/69h</span><button class="dev-pop" data-dev="kbd" title="Pop out">↗</button></h3>${kbdHtml}</div>` : '';
+
+  // 8051 I2C/SPI (XDATA FF60h-FF63h -> ports 60h-63h, plus P1 bit-bang)
+  let i2cHtml = '', spiHtml = '';
+  if (isa==='8051') {
+    const i2cA = rd(0x60), i2cD = rd(0x61);
+    const spiA = rd(0x62), spiD = rd(0x63);
+    i2cHtml = `<div class="mono">I2C 60h addr=${i2cA.toString(16).padStart(2,'0')} 61h data=${i2cD.toString(16).padStart(2,'0')} (24C02 256B)</div>`+
+              `<div class="mono">P1.0 SDA P1.1 SCL bit-bang, or OUT 60h/61h</div>`;
+    spiHtml = `<div class="mono">SPI 62h addr=${spiA.toString(16).padStart(2,'0')} 63h data=${spiD.toString(16).padStart(2,'0')} (W25Q 64K)</div>`+
+              `<div class="mono">P1.4 SS P1.5 MOSI P1.7 SCK bit-bang, or OUT 62h/63h</div>`;
+  }
+  const i2cDev = isa==='8051' ? `<div class="dev" id="dev-i2c"><h3>I2C EEPROM <span class="p">60h/61h</span><button class="dev-pop" data-dev="i2c" title="Pop out">↗</button></h3>${i2cHtml}</div>` : '';
+  const spiDev = isa==='8051' ? `<div class="dev" id="dev-spi"><h3>SPI Flash <span class="p">62h/63h</span><button class="dev-pop" data-dev="spi" title="Pop out">↗</button></h3>${spiHtml}</div>` : '';
+
   panel.innerHTML =
     `<div class="dev" id="dev-traffic"><h3>Traffic light <span class="p">10h</span><button class="dev-pop" data-dev="traffic" title="Pop out">↗</button></h3>${traffic}</div>` +
     `<div class="dev" id="dev-seven"><h3>7-segment <span class="p">11h/12h</span><button class="dev-pop" data-dev="seven" title="Pop out">↗</button></h3>${seven}</div>` +
@@ -270,7 +297,7 @@ export function renderDevices(emu, isa) {
     `<div class="dev" id="dev-printer"><h3>Printer <span class="p">14h</span><button class="dev-pop" data-dev="printer" title="Pop out">↗</button></h3>${printer}</div>` +
     `<div class="dev" id="dev-robot"><h3>Robot grid <span class="p">16h/17h</span><button class="dev-pop" data-dev="robot" title="Pop out">↗</button></h3>${robot}</div>` +
     `<div class="dev" id="dev-led"><h3>LED matrix <span class="p">20h-27h</span><button class="dev-pop" data-dev="led" title="Pop out">↗</button></h3>${led}</div>` +
-    ppiDev + flashDev + rtcDev + adcDev + lcdDev + dmaDev +
+    ppiDev + flashDev + rtcDev + adcDev + lcdDev + dmaDev + usartDev + kbdDev + i2cDev + spiDev +
     timing;
 
   // Keep popped-out floaters live and hide the in-panel copy while popped.

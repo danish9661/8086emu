@@ -68,11 +68,21 @@ export class Emulator {
      * True once the CPU has executed HLT (or otherwise stopped).
      */
     halted(): boolean;
+    i2c_read(addr: number): number;
+    /**
+     * 8051 I2C EEPROM
+     */
+    i2c_write(addr: number, data: number): void;
     /**
      * Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
      * "INTR" (data = vector); 8051 = "INT0" | "INT1". Throws on unknown kind.
      */
     interrupt(kind: string, data: number): void;
+    /**
+     * 8279 display RAM (8 bytes) + push key.
+     */
+    kb_disp(): Uint8Array | undefined;
+    kb_push(k: number): void;
     /**
      * HD44780 LCD text (two 16-char lines) if present.
      */
@@ -220,6 +230,8 @@ export class Emulator {
      * Read the 8085 SOD (Serial Output Data) pin set by SIM (bit 7). 8085 only.
      */
     sod(): number;
+    spi_read(addr: number): number;
+    spi_write(addr: number, data: number): void;
     /**
      * External SRAM window (base, len) if configured (8055), else null.
      */
@@ -228,6 +240,11 @@ export class Emulator {
      * Execute one instruction.
      */
     step(): void;
+    usart_rx(v: number): void;
+    /**
+     * 8251 USART status / Rx push.
+     */
+    usart_status(): number;
     /**
      * Current 8086 video mode (0 when not 8086 / unknown). MR=13h -> pixel graphics.
      */
@@ -279,7 +296,11 @@ export interface InitOutput {
     readonly emulator_fs_put: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly emulator_gfx: (a: number) => number;
     readonly emulator_halted: (a: number) => number;
+    readonly emulator_i2c_read: (a: number, b: number) => number;
+    readonly emulator_i2c_write: (a: number, b: number, c: number) => void;
     readonly emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly emulator_kb_disp: (a: number) => [number, number];
+    readonly emulator_kb_push: (a: number, b: number) => void;
     readonly emulator_lcd_text: (a: number) => [number, number];
     readonly emulator_load: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_load_flash: (a: number, b: number, c: number, d: number) => void;
@@ -317,8 +338,12 @@ export interface InitOutput {
     readonly emulator_sfr: (a: number, b: number) => number;
     readonly emulator_snapshot: (a: number) => [number, number];
     readonly emulator_sod: (a: number) => number;
+    readonly emulator_spi_read: (a: number, b: number) => number;
+    readonly emulator_spi_write: (a: number, b: number, c: number) => void;
     readonly emulator_sram_region: (a: number) => [number, number];
     readonly emulator_step: (a: number) => void;
+    readonly emulator_usart_rx: (a: number, b: number) => void;
+    readonly emulator_usart_status: (a: number) => number;
     readonly emulator_video_mode: (a: number) => number;
     readonly emulator_waiting_input: (a: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
