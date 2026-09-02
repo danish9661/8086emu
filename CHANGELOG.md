@@ -4,6 +4,19 @@ All notable changes to the `multi-cpu-emu` project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/);
 versions are dated snapshots of `main`.
 
+## [1.0.0] - 2026-09-01
+
+### Added
+- Six CPU cores in one crate: 8086, 8085, 8051, 6502, Z80, RV32I (+M) with per-ISA assemblers and single WASM module.
+- Web IDE (`docs/`) — ISA selector for all 6 ISAs, gutter PC highlight, editor PC line highlight, 4-col register grid, responsive header, docs page (`doc.html`) with sidebar nav and ISA screenshots.
+- Native CLI (`examples/run.rs`) and headless WASM smoke test (`tools/wasm-smoke.mjs`).
+- Published to npm as [`8086emu`](https://www.npmjs.com/package/8086emu) and GitHub Packages as `@danish9661/8086emu`.
+
+### Changed
+- Interactive release workflow (`publish.yml`): `workflow_dispatch` inputs for branch/version (`x.y` or `x.y.z`) / description, `x.y` auto-pads to `x.y.0` for npm, Cargo.toml sync, `Swatinem/rust-cache`, npm `--provenance`.
+- Root `package.json` marked `private:true`, corrected license to MIT, added keywords/engines.
+- `Cargo.toml` version `0.1.0` → `1.0.0`, README refreshed (badges, 6-ISA layout, 133-test count, WASM API trait).
+
 ## [Unreleased]
 
 ### Performance

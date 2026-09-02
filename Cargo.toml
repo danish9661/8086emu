@@ -1,6 +1,6 @@
 [package]
 name = "multi-cpu-emu"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "8086 / 8085 / 8051 / 6502 / Z80 / RISC-V emulator cores in one Rust crate, compiles to WASM"
 license = "MIT"

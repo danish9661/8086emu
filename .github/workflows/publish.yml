@@ -25,6 +25,7 @@ on:
 permissions:
   contents: write    # needed to push tags and create releases
   packages: write    # needed to push to GitHub Packages
+  id-token: write    # needed for npm provenance (OIDC)
 
 jobs:
   publish:
@@ -46,6 +47,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
       - name: Install wasm-pack
         run: |
           url=$(curl -sSL https://api.github.com/repos/rustwasm/wasm-pack/releases/latest | grep -o 'https://[^"]*x86_64-unknown-linux-musl.tar.gz' | head -1)
@@ -56,6 +60,27 @@ jobs:
 
       - name: Build wasm package
         run: wasm-pack build --target web --out-dir pkg --release --features wasm
+        # NOTE: pages.yml builds to docs/pkg for Pages deploy; this publish job
+        # builds to pkg/ because wasm-pack's generated package.json is published to npm.
+
+      - name: Sync Cargo.toml version (keeps crate + npm in sync)
+        run: |
+          VER="${{ inputs.version }}"
+          # pad x.y → x.y.0 so Cargo.toml always has full semver
+          if echo "$VER" | grep -qE '^[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            VER=$(echo "$VER" | sed -E 's/^([0-9]+\.[0-9]+)(-[a-zA-Z0-9.]+)?$/\1.0\2/')
+          fi
+          echo "Syncing Cargo.toml to $VER"
+          sed -i -E "s/^version = \".*\"/version = \"$VER\"/" Cargo.toml
+          if ! git diff --quiet Cargo.toml; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml
+            git commit -m "chore: bump Cargo.toml to $VER"
+            git push origin HEAD:${{ inputs.branch }}
+          else
+            echo "Cargo.toml already at $VER"
+          fi
 
       - name: Set package version
         id: pkgversion
@@ -64,8 +89,9 @@ jobs:
           npm pkg set name=8086emu
           VER="${{ inputs.version }}"
           # pad x.y → x.y.z for npm (which requires full semver)
-          if ! echo "$VER" | grep -qE '\.[0-9]+(-|$)'; then
-            VER="${VER}.0"
+          # x.y   → x.y.0        ;  x.y-prerelease → x.y.0-prerelease
+          if echo "$VER" | grep -qE '^[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            VER=$(echo "$VER" | sed -E 's/^([0-9]+\.[0-9]+)(-[a-zA-Z0-9.]+)?$/\1.0\2/')
           fi
           npm version "$VER" --no-git-tag-version
           echo "npm_version=$VER" >> "$GITHUB_OUTPUT"
@@ -78,7 +104,7 @@ jobs:
 
       - name: Publish to npm (NPM_TOKEN)
         working-directory: pkg
-        run: npm publish --access public
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

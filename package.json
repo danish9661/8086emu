@@ -1,0 +1,37 @@
+{
+  "private": true,
+  "name": "8086emu-dev",
+  "version": "1.0.0",
+  "description": "multi-cpu-emu dev tooling — 8086/8085/8051/6502/Z80/RV32 emulator (Rust → WASM). Published package is `8086emu` from wasm-pack output in pkg/.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danish9661/8086emu.git"
+  },
+  "keywords": [
+    "emulator",
+    "8086",
+    "8085",
+    "8051",
+    "6502",
+    "z80",
+    "riscv",
+    "wasm",
+    "wasm-pack"
+  ],
+  "author": "Danish",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/danish9661/8086emu/issues"
+  },
+  "homepage": "https://github.com/danish9661/8086emu#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test:wasm": "node tools/wasm-smoke.mjs",
+    "build:wasm": "wasm-pack build --target web --out-dir docs/pkg --release --features wasm"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

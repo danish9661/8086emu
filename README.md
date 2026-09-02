@@ -1,5 +1,10 @@
 # multi-cpu-emu
 
+[![Pages](https://github.com/danish9661/8086emu/actions/workflows/pages.yml/badge.svg)](https://github.com/danish9661/8086emu/actions/workflows/pages.yml)
+[![Publish](https://github.com/danish9661/8086emu/actions/workflows/publish.yml/badge.svg)](https://github.com/danish9661/8086emu/actions/workflows/publish.yml)
+[![npm](https://img.shields.io/npm/v/8086emu.svg)](https://www.npmjs.com/package/8086emu)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A single Rust crate that emulates six classic microprocessors:
 
 - **Intel 8086** — 16-bit, segmented, 1 MiB address space; includes an 8259 PIC
@@ -22,13 +27,13 @@ See `AGENTS.md` for the full architecture and per-ISA coverage.
 ## Build & test
 
 ```bash
-cargo test                         # ~86 integration tests across all three ISAs
+cargo test                         # 133 tests (13 unit + 120 integration across all 6 ISAs)
 cargo clippy --all-targets         # should be warning-free
 
 # wasm build (needs wasm-pack)
 wasm-pack build --target web --out-dir docs/pkg --release --features wasm
 
-# self-contained WASM smoke test (exercises all three ISAs + new features)
+# self-contained WASM smoke test (exercises all 6 ISAs + new features)
 node tools/wasm-smoke.mjs
 
 # serve the web demo
@@ -37,7 +42,7 @@ python3 -m http.server -d docs 8000   # then open http://localhost:8000
 
 ## Web IDE / GitHub Pages
 
-The demo in `docs/` is a student-oriented IDE: ISA selector (8086/8085/8051),
+The demo in `docs/` is a student-oriented IDE: ISA selector (8086/8085/8051/6502/Z80/RV32),
 sample programs, line-numbered editor with assemble-error highlighting, step /
 step-over / run / stop / reset, **click-in-gutter breakpoints** with Step-Back
 time-travel, live register + flag panels, a memory dump with the PC highlighted,
@@ -129,15 +134,19 @@ from JS is slower because of the JS↔WASM call boundary.
 
 ```
 ├── src/
-│   ├── lib.rs          # Emulator facade over the three cores
+│   ├── lib.rs          # Emulator facade over all 6 cores
 │   ├── cpu.rs          # Cpu trait, Mem, Output, FlagSet, Reg, RunResult
 │   ├── i8086.rs        # 8086 CPU core (segmented, INT 21h/10h subset)
 │   ├── i8085.rs        # 8085 CPU core (full 8-bit ISA)
 │   ├── mcs51.rs        # 8051 CPU core (SFRs, bit ops, timers)
-│   ├── asm/            # tokenizer + per-ISA assemblers
+│   ├── m6502.rs        # 6502 CPU core (decimal mode, NMI/IRQ/BRK)
+│   ├── z80.rs          # Z80 CPU core (IM 0/1/2, full Z80 ISA)
+│   ├── rv32.rs         # RV32I (+M) core (CSR, ECALL semihosting)
+│   ├── asm/            # tokenizer + per-ISA assemblers (asm8086/8085/8051/6502/z80/rv32)
 │   └── wasm.rs         # wasm-bindgen surface (feature = "wasm")
-├── examples/run.rs     # native CLI runner
-├── tests/emulation.rs  # integration tests
+├── examples/run.rs     # native CLI runner (assemble + run + bench + grade)
+├── tests/emulation.rs  # 120 integration tests across all 6 ISAs
+├── tools/wasm-smoke.mjs # headless WASM smoke test (all ISAs)
 ├── docs/               # GitHub Pages IDE (index.html + app.js + style.css + pkg/)
 └── index.html          # redirects to docs/
 ```
@@ -145,7 +154,7 @@ from JS is slower because of the JS↔WASM call boundary.
 ## WASM API
 
 ```js
-const emu = new Emulator("8086");            // "8086" | "8085" | "8051"
+const emu = new Emulator("8086");            // "8086" | "8085" | "8051" | "6502" | "z80" | "rv32"
 const code = emu.assemble(src);              // throws on error
 emu.load(code, 0x100);                       // write code + set PC
 emu.set_pc(0x100);                           // (re)set the program counter
@@ -175,3 +184,13 @@ emu.sfr(0xD0);  emu.set_sfr(0xD0, 0x00);     // read/write an SFR
   output buffer.
 - **8085** — `OUT 01h` prints the char in A.
 - **8051** — writing to `SBUF` prints the char.
+- **6502/Z80** — memory-mapped or port-mapped I/O via `OUT`/`STA` (see `examples/` and `docs/doc.html`).
+- **RV32** — `ECALL` semihosting (a7=64 write, a7=93 exit).
+
+## Releases
+
+Releases are manual via **Actions → Publish to npm & GitHub Packages → Run workflow**:
+branch + version (`x.y` or `x.y.z`) + release notes → publishes `8086emu` to
+[npm](https://www.npmjs.com/package/8086emu) and `@danish9661/8086emu` to
+GitHub Packages, then creates a GitHub Release + `v<version>` tag.
+Requires repo secret `NPM_TOKEN`. See `CHANGELOG.md`.

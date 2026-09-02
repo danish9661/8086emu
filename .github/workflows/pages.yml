@@ -25,6 +25,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
       - name: Install wasm-pack
         run: |
           url=$(curl -sSL https://api.github.com/repos/rustwasm/wasm-pack/releases/latest | grep -o 'https://[^"]*x86_64-unknown-linux-musl.tar.gz' | head -1)
