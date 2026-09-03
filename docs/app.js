@@ -1454,7 +1454,7 @@ const ISA_MNEM = {
   8051: ['MOV','MOVC','MOVX','PUSH','POP','XCH','XCHD','SWAP','ADD','ADDC','SUBB','INC','DEC','MUL','DIV','DA','ANL','ORL','XRL','CLR','CPL','RL','RR','RLC','RRC','SETB','SJMP','AJMP','LJMP','JZ','JNZ','JC','JNC','JB','JNB','JBC','CJNE','DJNZ','ACALL','LCALL','RET','RETI','NOP'],
   rv32: ['LUI','AUIPC','JAL','JALR','BEQ','BNE','BLT','BGE','BLTU','BGEU','LB','LH','LW','LBU','LHU','SB','SH','SW','ADDI','SLTI','SLTIU','XORI','ORI','ANDI','SLLI','SRLI','SRAI','ADD','SUB','SLL','SLT','SLTU','XOR','SRL','SRA','OR','AND','FENCE','ECALL','EBREAK'],
   '6502': ['LDA','LDX','LDY','STA','STX','STY','ADC','SBC','INC','DEC','AND','ORA','EOR','ASL','LSR','ROL','ROR','CMP','CPX','CPY','BIT','JMP','JSR','RTS','RTI','BCC','BCS','BEQ','BNE','BMI','BPL','BVC','BVS','CLC','SEC','CLI','SEI','CLV','CLD','SED','TAX','TAY','TSX','TXA','TXS','TYA','DEX','DEY','INX','INY','PHA','PHP','PLA','PLP','BRK','NOP'],
-  'Z80': ['LD','LDIR','LDI','LDD','PUSH','POP','ADD','ADC','SUB','SBC','AND','OR','XOR','CP','INC','DEC','RLCA','RRCA','RLA','RRA','RLC','RRC','RL','RR','SLA','SRA','SRL','EX','EXX','JP','JR','CALL','RET','DJNZ','NOP','HALT','DI','EI','CPL','SCF','CCF','DAA','BIT','RES','SET','IN','OUT','RST','NZ','Z','NC','C','PO','PE','P','M'],
+  'Z80': ['LD','LDI','LDIR','LDD','LDDR','CPI','CPIR','CPD','CPDR','ADD','ADC','SUB','SBC','AND','OR','XOR','CP','INC','DEC','PUSH','POP','EX','EXX','DJNZ','JP','JR','CALL','RET','RETI','RETN','RLC','RRC','RL','RR','SLA','SRA','SRL','BIT','RES','SET','RLCA','RRCA','RLA','RRA','RLD','RRD','NEG','CPL','SCF','CCF','DAA','HALT','DI','EI','IM','NOP','OUT','IN','RST','NZ','Z','NC','C','PO','PE','P','M'],
 };
 const REG_WORDS = {
   8086: ['AX','BX','CX','DX','AH','AL','BH','BL','CH','CL','DH','DL','SI','DI','BP','SP','CS','DS','ES','SS','IP','FLAGS'],
@@ -1894,15 +1894,15 @@ $('isa').onchange = () => {
   renderSource();
   updateTabsForIsa();
   // If the active tab is no longer valid for this ISA, fall back to Registers.
-  if (currentTab === 'dev' && (isa !== '8086' && isa !== 'Z80')) showTab('regs');
+  if (currentTab === 'dev' && !(isa === '8086' || isa === '8085' || isa === '8051' || isa === 'Z80')) showTab('regs');
   else refresh();
 };
 
-// Show/hide the Devices tab: only meaningful for 8086 (on-chip peripherals)
-// and Z80 (memory editor). Other ISAs have no content there.
+// Show/hide the Devices tab: 8086/8085/8051 share the OUT-port device kit
+// (see devices.js renderDevices) and Z80 has the memory editor there.
 function updateTabsForIsa() {
   const devTab = $('devTab');
-  if (devTab) devTab.classList.toggle('hidden', !(isa === '8086' || isa === 'Z80'));
+  if (devTab) devTab.classList.toggle('hidden', !(isa === '8086' || isa === '8085' || isa === '8051' || isa === 'Z80'));
 }
 
 // Tab navigation: only one right-column group is visible at a time.

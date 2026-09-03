@@ -42,6 +42,9 @@ jobs:
       - name: Run native tests
         run: cargo test --test emulation
 
+      - name: Clippy
+        run: cargo clippy --all-targets
+
       - name: WASM smoke test
         run: node tools/wasm-smoke.mjs
 

@@ -31,12 +31,15 @@ fn parse_value(s: &str) -> Option<u32> {
     let s = s.trim();
     if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         u32::from_str_radix(h, 16).ok()
-    } else if s.ends_with('h') || s.ends_with('H') {
+    } else if let Some(h) = s.strip_prefix("$") {
+        u32::from_str_radix(h, 16).ok()
+    } else if s.len() > 1 && (s.ends_with('h') || s.ends_with('H')) {
         u32::from_str_radix(&s[..s.len() - 1], 16).ok()
-    } else if s.ends_with('b') || s.ends_with('B') {
+    } else if s.len() > 1 && (s.ends_with('b') || s.ends_with('B')) {
         u32::from_str_radix(&s[..s.len() - 1], 2).ok()
     } else {
-        s.parse::<u32>().ok().or_else(|| u32::from_str_radix(s, 16).ok())
+        // Decimal only: no implicit-hex fallback (so "10" is always ten).
+        s.parse::<u32>().ok()
     }
 }
 

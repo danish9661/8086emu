@@ -475,6 +475,10 @@ impl Cpu for Cpu6502 {
         v
     }
     fn restore(&mut self, data: &[u8]) {
+        const NEED: usize = 2 + 5 + 3 + 65536;
+        if data.len() < NEED {
+            return;
+        }
         let mut o = 0;
         let g4 = |d: &[u8], p: &mut usize| { let v = u16::from_le_bytes([d[*p], d[*p+1]]); *p += 2; v };
         self.pc = g4(data, &mut o);

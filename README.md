@@ -125,8 +125,14 @@ from JS is slower because of the JS↔WASM call boundary.
 | `examples/hello.asm` | 8086 | `INT 21h` string output |
 | `examples/hello85.asm` | 8085 | `OUT 01h` printing |
 | `examples/hello51.asm` | 8051 | `SBUF` serial output |
+| `examples/hello6502.asm` | 6502 | `STA $01` printing |
+| `examples/helloz80.asm` | Z80 | `OUT (1),A` printing |
+| `examples/hellorv32.asm` | rv32 | `ECALL` write/exit semihosting |
 | `examples/8155.asm` | 8085 | 8155 external RAM/I/O |
 | `examples/timer51.asm` | 8051 | timer + interrupt |
+| `examples/ports86.asm` | 8086 | 8255 PPI + ADC0808 + LCD1602 + 8237 DMA via `OUT` |
+| `examples/ports85.asm` | 8085 | same kit via `OUT`/`IN` |
+| `examples/ports51.asm` | 8051 | same kit via `MOVX` to `FF00h`+port |
 | `examples/ser.rs` | 8051 | native serial-RX injection |
 | `examples/bios.asm` | 8086 | BIOS image that boots from the reset vector `FFFF:FFF0` |
 

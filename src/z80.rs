@@ -11,9 +11,7 @@
 //! ops), `0xED` (misc/16-bit ALU/block), `0xDD` (IX) and `0xFD` (IY), with
 //! `0xDD 0xCB` / `0xFD 0xCB` for indexed bit ops.
 
-use crate::asm::common::clean_line;
-use crate::cpu::{Cpu, Disasm, FlagSet, Mem, Output, Reg, RunResult};
-use std::collections::HashMap;
+use crate::cpu::{Cpu, Disasm, FlagSet, Mem, Output, Reg};
 
 #[derive(Clone)]
 pub struct CpuZ80 {
@@ -37,7 +35,7 @@ impl Default for CpuZ80 {
         let mut m = CpuZ80 {
             a: 0, f: 0, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0,
             a2: 0, f2: 0, b2: 0, c2: 0, d2: 0, e2: 0, h2: 0, l2: 0,
-            ix: 0, iy: 0, sp: 0xFF, pc: 0, i: 0, r: 0,
+            ix: 0, iy: 0, sp: 0xFFFF, pc: 0, i: 0, r: 0,
             iff1: false, iff2: false, im: 0, halted: false,
             out: Output::default(), ports: [0; 256], mem: Mem::new(1 << 16),
             pending_int: false, pending_nmi: false,
@@ -359,7 +357,7 @@ impl CpuZ80 {
             0xF1 => { let v = self.pop(); self.set_af(v); }
             0xD3 => { let n = self.fetch(); self.out_port(((self.a as u16) << 8) | n as u16, self.a); }
             0xDB => { let n = self.fetch(); self.a = self.in_port(((self.a as u16) << 8) | n as u16); }
-            _ => { /* unsupported; ignore */ }
+            _ => { self.halted = true; /* undefined opcode: halt, don't silently NOP */ }
         }
     }
 
@@ -413,7 +411,7 @@ impl CpuZ80 {
             0xB1 => self.cpi(true),
             0xA9 => self.cpd(false),
             0xB9 => self.cpd(true),
-            _ => {}
+            _ => { self.halted = true; }
         }
     }
 
@@ -571,7 +569,7 @@ impl CpuZ80 {
                 let v = self.rd(a);
                 self.alu(g, v);
             }
-            _ => {}
+            _ => { self.halted = true; }
         }
     }
 
@@ -631,7 +629,7 @@ impl Cpu for CpuZ80 {
     fn reset(&mut self) {
         self.a = 0; self.f = 0; self.b = 0; self.c = 0; self.d = 0; self.e = 0; self.h = 0; self.l = 0;
         self.a2 = 0; self.f2 = 0; self.b2 = 0; self.c2 = 0; self.d2 = 0; self.e2 = 0; self.h2 = 0; self.l2 = 0;
-        self.ix = 0; self.iy = 0; self.sp = 0xFF; self.pc = 0; self.i = 0; self.r = 0;
+        self.ix = 0; self.iy = 0; self.sp = 0xFFFF; self.pc = 0; self.i = 0; self.r = 0;
         self.iff1 = false; self.iff2 = false; self.im = 0; self.halted = false; self.pending_int = false; self.pending_nmi = false;
         self.out = Output::default();
     }
@@ -721,6 +719,12 @@ impl Cpu for CpuZ80 {
         v
     }
     fn restore(&mut self, data: &[u8]) {
+        // Fixed header is 33 bytes; then 64 KiB RAM + 256 ports.
+        const HEADER: usize = 16 + 8 + 4 + 4 + 5;
+        const NEED: usize = HEADER + 65536 + 256;
+        if data.len() < NEED {
+            return;
+        }
         let mut p = 0;
         macro_rules! rd8 { () => {{ let x = data[p]; p += 1; x } } }
         macro_rules! rd16 { () => {{ let mut b = [0u8; 2]; b.copy_from_slice(&data[p..p + 2]); p += 2; u16::from_le_bytes(b) } } }

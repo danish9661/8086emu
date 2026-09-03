@@ -801,24 +801,36 @@ impl Cpu for Cpu8085 {
         if ver >= 3 {
             let n = data.len();
             let appended = if ver >= 4 { SRAM_SIZE + 16 } else { 0 };
-            let v3end = n - appended;
-            self.i8155.restore(&data[v3end - 275..v3end - 8]);
+            // Fixed-size section before the variable peripherals: header(25) +
+            // main RAM + ports(256) + i8155(267) + cycles(8) [+ sram + 16].
+            let fixed = 25 + MEM_SIZE + 256 + 267 + 8 + appended;
+            if n < fixed {
+                return;
+            }
+            let v3end = 25 + MEM_SIZE + 256 + 267;
+            if n < v3end {
+                return;
+            }
+            self.i8155.restore(&data[v3end..v3end + 267]);
             let mut cy = [0u8; 8];
-            cy.copy_from_slice(&data[v3end - 8..v3end]);
+            cy.copy_from_slice(&data[v3end + 267..v3end + 275]);
             self.cycles = u64::from_le_bytes(cy);
-            if ver >= 4 && data.len() >= appended {
-                let sram_data = &data[n - appended..n - 16];
+            if ver >= 4 {
+                let sram_start = 25 + MEM_SIZE + 256 + 267 + 8;
+                if data.len() < sram_start + SRAM_SIZE + 16 {
+                    return;
+                }
                 self.sram = Mem::new(SRAM_SIZE);
-                let m = sram_data.len().min(SRAM_SIZE);
-                self.sram.data[..m].copy_from_slice(&sram_data[..m]);
-                self.sram_base = u32::from_le_bytes([data[n - 16], data[n - 15], data[n - 14], data[n - 13]]);
-                self.sram_len = u32::from_le_bytes([data[n - 12], data[n - 11], data[n - 10], data[n - 9]]);
-                let rb = u32::from_le_bytes([data[n - 8], data[n - 7], data[n - 6], data[n - 5]]);
-                let rl = u32::from_le_bytes([data[n - 4], data[n - 3], data[n - 2], data[n - 1]]);
+                self.sram.data.copy_from_slice(&data[sram_start..sram_start + SRAM_SIZE]);
+                self.sram_base = u32::from_le_bytes([data[sram_start + SRAM_SIZE], data[sram_start + SRAM_SIZE + 1], data[sram_start + SRAM_SIZE + 2], data[sram_start + SRAM_SIZE + 3]]);
+                self.sram_len = u32::from_le_bytes([data[sram_start + SRAM_SIZE + 4], data[sram_start + SRAM_SIZE + 5], data[sram_start + SRAM_SIZE + 6], data[sram_start + SRAM_SIZE + 7]]);
+                let rb = u32::from_le_bytes([data[sram_start + SRAM_SIZE + 8], data[sram_start + SRAM_SIZE + 9], data[sram_start + SRAM_SIZE + 10], data[sram_start + SRAM_SIZE + 11]]);
+                let rl = u32::from_le_bytes([data[sram_start + SRAM_SIZE + 12], data[sram_start + SRAM_SIZE + 13], data[sram_start + SRAM_SIZE + 14], data[sram_start + SRAM_SIZE + 15]]);
                 self.mem.set_rom(rb as usize, rl as usize);
             }
             if ver >= 5 {
-                let mut off = n;
+                // Peripherals start right after the fixed section (not at n).
+                let mut off = fixed;
                 if data.len() >= off + 11 { self.ppi.restore(&data[off..off+11]); off+=11; }
                 if data.len() >= off + 12 {
                     let flen = u32::from_le_bytes([data[off+8],data[off+9],data[off+10],data[off+11]]) as usize;

@@ -69,10 +69,22 @@ impl Mem {
     }
 
     /// Mark `[base, base+len)` as read-only ROM (address is masked to the size).
+    /// The length is clamped to the memory size so a wrap-around range can
+    /// never mark unintended bytes read-only.
     pub fn set_rom(&mut self, base: usize, len: usize) {
         let m = self.data.len() - 1;
         self.rom_base = base & m;
-        self.rom_len = len;
+        self.rom_len = len.min(self.data.len());
+    }
+
+    /// Current used length of the memory image.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Always false: memory is a fixed-size image, never empty.
+    pub fn is_empty(&self) -> bool {
+        false
     }
 
     pub fn rom_range(&self) -> (usize, usize) {
@@ -96,6 +108,26 @@ impl Mem {
         (0..len).map(|i| self.read(addr + i)).collect()
     }
 }
+
+/// Well-known I/O port numbers shared by the 8086/8085 lab kits.
+/// Centralised here so cores, the facade, and the IDE agree on addresses.
+pub const PORT_CONSOLE: u8 = 0x01;
+pub const PORT_PPI_PA: u8 = 0xE0;
+pub const PORT_PPI_PB: u8 = 0xE1;
+pub const PORT_PPI_PC: u8 = 0xE2;
+pub const PORT_PPI_CTRL: u8 = 0xE3;
+pub const PORT_FLASH_STATUS: u8 = 0xE8;
+pub const PORT_FLASH_CMD: u8 = 0xE9;
+pub const PORT_RTC_SEL: u8 = 0x70;
+pub const PORT_RTC_DATA: u8 = 0x71;
+pub const PORT_ADC_CTRL: u8 = 0x28;
+pub const PORT_ADC_DATA: u8 = 0x29;
+pub const PORT_LCD_CMD: u8 = 0x38;
+pub const PORT_LCD_DATA: u8 = 0x39;
+pub const PORT_USART_DATA: u8 = 0x50;
+pub const PORT_USART_CTRL: u8 = 0x51;
+pub const PORT_KBD_CMD: u8 = 0x68;
+pub const PORT_KBD_DATA: u8 = 0x69;
 
 /// One decoded instruction for the disassembler view.
 #[derive(Clone, Debug)]
@@ -151,17 +183,30 @@ pub struct RunResult {
 
 /// Anything the CPU "prints" goes here so both the WASM UI and the CLI can
 /// show program output (INT 21h on 8086, OUT on 8085, SBUF on 8051).
+/// The buffer is capped (1 MiB) so a print-loop program cannot grow WASM
+/// linear memory without bound; oldest output is dropped once capped.
+/// Call `take()` regularly to drain it.
 #[derive(Default, Clone)]
 pub struct Output {
     pub buffer: String,
 }
 
+/// Maximum buffered program output (chars). Oldest data is dropped past this.
+pub const OUTPUT_CAP: usize = 1 << 20;
+
 impl Output {
     pub fn put_char(&mut self, c: char) {
+        if self.buffer.len() >= OUTPUT_CAP {
+            // Drop oldest data in chunks to keep per-step cost O(1) amortised.
+            let drop = OUTPUT_CAP / 4;
+            self.buffer.drain(..drop);
+        }
         self.buffer.push(c);
     }
     pub fn put_str(&mut self, s: &str) {
-        self.buffer.push_str(s);
+        for c in s.chars() {
+            self.put_char(c);
+        }
     }
     pub fn take(&mut self) -> String {
         std::mem::take(&mut self.buffer)

@@ -4,7 +4,7 @@
 //! service subset so classic lab programs (INT 21h AH=09 string print,
 //! AH=02 char print, AH=4C exit, INT 10h AH=0Eh) run headlessly.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use crate::cpu::{Cpu, FlagSet, Mem, Output, Reg, RunResult};
 use crate::pic8259::Pic8259;
@@ -54,7 +54,7 @@ struct DosClock { year: u16, month: u8, day: u8, hour: u8, min: u8, sec: u8 }
 
 struct DosFs {
     files: Vec<DosFile>,
-    handles: HashMap<u16, usize>, // handle -> index into files
+    handles: Vec<(u16, usize)>, // small Vec map: handle -> index into files
     next_handle: u16,
     dta: usize,                    // DTA linear address
     clock: DosClock,
@@ -64,7 +64,7 @@ impl DosFs {
     fn new() -> Self {
         DosFs {
             files: Vec::new(),
-            handles: HashMap::new(),
+            handles: Vec::new(),
             next_handle: 5, // DOS reserves 0..4 for std streams
             dta: 0x80,      // default DTA at PSP:0080h
             clock: DosClock { year: 2025, month: 1, day: 1, hour: 0, min: 0, sec: 0 },
@@ -77,8 +77,23 @@ impl DosFs {
     fn open_handle(&mut self, id: usize) -> u16 {
         let h = self.next_handle;
         self.next_handle += 1;
-        self.handles.insert(h, id);
+        self.handles.push((h, id));
         h
+    }
+    fn get_handle(&self, h: u16) -> Option<usize> {
+        self.handles.iter().find(|(k, _)| *k == h).map(|(_, v)| *v)
+    }
+    fn remove_handle(&mut self, h: u16) -> Option<usize> {
+        self.handles.iter().position(|(k, _)| *k == h).map(|i| self.handles.remove(i).1)
+    }
+    fn retain_file(&mut self, keep: usize) {
+        // Drop handles pointing at the removed file index, shift higher ones.
+        self.handles.retain(|(_, v)| *v != keep);
+        for (_, v) in self.handles.iter_mut() {
+            if *v > keep {
+                *v -= 1;
+            }
+        }
     }
 }
 
@@ -1019,13 +1034,12 @@ impl Cpu8086 {
             }
             (0x21, 0x3E) => { // close
                 let h = self.bx;
-                if self.dos.handles.remove(&h).is_some() { self.set_flag(CF, false); self.ax = 0; }
+                if self.dos.remove_handle(h).is_some() { self.set_flag(CF, false); self.ax = 0; }
                 else { self.set_flag(CF, true); self.ax = 6; }
             }
             (0x21, 0x3F) => { // read
                 let h = self.bx;
                 let cnt = self.cx as usize;
-                eprintln!("DBG 3Fh entry: h={h} ah={:02X} cnt={cnt} kb_len={}", self.ah(), self.keybuf.len());
                 if h == 0 { // stdin: read from the keyboard queue
                     if self.keybuf.is_empty() {
                         // Block: re-execute the INT 21h on resume. Do NOT clobber
@@ -1044,7 +1058,7 @@ impl Cpu8086 {
                         self.set_flag(CF, false); self.ax = n as u16;
                     }
                 } else {
-                    let id = self.dos.handles.get(&h).copied();
+                    let id = self.dos.get_handle(h);
                     match id {
                         None => { self.set_flag(CF, true); self.ax = 6; }
                         Some(id) => {
@@ -1072,7 +1086,7 @@ impl Cpu8086 {
                     }
                     self.set_flag(CF, false); self.ax = cnt as u16;
                 } else {
-                    let id = self.dos.handles.get(&h).copied();
+                    let id = self.dos.get_handle(h);
                     match id {
                         None => { self.set_flag(CF, true); self.ax = 6; }
                         Some(id) => {
@@ -1092,14 +1106,14 @@ impl Cpu8086 {
                 if let Some(i) = self.dos.find(&name) {
                     self.dos.files.remove(i);
                     // drop handles pointing at the removed file
-                    self.dos.handles.retain(|_, v| *v != i);
+                    self.dos.retain_file(i);
                     self.set_flag(CF, false); self.ax = 0;
                 } else { self.set_flag(CF, true); self.ax = 2; }
             }
             (0x21, 0x42) => { // lseek
                 let h = self.bx;
                 let off = ((self.cx as u32) << 16) | self.dx as u32;
-                let id = self.dos.handles.get(&h).copied();
+                let id = self.dos.get_handle(h);
                 match id {
                     None => { self.set_flag(CF, true); self.ax = 6; }
                     Some(id) => {

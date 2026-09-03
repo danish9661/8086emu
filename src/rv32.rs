@@ -478,6 +478,11 @@ impl Cpu for CpuRv32 {
         v
     }
     fn restore(&mut self, data: &[u8]) {
+        const MEM_SIZE: usize = 1 << 20;
+        const NEED: usize = 4 + 128 + 1 + MEM_SIZE + 4096 * 4;
+        if data.len() < NEED {
+            return;
+        }
         let mut o = 0;
         self.dec = None; // memory/pc changed; force re-decode
         let get4 = |d: &[u8], p: &mut usize| {
