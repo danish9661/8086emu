@@ -1869,7 +1869,7 @@ function loadSource() {
  }
  $('shareBtn').onclick = () => {
    const full = location.href.split('#')[0] + '#isa=' + isa + '&src=' + encodeURIComponent(editor.value);
-   history.replaceState(null, '', '#isa=' + isa + '&src=' + encodeURIComponent(editor.value));
+    window.history.replaceState(null, '', '#isa=' + isa + '&src=' + encodeURIComponent(editor.value));
    const done = () => toast('Share link copied to clipboard');
    if (navigator.clipboard && navigator.clipboard.writeText) {
      navigator.clipboard.writeText(full).then(done, () => prompt('Copy this share link:', full));
@@ -1894,15 +1894,15 @@ $('isa').onchange = () => {
   renderSource();
   updateTabsForIsa();
   // If the active tab is no longer valid for this ISA, fall back to Registers.
-  if (currentTab === 'dev' && !(isa === '8086' || isa === '8085' || isa === '8051' || isa === 'Z80')) showTab('regs');
+  if (currentTab === 'dev' && !(isa === '8086' || isa === '8085' || isa === '8051' || isa === 'Z80' || isa === '6502')) showTab('regs');
   else refresh();
 };
 
-// Show/hide the Devices tab: 8086/8085/8051 share the OUT-port device kit
-// (see devices.js renderDevices) and Z80 has the memory editor there.
+// Show/hide the Devices tab: 8086/8085/8051 share the OUT-port device kit,
+// Z80 has the CTC + memory editor and 6502 the VIA there.
 function updateTabsForIsa() {
   const devTab = $('devTab');
-  if (devTab) devTab.classList.toggle('hidden', !(isa === '8086' || isa === '8085' || isa === '8051' || isa === 'Z80'));
+  if (devTab) devTab.classList.toggle('hidden', !(isa === '8086' || isa === '8085' || isa === '8051' || isa === 'Z80' || isa === '6502'));
 }
 
 // Tab navigation: only one right-column group is visible at a time.

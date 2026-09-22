@@ -93,7 +93,7 @@ fn main() {
             "--isa" => {
                 i += 1;
                 isa = args.get(i).cloned().unwrap_or_else(|| {
-                    eprintln!("error: --isa requires a value (8086|8085|8051|6502|Z80|rv32)");
+                    eprintln!("error: --isa requires a value (8086|8088|8085|8051|6502|Z80|rv32)");
                     std::process::exit(2);
                 });
             }
@@ -122,7 +122,7 @@ fn main() {
     let mut emu = match make_emulator(&isa) {
         Ok(e) => e,
         Err(_) => {
-            eprintln!("error: unsupported ISA '{}'. Valid choices: 8086, 8085, 8051, 6502, Z80, rv32", isa);
+            eprintln!("error: unsupported ISA '{}'. Valid choices: 8086 (or 8088), 8085, 8051, 6502, Z80, rv32", isa);
             std::process::exit(1);
         }
     };
@@ -145,7 +145,7 @@ fn main() {
         Ok(c) => c,
         Err(e) => { eprintln!("assembly failed for '{}':\n{}", path, e); std::process::exit(1); }
     };
-    let entry = if isa == "8086" { 0x100 } else { 0 };
+    let entry = if isa == "8086" || isa == "8088" { 0x100 } else { 0 };
     emu.mem_write(0, &code);
     emu.set_pc(entry);
 
@@ -220,7 +220,7 @@ fn print_usage() {
         "usage: run [options] <file.asm>\n\
          \n\
          Options:\n\
-           --isa <isa>        one of: 8086, 8085, 8051, 6502, Z80, rv32  (default 8086)\n\
+           --isa <isa>        one of: 8086 (or 8088, same core), 8085, 8051, 6502, Z80, rv32  (default 8086)\n\
            --max-steps <N>   stop after N instructions (default 5,000,000)\n\
            --grade <spec>    grade the program against a spec file (see below)\n\
            --verbose, -v     trace each instruction and peripheral I/O writes\n\
@@ -305,8 +305,8 @@ fn run_bench(emu: &mut multi_cpu_emu::Emulator, isa: &str, steps: u32) {
             std::process::exit(1);
         }
     };
-    let entry = if isa == "8086" { 0x100 } else { 0 };
-    if isa == "rv32" || isa == "8086" {
+    let entry = if isa == "8086" || isa == "8088" { 0x100 } else { 0 };
+    if isa == "rv32" || isa == "8086" || isa == "8088" {
         // Real code is read-only; loading as ROM exercises the decode-cache
         // trust fast path (skip the per-step instruction re-fetch/verify).
         emu.load_rom(&code, entry);

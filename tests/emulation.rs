@@ -2761,3 +2761,115 @@ fn x86_poke_code_invalidates_cache() {
     emu.step();
     assert_eq!(reg(&emu.regs(), "AX"), 7, "poked 8086 code must take effect");
 }
+
+// ---------------------------------------------------------------------------
+// PC speaker (8086 port 61h + PIT channel 2), Z80 CTC, 6522 VIA
+// ---------------------------------------------------------------------------
+
+#[test]
+fn speaker_8086_port61() {
+    // PIT ch2 in mode 3 + port 61h gate/enable => speaker level toggles.
+    let src = "ORG 100h\nMOV AL, 0B6h\nOUT 43h, AL\nMOV AX, 0010h\nOUT 42h, AL\nMOV AL, AH\nOUT 42h, AL\nIN AL, 61h\nOR AL, 03h\nOUT 61h, AL\nMOV CX, 200h\nbeep:\nLOOP beep\nIN AL, 61h\nAND AL, 0FCh\nOUT 61h, AL\nMOV AH, 4Ch\nINT 21h\nEND";
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    // Run just past the enable: the square wave must take the level high.
+    let mut saw_high = false;
+    for _ in 0..5000 {
+        emu.step();
+        if emu.speaker_level() {
+            saw_high = true;
+            break;
+        }
+        if emu.is_halted() {
+            break;
+        }
+    }
+    assert!(saw_high, "speaker level must go high while gated+enabled");
+    assert_eq!(emu.speaker_ctrl() & 0x03, 0x03, "port 61h latch holds gate+enable");
+    // Snapshot round-trips the latch (and the PIT gate follows it).
+    let snap = emu.snapshot();
+    let mut emu2 = make_emulator("8086").unwrap();
+    emu2.restore(&snap);
+    assert_eq!(emu2.speaker_ctrl() & 0x03, 0x03, "speaker latch survives restore");
+    // Run to the end: the program disables the speaker and exits.
+    emu.run(100000);
+    assert!(emu.is_halted());
+    assert!(!emu.speaker_level(), "speaker silent after disable");
+    assert_eq!(emu.port_read(0x61) & 0x03, 0, "port 61h latch cleared");
+}
+
+#[test]
+fn ctc_z80_timer_interrupt() {
+    // ch0 timer/16, tc=2 => IRQ every 32 steps; ISR prints 'C' (IM 1 -> 38h).
+    let src = "ORG 0\nJP main\nORG 38h\nisr:\nLD A, 'C'\nOUT (1), A\nRETI\nmain:\nEI\nLD A, 0C5h\nOUT (10h), A\nLD A, 2\nOUT (10h), A\nLD B, 10\nloop:\nLD A, '.'\nOUT (1), A\nDJNZ loop\nHALT\nEND";
+    let mut emu = make_emulator("z80").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    let r = emu.run(5000);
+    assert!(r.halted, "program must reach HALT");
+    let out = emu.take_output();
+    assert!(out.contains('C'), "CTC ISR must print at least one 'C', out={out:?}");
+    assert!(out.starts_with('.'), "main loop prints dots too, out={out:?}");
+    // Live counter reads back through the port map.
+    assert!(emu.port_read(0x10) <= 2, "ch0 counter wraps in its tc range");
+}
+
+#[test]
+fn ctc_z80_counter_pulse_and_snapshot() {
+    // Counter mode: 3 pulses on ch1 => one terminal count (no CPU run needed).
+    let mut emu = make_emulator("z80").unwrap();
+    let code = emu.assemble("ORG 0\nLD A, 85h\nOUT (11h), A\nLD A, 3\nOUT (11h), A\nHALT\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert!(!emu.ctc_pulse(1));
+    assert!(!emu.ctc_pulse(1));
+    assert!(emu.ctc_pulse(1), "third pulse is the terminal count");
+    // Snapshot covers the CTC (vector + channel state).
+    emu.port_write(0x10, 0x05); // ch0 vector word: base 04h
+    let snap = emu.snapshot();
+    let mut emu2 = make_emulator("z80").unwrap();
+    emu2.restore(&snap);
+    assert_eq!(emu2.ctc_count(1), 3, "counter reload survives restore");
+    assert_eq!(emu2.port_read(0x10), emu.port_read(0x10), "CTC state round-trips");
+}
+
+#[test]
+fn via6522_t1_irq() {
+    // T1 one-shot (latch 5) + IER => exactly one IRQ; ISR clears + counts.
+    let src = "ORG 0\nSEI\nLDA #$05\nSTA $6006\nLDA #$00\nSTA $6007\nLDA #$C0\nSTA $600E\nLDA #$05\nSTA $6004\nLDA #$00\nSTA $6005\nCLI\nLDX #30\nwait:\nDEX\nBNE wait\nSEI\nLDA $600D\nSTA $40\ndone:\nJMP done\nisr:\nLDA #$40\nSTA $600D\nINC $41\nRTI\nORG $FFFE\nDW isr\nEND";
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(300);
+    assert_eq!(emu.mem_read(0x41, 1)[0], 1, "ISR must run exactly once");
+    assert_eq!(emu.mem_read(0x40, 1)[0], 0, "ISR clears the T1 flag");
+    assert!(!emu.via_irq(), "no IRQ line after acknowledge");
+    // Ports follow DDR; snapshot covers the VIA.
+    emu.via_write(3, 0xF0);
+    emu.via_write(1, 0xA0);
+    emu.via_pins(0, 0x0F);
+    assert_eq!(emu.via_read(1), 0xAF, "output bits from latch, input bits from pins");
+    let snap = emu.snapshot();
+    let mut emu2 = make_emulator("6502").unwrap();
+    emu2.restore(&snap);
+    assert_eq!(emu2.via_read(1), 0xAF, "VIA state survives restore");
+    assert_eq!(emu2.mem_read(0x41, 1)[0], 1, "RAM survives restore too");
+}
+
+#[test]
+fn isa_8088_alias_matches_8086() {
+    // 8088 is the same core/ISA as 8086 (only the bus differs, invisible here),
+    // including 80186 user instructions (PUSHA/POPA) and ENTER/LEAVE.
+    let mut emu = make_emulator("8088").unwrap();
+    let code = emu.assemble("ORG 100h\nMOV AX, 1111h\nPUSHA\nMOV AX, 0\nPOPA\nENTER 4, 0\nLEAVE\nMOV AH, 4Ch\nINT 21h\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert!(emu.is_halted());
+    assert_eq!(reg(&emu.regs(), "AX"), 0x4C11, "PUSHA/POPA + ENTER/LEAVE round-trip under the 8088 alias");
+}

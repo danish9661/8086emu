@@ -128,6 +128,9 @@ pub const PORT_USART_DATA: u8 = 0x50;
 pub const PORT_USART_CTRL: u8 = 0x51;
 pub const PORT_KBD_CMD: u8 = 0x68;
 pub const PORT_KBD_DATA: u8 = 0x69;
+/// PC speaker control (8086 only): bit 0 = PIT channel 2 gate,
+/// bit 1 = speaker enable; reads return the latch plus ch2 OUT at bit 5.
+pub const PORT_SPEAKER: u8 = 0x61;
 
 /// One decoded instruction for the disassembler view.
 #[derive(Clone, Debug)]

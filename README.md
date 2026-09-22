@@ -8,7 +8,11 @@
 A single Rust crate that emulates six classic microprocessors:
 
 - **Intel 8086** — 16-bit, segmented, 1 MiB address space; includes an 8259 PIC
-  and 8253 PIT so timer interrupts (IRQ0 → `INT 8`) fire end-to-end
+  and 8253 PIT so timer interrupts (IRQ0 → `INT 8`) fire end-to-end.
+  Also covers the **8088** (same ISA — select `--isa 8088`, identical core)
+  and **80186** user code (`PUSHA/POPA`, `INS/OUTS`, `BOUND`, `IMUL` imm,
+  `ENTER`/`LEAVE` all execute); the 186's on-chip peripheral block is
+  out of scope (use the discrete 8253/8259/DMA models instead)
 - **Intel 8085** — 8-bit, 64 KiB, accumulator-centric
 - **Intel 8051 (MCS-51)** — 8-bit, SFRs, bit-addressable RAM, timers
 - **MOS 6502** — 8-bit, decimal mode, NMI/IRQ/BRK vectoring
@@ -133,6 +137,9 @@ from JS is slower because of the JS↔WASM call boundary.
 | `examples/ports86.asm` | 8086 | 8255 PPI + ADC0808 + LCD1602 + 8237 DMA via `OUT` |
 | `examples/ports85.asm` | 8085 | same kit via `OUT`/`IN` |
 | `examples/ports51.asm` | 8051 | same kit via `MOVX` to `FF00h`+port |
+| `examples/speaker86.asm` | 8086 | PC speaker: PIT ch2 mode 3 + port `61h` gate/enable |
+| `examples/ctcz80.asm` | Z80 | Z80 CTC ch0 timer interrupt (ports `10h`-`13h`) |
+| `examples/via6522.asm` | 6502 | 6522 VIA T1 one-shot IRQ (mapped at `$6000`) |
 | `examples/ser.rs` | 8051 | native serial-RX injection |
 | `examples/bios.asm` | 8086 | BIOS image that boots from the reset vector `FFFF:FFF0` |
 
@@ -191,7 +198,22 @@ emu.sfr(0xD0);  emu.set_sfr(0xD0, 0x00);     // read/write an SFR
 - **8085** — `OUT 01h` prints the char in A.
 - **8051** — writing to `SBUF` prints the char.
 - **6502/Z80** — memory-mapped or port-mapped I/O via `OUT`/`STA` (see `examples/` and `docs/doc.html`).
-- **RV32** — `ECALL` semihosting (a7=64 write, a7=93 exit).
+- **RV32** — `ECALL` semihosting (a7=64 write, a7=93 exit). A memory-mapped
+  UART/CLINT is **not** modelled and is distant-future work with no current
+  plan — use semihosting for program output.
+
+## Peripheral map (quick reference)
+
+| Chip | ISA | Ports / mapping |
+|---|---|---|
+| PC speaker (PIT ch2 + `61h`) | 8086 | `42h/43h` timer, `61h` gate+enable |
+| Z80 CTC | Z80 | `10h`–`13h` (timer/counter + IRQ) |
+| 6522 VIA | 6502 | `$6000`–`$600F` (ports/timers/IRQ) |
+| 8255 PPI | 8086/8085 | `E0h`–`E3h` |
+| ADC0808 | 8086/8085 | `28h` ctrl, `29h` data |
+| LCD1602 | 8086/8085 | `38h` cmd, `39h` data |
+| 8237 DMA | 8086/8085 | `D0h`–`DFh` |
+| 8155 | 8085 | RAM `8000h`, regs `80h`–`85h` |
 
 ## Releases
 

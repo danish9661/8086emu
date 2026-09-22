@@ -54,6 +54,48 @@ impl Channel {
             self.value = val as u16;
             return;
         }
+        if self.mode == 2 {
+            // Rate generator: OUT stays high, dipping low for one tick at
+            // terminal count (used for the PC system timer on channel 0).
+            let mut rem = n;
+            while rem > 0 {
+                let dec = rem.min(val);
+                val -= dec;
+                rem -= dec;
+                if val == 0 {
+                    self.pulse = true;
+                    self.out = false; // one-tick low blip
+                    val = period;
+                } else {
+                    self.out = true;
+                }
+            }
+            self.value = val as u16;
+            // If we ended exactly away from terminal count, OUT is high.
+            if self.value != 0 {
+                self.out = true;
+            }
+            return;
+        }
+        if self.mode == 3 {
+            // Square wave: OUT toggles every half period (drives the PC
+            // speaker on channel 2). Derived from the counter value so no
+            // extra phase state is needed (snapshot layout unchanged).
+            let mut rem = n;
+            while rem > 0 {
+                let dec = rem.min(val);
+                val -= dec;
+                rem -= dec;
+                if val == 0 {
+                    self.pulse = true;
+                    val = period;
+                }
+            }
+            self.value = val as u16;
+            let eff = if self.value == 0 { period } else { self.value as u64 };
+            self.out = eff > period / 2;
+            return;
+        }
         let mut rem = n;
         while rem > 0 {
             let dec = rem.min(val);
@@ -164,6 +206,19 @@ impl Pit8253 {
 
     pub fn ch_count(&self, n: usize) -> u16 {
         self.ch[n.min(2)].count
+    }
+
+    /// Drive the GATE input of channel `n` (the PC wires port 61h bit 0 to
+    /// channel 2's gate for the speaker).
+    pub fn set_gate(&mut self, n: usize, on: bool) {
+        if n < 3 {
+            self.ch[n].gate = on;
+        }
+    }
+
+    /// Current OUT level of channel `n` (drives IRQ0 on ch0, the speaker on ch2).
+    pub fn ch_out(&self, n: usize) -> bool {
+        if n < 3 { self.ch[n].out } else { false }
     }
 
     pub fn snapshot(&self) -> Vec<u8> {

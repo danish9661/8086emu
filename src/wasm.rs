@@ -27,7 +27,7 @@ pub struct Emulator {
 #[wasm_bindgen]
 impl Emulator {
     #[wasm_bindgen(constructor)]
-    /// Create an emulator for one of: "8086", "8085", "8051", "6502", "Z80", "rv32".
+    /// Create an emulator for one of: "8086" (or "8088", same core), "8085", "8051", "6502", "Z80", "rv32".
     /// Throws if the ISA name is unknown.
     pub fn new(isa: &str) -> Result<Emulator, JsValue> {
         to_js(crate::make_emulator(isa).map(|inner| Emulator { inner }))
@@ -242,6 +242,36 @@ impl Emulator {
         to_js(self.inner.set_interrupt_mode(m))
     }
 
+    /// Inject one CLK/TRG pulse into Z80 CTC channel `ch` (counter mode).
+    pub fn ctc_pulse(&mut self, ch: usize) -> u8 {
+        self.inner.ctc_pulse(ch) as u8
+    }
+
+    /// Live Z80 CTC down-counter of channel `ch` (0 for other ISAs).
+    pub fn ctc_count(&self, ch: usize) -> u16 {
+        self.inner.ctc_count(ch)
+    }
+
+    /// Read a MOS 6522 VIA register `rs` (0-15, mapped at $6000). 6502 only.
+    pub fn via_read(&self, rs: u8) -> u8 {
+        self.inner.via_read(rs)
+    }
+
+    /// Write a MOS 6522 VIA register `rs` (0-15). 6502 only.
+    pub fn via_write(&mut self, rs: u8, v: u8) {
+        self.inner.via_write(rs, v);
+    }
+
+    /// Current 6522 VIA IRQ line level (0/1).
+    pub fn via_irq(&self) -> u8 {
+        self.inner.via_irq() as u8
+    }
+
+    /// Drive a VIA handshake input (`line`: 0 = CA1, 1 = CB1). 6502 only.
+    pub fn via_handshake(&mut self, line: u8, high: bool) {
+        self.inner.via_handshake(line, high);
+    }
+
     /// Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
     pub fn port_read(&self, port: u8) -> u8 {
         self.inner.port_read(port)
@@ -261,6 +291,16 @@ impl Emulator {
     /// Current reload/count of an 8086 PIT channel (0..2). Other ISAs: 0.
     pub fn pit_count(&self, n: usize) -> u16 {
         self.inner.pit_count(n)
+    }
+
+    /// PC speaker output level (8086 port 61h gate+enable AND channel 2 OUT).
+    pub fn speaker(&self) -> u8 {
+        self.inner.speaker_level() as u8
+    }
+
+    /// Raw port 61h speaker latch (8086 only, 0 otherwise).
+    pub fn speaker_ctrl(&self) -> u8 {
+        self.inner.speaker_ctrl()
     }
 
     /// Inject a received serial byte into the 8051 (sets SBUF + RI).

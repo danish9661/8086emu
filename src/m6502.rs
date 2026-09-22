@@ -4,6 +4,7 @@
 //! $FFFA (NMI) / $FFFE (IRQ+BRK). Writing port `0x01` prints A.
 
 use crate::cpu::{Cpu, Mem, Output, FlagSet, Reg, Disasm, RunResult};
+use crate::via6522::{Via6522, VIA_BASE, VIA_SIZE};
 
 const STACK_BASE: u32 = 0x100;
 
@@ -22,6 +23,11 @@ pub struct Cpu6502 {
     pub ports: [u8; 256],
     pub pending_nmi: bool,
     pub pending_irq: bool,
+    /// Externally-requested IRQ latch (`request_irq`, e.g. the IDE IRQ
+    /// button). Unlike the VIA line below this stays latched while I = 1.
+    ext_irq: bool,
+    /// MOS 6522 VIA (memory-mapped at $6000-$600F).
+    pub via: Via6522,
 }
 
 impl Default for Cpu6502 {
@@ -30,7 +36,7 @@ impl Default for Cpu6502 {
             mem: Mem::new(1 << 16),
             a: 0, x: 0, y: 0, pc: 0, sp: 0xFD, p: 0x24,
             halt: false, out: Output::default(), halted_reason: None, ports: [0; 256],
-            pending_nmi: false, pending_irq: false,
+            pending_nmi: false, pending_irq: false, ext_irq: false, via: Via6522::new(),
         };
         c.reset();
         c
@@ -55,8 +61,19 @@ impl Cpu6502 {
         self.set(Self::Z, v == 0);
         self.set(Self::N, v & 0x80 != 0);
     }
-    fn rd(&self, a: u32) -> u8 { self.mem.read(a as usize) }
-    fn wr(&mut self, a: u32, v: u8) { self.mem.write(a as usize, v); }
+    fn rd(&self, a: u32) -> u8 {
+        if a >= VIA_BASE && a < VIA_BASE + VIA_SIZE {
+            return self.via.read((a - VIA_BASE) as u8);
+        }
+        self.mem.read(a as usize)
+    }
+    fn wr(&mut self, a: u32, v: u8) {
+        if a >= VIA_BASE && a < VIA_BASE + VIA_SIZE {
+            self.via.write((a - VIA_BASE) as u8, v);
+            return;
+        }
+        self.mem.write(a as usize, v);
+    }
     fn push(&mut self, v: u8) {
         self.wr(STACK_BASE + self.sp as u32, v);
         self.sp = self.sp.wrapping_sub(1);
@@ -84,7 +101,16 @@ impl Cpu6502 {
     /// Raise an NMI (vectored through $FFFA, non-maskable, B flag clear).
     pub fn request_nmi(&mut self) { self.pending_nmi = true; }
     /// Raise a maskable IRQ (vectored through $FFFE, honours the I flag).
-    pub fn request_irq(&mut self) { self.pending_irq = true; }
+    /// Latched externally, so it waits out SEI and fires after CLI.
+    pub fn request_irq(&mut self) { self.ext_irq = true; self.pending_irq = true; }
+    /// Drive the VIA CA1 input line (edge per PCR bit 0).
+    pub fn via_ca1(&mut self, high: bool) { self.via.set_ca1(high); }
+    /// Drive the VIA CB1 input line (edge per PCR bit 4).
+    pub fn via_cb1(&mut self, high: bool) { self.via.set_cb1(high); }
+    /// Count one PB6 pulse (VIA T2 pulse-counting mode, ACR5 = 1).
+    pub fn via_pb6(&mut self) { self.via.pulse_pb6(); }
+    /// Inject external pin levels seen on VIA port A (0) / B (1) inputs.
+    pub fn via_pins(&mut self, port: u8, v: u8) { self.via.set_pins(port, v); }
 
     fn do_interrupt(&mut self, vector: u16, brk: bool) {
         let pc = self.pc;
@@ -392,7 +418,8 @@ impl Cpu for Cpu6502 {
     fn reset(&mut self) {
         self.a = 0; self.x = 0; self.y = 0; self.sp = 0xFD; self.p = 0x24;
         self.halt = false; self.halted_reason = None; self.out = Output::default();
-        self.pending_nmi = false; self.pending_irq = false;
+        self.pending_nmi = false; self.pending_irq = false; self.ext_irq = false;
+        self.via = Via6522::new();
         // fetch reset vector
         let lo = self.mem.read(0xFFFC);
         let hi = self.mem.read(0xFFFD);
@@ -413,12 +440,19 @@ impl Cpu for Cpu6502 {
             if (mode == Mode::ZP || mode == Mode::ABS) && addr == 0xF001 { self.out.put_char(self.a as char); }
         }
         self.execute(inst, mode, addr);
+        // The VIA runs alongside the CPU: one timer tick per instruction.
+        // Its IRQ is a *level*: follow the live line so a request latched
+        // while I = 1 vanishes if the ISR already cleared the source (no
+        // spurious re-entry after RTI). External requests stay latched.
+        self.via.tick();
+        self.pending_irq = self.ext_irq || self.via.irq();
         // Service hardware interrupts between instructions (NMI > IRQ).
         if self.pending_nmi {
             self.pending_nmi = false;
             self.do_interrupt(0xFFFA, false);
         } else if self.pending_irq && !self.get(Self::I) {
             self.pending_irq = false;
+            self.ext_irq = false;
             self.do_interrupt(0xFFFE, false);
         }
         true
@@ -462,7 +496,13 @@ impl Cpu for Cpu6502 {
         (0..len).map(|i| self.rd(addr + i as u32)).collect()
     }
     fn mem_write(&mut self, addr: u32, data: &[u8]) {
-        for (i, b) in data.iter().enumerate() { self.wr(addr + i as u32, *b); }
+        // Loader/debugger path: write backing RAM directly so bulk image loads
+        // (e.g. a 64 KiB image padded out to the $FFFE vectors) never program
+        // the VIA with zero-fill bytes. Use `via.write` (Emulator::via_write)
+        // to program registers; reads still return the live register values.
+        for (i, b) in data.iter().enumerate() {
+            self.mem.write(addr as usize + i, *b);
+        }
     }
     fn snapshot(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(8 + self.mem.size());
@@ -472,11 +512,14 @@ impl Cpu for Cpu6502 {
         v.push(if self.pending_nmi { 1 } else { 0 });
         v.push(if self.pending_irq { 1 } else { 0 });
         v.extend_from_slice(&self.mem.data);
+        v.extend_from_slice(&self.via.snapshot());
+        v.push(self.ext_irq as u8);
         v
     }
     fn restore(&mut self, data: &[u8]) {
-        const NEED: usize = 2 + 5 + 3 + 65536;
-        if data.len() < NEED {
+        const OLD_NEED: usize = 2 + 5 + 3 + 65536;
+        const VIA_LEN: usize = 21;
+        if data.len() < OLD_NEED {
             return;
         }
         let mut o = 0;
@@ -488,6 +531,16 @@ impl Cpu for Cpu6502 {
         self.pending_nmi = data[o] != 0; o += 1;
         self.pending_irq = data[o] != 0; o += 1;
         for b in &mut self.mem.data { *b = data[o]; o += 1; }
+        if data.len() >= o + VIA_LEN {
+            self.via.restore(&data[o..o + VIA_LEN]);
+            o += VIA_LEN;
+        } else {
+            self.via = Via6522::new();
+        }
+        // Pre-VIA snapshots have no ext latch: keep a pending request that
+        // the (reset) VIA line cannot explain, else drop it.
+        self.ext_irq = data.get(o).is_some_and(|b| *b != 0)
+            || (self.pending_irq && !self.via.irq());
     }
     fn is_halted(&self) -> bool { self.halt }
 

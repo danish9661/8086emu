@@ -12,6 +12,8 @@ pub mod disasm8085;
 pub mod disasm8051;
 pub mod m6502;
 pub mod z80;
+pub mod z80ctc;
+pub mod via6522;
 pub mod rv32;
 pub mod pit;
 pub mod pic8259;
@@ -44,13 +46,13 @@ pub enum Emulator {
 
 pub fn make_emulator(isa: &str) -> Result<Emulator, String> {
     match isa.to_ascii_uppercase().as_str() {
-        "8086" | "X86" => Ok(Emulator::I8086(Box::<i8086::Cpu8086>::default())),
+        "8086" | "8088" | "X86" => Ok(Emulator::I8086(Box::<i8086::Cpu8086>::default())),
         "8085" => Ok(Emulator::I8085(Box::default())),
         "8051" | "MCS51" | "MCS-51" => Ok(Emulator::Mcs51(Box::<mcs51::Cpu8051>::default())),
         "RV32" | "RV32I" | "RISC-V" | "RISCV" => Ok(Emulator::Rv32(Box::<rv32::CpuRv32>::default())),
         "6502" | "65C02" | "R6502" | "M6502" | "MOS6502" => Ok(Emulator::M6502(Box::<m6502::Cpu6502>::default())),
         "Z80" | "ZILOG" => Ok(Emulator::Z80(Box::<z80::CpuZ80>::default())),
-        other => Err(format!("unknown ISA '{other}'; expected 8086, 8085, 8051, rv32, 6502 or z80")),
+        other => Err(format!("unknown ISA '{other}'; expected 8086 (or 8088), 8085, 8051, rv32, 6502 or z80")),
     }
 }
 
@@ -216,6 +218,61 @@ impl Emulator {
         }
     }
 
+    /// Inject one external CLK/TRG pulse into Z80 CTC channel `ch` (0-3,
+    /// counter mode). Z80 only; returns true on terminal count.
+    pub fn ctc_pulse(&mut self, ch: usize) -> bool {
+        match self {
+            Emulator::Z80(c) => c.ctc_pulse(ch),
+            _ => false,
+        }
+    }
+
+    /// Live Z80 CTC down-counter of channel `ch` (0-3). 0 for other ISAs.
+    pub fn ctc_count(&self, ch: usize) -> u16 {
+        match self {
+            Emulator::Z80(c) => c.ctc.count(ch),
+            _ => 0,
+        }
+    }
+
+    /// Read a MOS 6522 VIA register `rs` (0-15, mapped at $6000). 6502 only.
+    pub fn via_read(&self, rs: u8) -> u8 {
+        match self {
+            Emulator::M6502(c) => c.via.read(rs),
+            _ => 0,
+        }
+    }
+
+    /// Write a MOS 6522 VIA register `rs` (0-15). 6502 only.
+    pub fn via_write(&mut self, rs: u8, v: u8) {
+        if let Emulator::M6502(c) = self {
+            c.via.write(rs, v);
+        }
+    }
+
+    /// Current 6522 VIA IRQ line level. False for other ISAs.
+    pub fn via_irq(&self) -> bool {
+        match self {
+            Emulator::M6502(c) => c.via.irq(),
+            _ => false,
+        }
+    }
+
+    /// Drive the VIA CA1/CB1 handshake inputs (`line`: 0 = CA1, 1 = CB1).
+    /// 6502 only.
+    pub fn via_handshake(&mut self, line: u8, high: bool) {
+        if let Emulator::M6502(c) = self {
+            if line == 0 { c.via_ca1(high); } else { c.via_cb1(high); }
+        }
+    }
+
+    /// Inject external pin levels seen on VIA port A (0) / B (1). 6502 only.
+    pub fn via_pins(&mut self, port: u8, v: u8) {
+        if let Emulator::M6502(c) = self {
+            c.via_pins(port, v);
+        }
+    }
+
     /// Read an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins
     /// merged with the latch, quasi-bidirectional). For 8086/8085 this also
     /// reflects PPI/Flash/RTC/ADC/LCD/DMA registers.
@@ -246,6 +303,7 @@ impl Emulator {
                     0xE2 => c.ppi.read_pc(),
                     0xE3 => c.ppi.read_ctrl(),
                     0xE8 => c.flash.status(),
+                    0x61 => c.read_speaker(),
                     0x70 => c.rtc.read_sel(),
                     0x71 => c.rtc.read_data(),
                     0x31 => c.rtc.i2c_read(),
@@ -293,6 +351,7 @@ impl Emulator {
                     0xE2 => c.ppi.write_pc(v),
                     0xE3 => c.ppi.write_ctrl(v),
                     0xE9 => c.flash.command(v),
+                    0x61 => c.write_speaker(v),
                     0x70 => c.rtc.write_sel(v),
                     0x71 => c.rtc.write_data(v),
                     0x30 => c.rtc.i2c_write(v),
@@ -383,6 +442,23 @@ impl Emulator {
     pub fn pit_count(&self, n: usize) -> u16 {
         match self {
             Self::I8086(c) => c.pit_count(n),
+            _ => 0,
+        }
+    }
+
+    /// PC speaker output level (8086 port 61h: PIT channel 2 OUT gated by the
+    /// speaker-enable bit). False for other ISAs.
+    pub fn speaker_level(&self) -> bool {
+        match self {
+            Self::I8086(c) => c.speaker_level(),
+            _ => false,
+        }
+    }
+
+    /// Raw port 61h speaker latch (8086 only, 0 otherwise).
+    pub fn speaker_ctrl(&self) -> u8 {
+        match self {
+            Self::I8086(c) => c.speaker_ctrl(),
             _ => 0,
         }
     }

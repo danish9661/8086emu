@@ -52,7 +52,7 @@ function setPopped(s) { try { localStorage.setItem(POP_KEY, JSON.stringify([...s
 function getPos() { try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}'); } catch { return {}; } }
 function setPos(p) { try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch {} }
 function deviceTitle(id) {
-  return ({ traffic:'Traffic light', seven:'7-segment', stepper:'Stepper', printer:'Printer', robot:'Robot grid', led:'LED matrix', timing:'Clock / timers', ppi:'8255 PPI', flash:'Flash/EEPROM', rtc:'RTC DS1307', adc:'ADC0808', lcd:'LCD 1602', dma:'8237 DMA', usart:'8251 USART', kbd:'8279 Kbd/Disp', i2c:'I2C EEPROM', spi:'SPI Flash' })[id] || id;
+  return ({ traffic:'Traffic light', seven:'7-segment', stepper:'Stepper', printer:'Printer', robot:'Robot grid', led:'LED matrix', timing:'Clock / timers', speaker:'PC speaker', ctc:'Z80 CTC', via:'6522 VIA', ppi:'8255 PPI', flash:'Flash/EEPROM', rtc:'RTC DS1307', adc:'ADC0808', lcd:'LCD 1602', dma:'8237 DMA', usart:'8251 USART', kbd:'8279 Kbd/Disp', i2c:'I2C EEPROM', spi:'SPI Flash' })[id] || id;
 }
 function ensureFloater(id) {
   if (floaters[id]) return floaters[id];
@@ -144,6 +144,9 @@ export function renderDevices(emu, isa) {
   const panel = document.getElementById('devices');
   if (!panel) return;
   const box = document.getElementById('devicePanel');
+  liveEmu = emu;
+  if (isa === 'Z80') { box.style.display = ''; renderCtc(panel, emu); syncFloaters(panel); return; }
+  if (isa === '6502') { box.style.display = ''; renderVia(panel, emu); syncFloaters(panel); return; }
   if (isa !== '8086' && isa !== '8085' && isa !== '8051') {
     box.style.display = '';
     panel.innerHTML =
@@ -290,6 +293,18 @@ export function renderDevices(emu, isa) {
   const i2cDev = isa==='8051' ? `<div class="dev" id="dev-i2c"><h3>I2C EEPROM <span class="p">60h/61h</span><button class="dev-pop" data-dev="i2c" title="Pop out">↗</button></h3>${i2cHtml}</div>` : '';
   const spiDev = isa==='8051' ? `<div class="dev" id="dev-spi"><h3>SPI Flash <span class="p">62h/63h</span><button class="dev-pop" data-dev="spi" title="Pop out">↗</button></h3>${spiHtml}</div>` : '';
 
+  // PC speaker (8086 only): PIT channel 2 in mode 3 + port 61h gate/enable.
+  let speakerDev = '';
+  if (isa === '8086') {
+    let lvl = false, ctl = 0;
+    try { lvl = !!emu.speaker(); } catch {}
+    try { ctl = emu.speaker_ctrl(); } catch {}
+    speakerDev = `<div class="dev" id="dev-speaker"><h3>PC speaker <span class="p">61h</span><button class="dev-pop" data-dev="speaker" title="Pop out">↗</button></h3>` +
+      `<div class="traffic"><span class="lamp ${lvl ? 'grn on' : 'grn'}"></span></div>` +
+      `<div class="mono">level:${lvl ? 'HIGH' : 'low'} ctrl=${ctl.toString(16).padStart(2, '0')}h (b0 gate b1 enable)</div>` +
+      `<div class="mono">ch2 mode 3 + 61h=03h beeps</div></div>`;
+  }
+
   panel.innerHTML =
     `<div class="dev" id="dev-traffic"><h3>Traffic light <span class="p">10h</span><button class="dev-pop" data-dev="traffic" title="Pop out">↗</button></h3>${traffic}</div>` +
     `<div class="dev" id="dev-seven"><h3>7-segment <span class="p">11h/12h</span><button class="dev-pop" data-dev="seven" title="Pop out">↗</button></h3>${seven}</div>` +
@@ -297,10 +312,16 @@ export function renderDevices(emu, isa) {
     `<div class="dev" id="dev-printer"><h3>Printer <span class="p">14h</span><button class="dev-pop" data-dev="printer" title="Pop out">↗</button></h3>${printer}</div>` +
     `<div class="dev" id="dev-robot"><h3>Robot grid <span class="p">16h/17h</span><button class="dev-pop" data-dev="robot" title="Pop out">↗</button></h3>${robot}</div>` +
     `<div class="dev" id="dev-led"><h3>LED matrix <span class="p">20h-27h</span><button class="dev-pop" data-dev="led" title="Pop out">↗</button></h3>${led}</div>` +
+    speakerDev +
     ppiDev + flashDev + rtcDev + adcDev + lcdDev + dmaDev + usartDev + kbdDev + i2cDev + spiDev +
     timing;
 
   // Keep popped-out floaters live and hide the in-panel copy while popped.
+  syncFloaters(panel);
+}
+
+// Share the floater-sync tail between the 8086-kit view and the Z80/6502 views.
+function syncFloaters(panel) {
   const popped = getPopped();
   for (const id of popped) {
     const src = panel.querySelector('#dev-' + id);
@@ -308,6 +329,60 @@ export function renderDevices(emu, isa) {
     src.style.display = 'none';
     ensureFloater(id).body.innerHTML = src.innerHTML;
   }
+}
+
+// Latest emulator for the CTC/VIA pulse buttons below (set on every render).
+let liveEmu = null;
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('click', (e) => {
+    const c = e.target.closest && e.target.closest('[data-ctc]');
+    if (c && liveEmu && liveEmu.ctc_pulse) {
+      try { liveEmu.ctc_pulse(parseInt(c.dataset.ctc, 10) || 0); } catch {}
+      return;
+    }
+    const v = e.target.closest && e.target.closest('[data-via-pulse]');
+    if (v && liveEmu && liveEmu.via_handshake) {
+      try {
+        const line = parseInt(v.dataset.viaPulse, 10) || 0;
+        liveEmu.via_handshake(line, true);
+        liveEmu.via_handshake(line, false);
+      } catch {}
+    }
+  });
+}
+
+// Z80 CTC panel (channels at I/O 10h-13h).
+function renderCtc(panel, emu) {
+  let rows = '';
+  for (let ch = 0; ch < 4; ch++) {
+    let cnt = 0;
+    try { cnt = emu.ctc_count(ch); } catch { cnt = 0; }
+    rows += `<div class="mono">CH${ch} cnt=${cnt.toString(16).padStart(2, '0')}h ` +
+            `<button data-ctc="${ch}" title="Inject one CLK/TRG pulse (counter mode)">pulse</button></div>`;
+  }
+  panel.innerHTML =
+    `<div class="dev" id="dev-ctc"><h3>Z80 CTC <span class="p">10h-13h</span>` +
+    `<button class="dev-pop" data-dev="ctc" title="Pop out">↗</button></h3>${rows}` +
+    `<div class="mono">timer: OUT n,ctrl (IE+mode+TC) then TC · counter: pulse counts</div></div>`;
+}
+
+// 6522 VIA panel (memory-mapped $6000-$600F).
+function renderVia(panel, emu) {
+  let regs = [];
+  try { regs = Array.from(new Uint8Array(emu.mem(0x6000, 16))); }
+  catch { regs = new Array(16).fill(0); }
+  const hx = (v) => v.toString(16).padStart(2, '0');
+  const names = ['ORB','ORA','DDRB','DDRA','T1C-L','T1C-H','T1L-L','T1L-H','T2C-L','T2C-H','SR','ACR','PCR','IFR','IER','ORAh'];
+  let cells = names.map((n, i) => `<span class="port" title="$600${i.toString(16).toUpperCase()} ${n}">${n} ${hx(regs[i] || 0)}</span>`).join('');
+  let irq = 0;
+  try { irq = emu.via_irq(); } catch {}
+  panel.innerHTML =
+    `<div class="dev" id="dev-via"><h3>6522 VIA <span class="p">$6000-F</span>` +
+    `<button class="dev-pop" data-dev="via" title="Pop out">↗</button></h3>` +
+    `<div class="mono">IRQ:${irq ? 'asserted' : 'idle'}</div><div>${cells}</div>` +
+    `<div class="mono"><button data-via-pulse="0">pulse CA1</button> ` +
+    `<button data-via-pulse="1">pulse CB1</button></div>` +
+    `<div class="mono">T1: latch+T1C-H starts · IFR write clears · IER enables</div></div>`;
 }
 
 // Static memory-map overview per ISA for the "Memory map" panel.
@@ -349,6 +424,24 @@ export function renderMemMap(emu, isa) {
         else rows.push('A000–BFFF   Flash/EEPROM 8 KiB (A000h)');
       } catch {}
       rows.push('00–FF       I/O ports: E0 PPI, 28 ADC, 38 LCD, 70 RTC, D0 DMA');
+   } else if (isa === 'Z80') {
+     rows = [
+       '0000–FFFF   main RAM (64 KiB)',
+       '0010–0013   Z80 CTC channels 0-3 (timer/counter + IRQ)',
+       '00–FF       I/O ports: 01 console, 10-13 CTC',
+     ];
+   } else if (isa === '6502') {
+     rows = [
+       '0000–00FF   zero page',
+       '0100–01FF   stack',
+       '6000–600F   6522 VIA registers (timers/ports/IRQ)',
+       'FFFA–FFFF   NMI / reset / IRQ vectors',
+     ];
+   } else if (isa === 'rv32') {
+     rows = [
+       '00000–FFFFF  flat RAM (1 MiB)',
+       'UART: not modelled — use ECALL semihosting (distant-future work)',
+     ];
    } else {
      rows = [];
      rows.push(emu.ea_active()

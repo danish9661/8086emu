@@ -19,6 +19,14 @@ export class Emulator {
      */
     assemble_info(source: string): string[];
     /**
+     * Live Z80 CTC down-counter of channel `ch` (0 for other ISAs).
+     */
+    ctc_count(ch: number): number;
+    /**
+     * Inject one CLK/TRG pulse into Z80 CTC channel `ch` (counter mode).
+     */
+    ctc_pulse(ch: number): number;
+    /**
      * 8086 text cursor as [col, row]; [0,0] otherwise.
      */
     cursor(): Uint8Array;
@@ -106,7 +114,7 @@ export class Emulator {
      */
     mem_write(addr: number, data: Uint8Array): void;
     /**
-     * Create an emulator for one of: "8086", "8085", "8051", "6502", "Z80", "rv32".
+     * Create an emulator for one of: "8086" (or "8088", same core), "8085", "8051", "6502", "Z80", "rv32".
      * Throws if the ISA name is unknown.
      */
     constructor(isa: string);
@@ -230,6 +238,14 @@ export class Emulator {
      * Read the 8085 SOD (Serial Output Data) pin set by SIM (bit 7). 8085 only.
      */
     sod(): number;
+    /**
+     * PC speaker output level (8086 port 61h gate+enable AND channel 2 OUT).
+     */
+    speaker(): number;
+    /**
+     * Raw port 61h speaker latch (8086 only, 0 otherwise).
+     */
+    speaker_ctrl(): number;
     spi_read(addr: number): number;
     spi_write(addr: number, data: number): void;
     /**
@@ -245,6 +261,22 @@ export class Emulator {
      * 8251 USART status / Rx push.
      */
     usart_status(): number;
+    /**
+     * Drive a VIA handshake input (`line`: 0 = CA1, 1 = CB1). 6502 only.
+     */
+    via_handshake(line: number, high: boolean): void;
+    /**
+     * Current 6522 VIA IRQ line level (0/1).
+     */
+    via_irq(): number;
+    /**
+     * Read a MOS 6522 VIA register `rs` (0-15, mapped at $6000). 6502 only.
+     */
+    via_read(rs: number): number;
+    /**
+     * Write a MOS 6522 VIA register `rs` (0-15). 6502 only.
+     */
+    via_write(rs: number, v: number): void;
     /**
      * Current 8086 video mode (0 when not 8086 / unknown). MR=13h -> pixel graphics.
      */
@@ -284,6 +316,8 @@ export interface InitOutput {
     readonly emulator_adc_set: (a: number, b: number, c: number) => void;
     readonly emulator_assemble: (a: number, b: number, c: number) => [number, number, number, number];
     readonly emulator_assemble_info: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly emulator_ctc_count: (a: number, b: number) => number;
+    readonly emulator_ctc_pulse: (a: number, b: number) => number;
     readonly emulator_cursor: (a: number) => [number, number];
     readonly emulator_cycles: (a: number) => bigint;
     readonly emulator_disasm: (a: number, b: number, c: number) => [number, number];
@@ -338,12 +372,18 @@ export interface InitOutput {
     readonly emulator_sfr: (a: number, b: number) => number;
     readonly emulator_snapshot: (a: number) => [number, number];
     readonly emulator_sod: (a: number) => number;
+    readonly emulator_speaker: (a: number) => number;
+    readonly emulator_speaker_ctrl: (a: number) => number;
     readonly emulator_spi_read: (a: number, b: number) => number;
     readonly emulator_spi_write: (a: number, b: number, c: number) => void;
     readonly emulator_sram_region: (a: number) => [number, number];
     readonly emulator_step: (a: number) => void;
     readonly emulator_usart_rx: (a: number, b: number) => void;
     readonly emulator_usart_status: (a: number) => number;
+    readonly emulator_via_handshake: (a: number, b: number, c: number) => void;
+    readonly emulator_via_irq: (a: number) => number;
+    readonly emulator_via_read: (a: number, b: number) => number;
+    readonly emulator_via_write: (a: number, b: number, c: number) => void;
     readonly emulator_video_mode: (a: number) => number;
     readonly emulator_waiting_input: (a: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

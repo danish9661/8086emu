@@ -161,6 +161,9 @@ pub struct Cpu8086 {
     gfx: bool,        // true when in a pixel graphics mode (framebuffer at 0xA0000)
     // 8253 PIT (system timer): channel 0 pulses IRQ0
     pit: Pit8253,
+    // PC speaker control latch (port 61h): bit 0 = PIT channel 2 gate,
+    // bit 1 = speaker data enable (ANDed with the channel 2 OUT level).
+    speaker: u8,
     // 8259 PIC: routes IRQ lines (incl. PIT channel 0) to the INTR pin
     pic: Pic8259,
     // 8255 PPI (lab kit: ports PA/PB/PC via 0xE0..0xE3)
@@ -255,6 +258,7 @@ impl Cpu8086 {
             video_mode: 3,
             gfx: false,
             pit: Pit8253::new(),
+            speaker: 0,
             pic: Pic8259::new(),
             ppi: Ppi8255::new(),
             flash: { let mut f = ExternalFlash::new(); f.configure(0xE0000, 0x10000); f },
@@ -284,6 +288,28 @@ impl Cpu8086 {
     /// CPU is in a pixel graphics mode, else None. The IDE renders it to canvas.
     pub fn gfx_framebuffer(&self) -> Option<(u32, u32, u32)> {
         if self.gfx { Some((Self::GFX_BASE as u32, Self::GFX_W as u32, Self::GFX_H as u32)) } else { None }
+    }
+    /// PC speaker output level: channel 2 OUT gated by port 61h bit 1
+    /// (speaker enable). Drive channel 2 in mode 3 and set bits 0+1 of
+    /// port 61h to beep; the IDE renders this as a level indicator.
+    pub fn speaker_level(&self) -> bool {
+        self.speaker & 0x02 != 0 && self.pit.ch_out(2)
+    }
+    /// Raw port 61h control latch (bit 0 = timer gate, bit 1 = enable).
+    pub fn speaker_ctrl(&self) -> u8 {
+        self.speaker
+    }
+    /// Write port 61h: bit 0 drives the PIT channel 2 gate, bit 1 enables
+    /// the speaker (audible level = channel 2 OUT while enabled).
+    pub fn write_speaker(&mut self, v: u8) {
+        self.speaker = v;
+        self.pit.set_gate(2, v & 0x01 != 0);
+    }
+    /// Read port 61h: low nibble is the stored latch, bit 5 reflects the
+    /// PIT channel 2 OUT level (real hardware also toggles bit 4 on refresh;
+    /// we return it clear).
+    pub fn read_speaker(&self) -> u8 {
+        (self.speaker & 0x0F) | ((self.pit.ch_out(2) as u8) << 5)
     }
     /// Total host clock cycles executed (drives the 8253 PIT; CPU_HZ_8086).
     pub fn cycles(&self) -> u64 { self.cycles }
@@ -648,6 +674,7 @@ impl Cpu8086 {
             0x41 => self.pit.write_data(1, v),
             0x42 => self.pit.write_data(2, v),
             0x43 => self.pit.write_cmd(v),
+            0x61 => self.write_speaker(v),
             0xE0 => self.ppi.write_pa(v),
             0xE1 => self.ppi.write_pb(v),
             0xE2 => self.ppi.write_pc(v),
@@ -687,6 +714,7 @@ impl Cpu8086 {
             0x40 => self.pit.read_data(0),
             0x41 => self.pit.read_data(1),
             0x42 => self.pit.read_data(2),
+            0x61 => self.read_speaker(),
             0xE0 => self.ppi.read_pa(),
             0xE1 => self.ppi.read_pb(),
             0xE2 => self.ppi.read_pc(),
@@ -2463,6 +2491,7 @@ impl Cpu for Cpu8086 {
         self.cursor = (0, 0);
         self.video_mode = 3;
         self.pit = Pit8253::new();
+        self.speaker = 0;
         self.pic = Pic8259::new();
         self.cycles = 0;
         self.mem_clear_text();
@@ -2591,7 +2620,7 @@ impl Cpu for Cpu8086 {
 
     fn snapshot(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(34 + MEM_SIZE + self.keybuf.len() + 256 + 67 + 53 + 200_000);
-        v.push(11); // v11 adds usart/kbdisplay
+        v.push(12); // v12 adds the PC speaker latch (port 61h)
         for r in [self.ax, self.bx, self.cx, self.dx, self.si, self.di, self.bp, self.sp,
                   self.cs, self.ds, self.es, self.ss, self.fs, self.gs, self.ip, self.flags] {
             v.extend_from_slice(&r.to_le_bytes());
@@ -2626,6 +2655,7 @@ impl Cpu for Cpu8086 {
         v.extend_from_slice(&self.dma.snapshot());
         v.extend_from_slice(&self.usart.snapshot());
         v.extend_from_slice(&self.kbdisplay.snapshot());
+        v.push(self.speaker);
         v
     }
 
@@ -2646,6 +2676,7 @@ impl Cpu for Cpu8086 {
         self.ip = rd(); self.flags = rd();
         self.halted = it.next().is_some_and(|b| b != 0);
         self.input_pending = it.next().is_some_and(|b| b != 0);
+        self.speaker = 0;
         // body offset = 1 (ver) + 16 regs*2 + halted + input = 35
         let body = &data[35..];
         let n = body.len().min(MEM_SIZE);
@@ -2773,6 +2804,14 @@ impl Cpu for Cpu8086 {
                             off2+=usart_sz;
                             if off2 < data.len() { self.kbdisplay.restore(&data[off2..]); }
                         }
+                    }
+                }
+                if ver >= 12 {
+                    // v12 appends the speaker latch after kbdisplay; it is the
+                    // final byte of the blob.
+                    if let Some(&b) = data.last() {
+                        self.speaker = b;
+                        self.pit.set_gate(2, b & 0x01 != 0);
                     }
                 }
             }

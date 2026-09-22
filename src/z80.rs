@@ -12,6 +12,7 @@
 //! `0xDD 0xCB` / `0xFD 0xCB` for indexed bit ops.
 
 use crate::cpu::{Cpu, Disasm, FlagSet, Mem, Output, Reg};
+use crate::z80ctc::Z80Ctc;
 
 #[derive(Clone)]
 pub struct CpuZ80 {
@@ -28,6 +29,11 @@ pub struct CpuZ80 {
     mem: Mem,
     pending_int: bool,
     pending_nmi: bool,
+    /// Externally-requested INT latch (`request_int`, e.g. the IDE button).
+    /// Unlike the CTC line below this stays latched while IFF1 = 0.
+    ext_int: bool,
+    /// Z80 CTC counter/timer (channels at I/O 0x10-0x13).
+    pub ctc: Z80Ctc,
 }
 
 impl Default for CpuZ80 {
@@ -38,7 +44,7 @@ impl Default for CpuZ80 {
             ix: 0, iy: 0, sp: 0xFFFF, pc: 0, i: 0, r: 0,
             iff1: false, iff2: false, im: 0, halted: false,
             out: Output::default(), ports: [0; 256], mem: Mem::new(1 << 16),
-            pending_int: false, pending_nmi: false,
+            pending_int: false, pending_nmi: false, ext_int: false, ctc: Z80Ctc::new(),
         };
         m.reset();
         m
@@ -84,10 +90,17 @@ impl CpuZ80 {
 
     fn in_port(&mut self, port: u16) -> u8 {
         let p = (port & 0xFF) as usize;
+        if (0x10..=0x13).contains(&p) {
+            return self.ctc.read(p - 0x10);
+        }
         self.ports[p]
     }
     fn out_port(&mut self, port: u16, v: u8) {
         let p = (port & 0xFF) as usize;
+        if (0x10..=0x13).contains(&p) {
+            self.ctc.write(p - 0x10, v);
+            return;
+        }
         self.ports[p] = v;
         if p == 0x01 { self.out.put_char(v as char); }
     }
@@ -611,11 +624,28 @@ impl CpuZ80 {
 }
 
 impl CpuZ80 {
-    pub fn request_int(&mut self) { self.pending_int = true; }
+    pub fn request_int(&mut self) { self.ext_int = true; self.pending_int = true; }
     pub fn request_nmi(&mut self) { self.pending_nmi = true; }
     pub fn set_im(&mut self, m: u8) { self.im = m & 3; }
-    pub fn port_read(&self, port: u8) -> u8 { self.ports[port as usize] }
-    pub fn port_write(&mut self, port: u8, v: u8) { self.ports[port as usize] = v; }
+    /// Inject one external CLK/TRG pulse into CTC channel `ch` (counter mode).
+    pub fn ctc_pulse(&mut self, ch: usize) -> bool {
+        let fired = self.ctc.pulse(ch);
+        self.pending_int = self.ext_int || self.ctc.irq_pending();
+        fired
+    }
+    pub fn port_read(&self, port: u8) -> u8 {
+        if (0x10..=0x13).contains(&port) {
+            return self.ctc.read((port - 0x10) as usize);
+        }
+        self.ports[port as usize]
+    }
+    pub fn port_write(&mut self, port: u8, v: u8) {
+        if (0x10..=0x13).contains(&port) {
+            self.ctc.write((port - 0x10) as usize, v);
+            return;
+        }
+        self.ports[port as usize] = v;
+    }
     pub fn rom_region(&self) -> (u32, u32) { let (b, l) = self.mem.rom_range(); (b as u32, l as u32) }
     pub fn load_rom(&mut self, data: &[u8], addr: u32) {
         self.mem.load(addr as usize, data);
@@ -631,6 +661,8 @@ impl Cpu for CpuZ80 {
         self.a2 = 0; self.f2 = 0; self.b2 = 0; self.c2 = 0; self.d2 = 0; self.e2 = 0; self.h2 = 0; self.l2 = 0;
         self.ix = 0; self.iy = 0; self.sp = 0xFFFF; self.pc = 0; self.i = 0; self.r = 0;
         self.iff1 = false; self.iff2 = false; self.im = 0; self.halted = false; self.pending_int = false; self.pending_nmi = false;
+        self.ext_int = false;
+        self.ctc = Z80Ctc::new();
         self.out = Output::default();
     }
 
@@ -644,6 +676,8 @@ impl Cpu for CpuZ80 {
         }
         if self.pending_int && self.iff1 {
             self.pending_int = false;
+            self.ext_int = false;
+            self.ctc.take_irq(); // consume the CTC latch if it raised this INT
             self.iff2 = self.iff1;
             self.iff1 = false;
             let addr = if self.im == 2 { ((self.i as u16) << 8) as u16 } else { 0x0038 };
@@ -651,7 +685,16 @@ impl Cpu for CpuZ80 {
             self.pc = addr;
             return true;
         }
-        self.run_step()
+        let ok = self.run_step();
+        if ok {
+            // The CTC runs alongside the CPU: one timer tick per instruction.
+            // Its IRQ is a *level*: follow the live line so a request latched
+            // while IFF1 = 0 vanishes if the source was cleared meanwhile (no
+            // spurious re-entry after RETI). External requests stay latched.
+            self.ctc.tick();
+            self.pending_int = self.ext_int || self.ctc.irq_pending();
+        }
+        ok
     }
 
     fn pc(&self) -> u32 { self.pc as u32 }
@@ -716,13 +759,17 @@ impl Cpu for CpuZ80 {
         v.push(self.halted as u8); v.push(self.pending_int as u8); v.push(self.pending_nmi as u8);
         v.extend_from_slice(&self.mem.data);
         v.extend_from_slice(&self.ports);
+        v.extend_from_slice(&self.ctc.snapshot());
+        v.push(self.ext_int as u8);
         v
     }
     fn restore(&mut self, data: &[u8]) {
-        // Fixed header is 33 bytes; then 64 KiB RAM + 256 ports.
+        // Fixed header is 33 bytes; then 64 KiB RAM + 256 ports + 26 CTC bytes.
+        // Pre-CTC snapshots (without the tail) still restore; the CTC resets.
         const HEADER: usize = 16 + 8 + 4 + 4 + 5;
-        const NEED: usize = HEADER + 65536 + 256;
-        if data.len() < NEED {
+        const OLD_NEED: usize = HEADER + 65536 + 256;
+        const CTC_LEN: usize = 26;
+        if data.len() < OLD_NEED {
             return;
         }
         let mut p = 0;
@@ -736,7 +783,17 @@ impl Cpu for CpuZ80 {
         self.halted = rd8!() != 0; self.pending_int = rd8!() != 0; self.pending_nmi = rd8!() != 0;
         let n = self.mem.data.len();
         self.mem.data.copy_from_slice(&data[p..p + n]); p += n;
-        self.ports.copy_from_slice(&data[p..p + 256]);
+        self.ports.copy_from_slice(&data[p..p + 256]); p += 256;
+        if data.len() >= p + CTC_LEN {
+            self.ctc.restore(&data[p..p + CTC_LEN]);
+            p += CTC_LEN;
+        } else {
+            self.ctc = Z80Ctc::new();
+        }
+        // Pre-CTC snapshots have neither tail: keep a pending request the
+        // (reset) CTC line cannot explain, else drop it.
+        self.ext_int = data.get(p).is_some_and(|b| *b != 0)
+            || (self.pending_int && !self.ctc.irq_pending());
     }
     fn is_halted(&self) -> bool { self.halted }
     fn disasm(&self, addr: u32, count: usize) -> Vec<Disasm> {

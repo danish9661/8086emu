@@ -61,6 +61,24 @@ export class Emulator {
         return v2;
     }
     /**
+     * Live Z80 CTC down-counter of channel `ch` (0 for other ISAs).
+     * @param {number} ch
+     * @returns {number}
+     */
+    ctc_count(ch) {
+        const ret = wasm.emulator_ctc_count(this.__wbg_ptr, ch);
+        return ret;
+    }
+    /**
+     * Inject one CLK/TRG pulse into Z80 CTC channel `ch` (counter mode).
+     * @param {number} ch
+     * @returns {number}
+     */
+    ctc_pulse(ch) {
+        const ret = wasm.emulator_ctc_pulse(this.__wbg_ptr, ch);
+        return ret;
+    }
+    /**
      * 8086 text cursor as [col, row]; [0,0] otherwise.
      * @returns {Uint8Array}
      */
@@ -309,7 +327,7 @@ export class Emulator {
         wasm.emulator_mem_write(this.__wbg_ptr, addr, ptr0, len0);
     }
     /**
-     * Create an emulator for one of: "8086", "8085", "8051", "6502", "Z80", "rv32".
+     * Create an emulator for one of: "8086" (or "8088", same core), "8085", "8051", "6502", "Z80", "rv32".
      * Throws if the ISA name is unknown.
      * @param {string} isa
      */
@@ -610,6 +628,22 @@ export class Emulator {
         return ret;
     }
     /**
+     * PC speaker output level (8086 port 61h gate+enable AND channel 2 OUT).
+     * @returns {number}
+     */
+    speaker() {
+        const ret = wasm.emulator_speaker(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Raw port 61h speaker latch (8086 only, 0 otherwise).
+     * @returns {number}
+     */
+    speaker_ctrl() {
+        const ret = wasm.emulator_speaker_ctrl(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * @param {number} addr
      * @returns {number}
      */
@@ -656,6 +690,39 @@ export class Emulator {
     usart_status() {
         const ret = wasm.emulator_usart_status(this.__wbg_ptr);
         return ret;
+    }
+    /**
+     * Drive a VIA handshake input (`line`: 0 = CA1, 1 = CB1). 6502 only.
+     * @param {number} line
+     * @param {boolean} high
+     */
+    via_handshake(line, high) {
+        wasm.emulator_via_handshake(this.__wbg_ptr, line, high);
+    }
+    /**
+     * Current 6522 VIA IRQ line level (0/1).
+     * @returns {number}
+     */
+    via_irq() {
+        const ret = wasm.emulator_via_irq(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Read a MOS 6522 VIA register `rs` (0-15, mapped at $6000). 6502 only.
+     * @param {number} rs
+     * @returns {number}
+     */
+    via_read(rs) {
+        const ret = wasm.emulator_via_read(this.__wbg_ptr, rs);
+        return ret;
+    }
+    /**
+     * Write a MOS 6522 VIA register `rs` (0-15). 6502 only.
+     * @param {number} rs
+     * @param {number} v
+     */
+    via_write(rs, v) {
+        wasm.emulator_via_write(this.__wbg_ptr, rs, v);
     }
     /**
      * Current 8086 video mode (0 when not 8086 / unknown). MR=13h -> pixel graphics.
