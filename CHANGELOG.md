@@ -17,7 +17,7 @@ versions are dated snapshots of `main`.
 - Root `package.json` marked `private:true`, corrected license to MIT, added keywords/engines.
 - `Cargo.toml` version `0.1.0` → `1.0.0`, README refreshed (badges, 6-ISA layout, 133-test count, WASM API trait).
 
-## [1.1.0] - 2026-10-02
+## [1.5.1] - 2026-10-02
 
 ### Added
 - WASM board helpers for circuit platforms (OpenHW-style): `via_pins(port, v)`
