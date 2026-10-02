@@ -647,6 +647,8 @@ impl CpuZ80 {
         self.ports[port as usize] = v;
     }
     pub fn rom_region(&self) -> (u32, u32) { let (b, l) = self.mem.rom_range(); (b as u32, l as u32) }
+    /// Total main-memory size in bytes (64 KiB). Used by the WASM `mem_size()`.
+    pub fn mem_size(&self) -> u32 { self.mem.size() as u32 }
     pub fn load_rom(&mut self, data: &[u8], addr: u32) {
         self.mem.load(addr as usize, data);
         self.mem.set_rom(addr as usize, data.len());

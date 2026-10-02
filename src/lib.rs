@@ -34,7 +34,7 @@ pub mod wasm;
 
 use cpu::{Cpu, FlagSet, Output, Reg, RunResult};
 
-/// Facade over the three cores. The WASM surface and CLI both use this.
+/// Facade over the six ISA cores. The WASM surface and CLI both use this.
 pub enum Emulator {
     I8086(Box<i8086::Cpu8086>),
     I8085(Box<i8085::Cpu8085>),
@@ -190,8 +190,10 @@ impl Emulator {
         self.output_mut().take()
     }
 
-    /// Raise a hardware interrupt. 8085: kind = "TRAP" | "RST75" | "RST65" |
-    /// "RST55" | "INTR" (data = vector). 8051: kind = "INT0" | "INT1".
+    /// Raise a hardware interrupt. 8086: "NMI" | "INTR" (data = vector).
+    /// 8085: "TRAP" | "RST75" | "RST65" | "RST55" | "INTR" (data = vector).
+    /// 8051: "INT0" | "INT1". 6502: "NMI" (else IRQ). Z80: "NMI" (else INT).
+    /// rv32 has no interrupt model (returns Err).
     pub fn request_interrupt(&mut self, kind: &str, data: u32) -> Result<(), String> {
         match self {
             Emulator::I8085(c) => {

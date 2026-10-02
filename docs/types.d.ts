@@ -12,17 +12,9 @@
  *   const emu = new Emulator('8086');
  */
 
-/** One decoded instruction for the disassembler view. */
-export interface DisasmLine {
-  /** Linear address of the instruction. */
-  addr: number;
-  /** Raw machine-code bytes. */
-  bytes: Uint8Array;
-  /** Human-readable mnemonic + operands, e.g. "MOV AX, 1". */
-  text: string;
-}
-
-/** 8086 graphics-mode framebuffer descriptor. */
+/** 8086 graphics-mode framebuffer descriptor (matches the live `GfxInfo` class:
+ *  `base`/`w`/`h` fields only — there is no `bpp`, and it is `undefined`
+ *  (not `null`) when no pixel mode is active). */
 export interface GfxInfo {
   /** Start of the framebuffer in linear memory. */
   base: number;
@@ -30,11 +22,10 @@ export interface GfxInfo {
   w: number;
   /** Height in pixels. */
   h: number;
-  /** Bytes per pixel (1 for mode 13h). */
-  bpp: number;
 }
 
-export type IsaName = '8086' | '8085' | '8051' | '6502' | 'Z80' | 'rv32';
+/** ISA names accepted by `new Emulator(isa)` (case-insensitive; `"8088"` is the 8086 core). */
+export type IsaName = '8086' | '8088' | '8085' | '8051' | '6502' | 'Z80' | 'rv32';
 
 export class Emulator {
   /** Create an emulator. Throws on an unknown ISA name. */
@@ -48,7 +39,7 @@ export class Emulator {
   /** Load machine code into memory at `origin` (0 for 8085/8051/Z80/6502/rv32, 0x100 for 8086). */
   load(code: Uint8Array, origin: number): void;
 
-  /** Execute one instruction. Returns false if the CPU halted. */
+  /** Execute one instruction. */
   step(): void;
   /** Run up to `maxSteps` instructions; returns the number actually executed. */
   run(maxSteps: number): number;
@@ -59,9 +50,9 @@ export class Emulator {
 
   /** Current program counter. */
   pc(): number;
-  /** Register dump as "NAME=value" strings. */
+  /** Register dump as "NAME=value" strings (4-digit hex; rv32 prints 8 digits). */
   regs(): string[];
-  /** Active flag names, e.g. ["ZF", "CY"]. */
+  /** Active flag names in 8086 naming, e.g. ["ZF", "CF"] regardless of ISA. */
   flags(): string[];
   /** Set a register by name (e.g. "AX", "PC"). */
   set_reg(name: string, val: number): void;
@@ -78,8 +69,8 @@ export class Emulator {
   // ---- 8086 graphics ----
   /** 80x25 text framebuffer bytes (char,attr pairs) or [] for other ISAs. */
   screen(): Uint8Array;
-  /** 8086 graphics framebuffer descriptor, or null for non-graphics modes. */
-  gfx(): GfxInfo | null;
+  /** 8086 graphics framebuffer descriptor, or undefined for non-graphics modes. */
+  gfx(): GfxInfo | undefined;
   /** Text-mode cursor as [col, row]. */
   cursor(): Uint8Array;
   /** Current 8086 BIOS video mode number. */
@@ -98,7 +89,7 @@ export class Emulator {
   sod(): number;
 
   // ---- interrupts ----
-  /** Raise a hardware interrupt. Kind depends on ISA (e.g. NMI/INT for Z80, TRAP/INT0 for 8051/8085, NMI/INTR for 6502). */
+  /** Raise a hardware interrupt. 8086: NMI/INTR+vector; 8085: TRAP/RST75/RST65/RST55/INTR+vector; 8051: INT0/INT1; 6502: NMI (else IRQ); Z80: NMI (else INT); rv32: throws. */
   interrupt(kind: string, data: number): void;
   /** Z80: set the interrupt mode (0/1/2). */
   set_interrupt_mode(m: number): void;
@@ -118,6 +109,16 @@ export class Emulator {
   snapshot(): Uint8Array;
   /** Restore a snapshot captured by `snapshot()`. */
   restore(data: Uint8Array): void;
+
+  // ---- circuit-board helpers (OpenHW-style platforms) ----
+  /** Total code/main memory in bytes (8086: 1 MiB, 8085/8051-code/6502/Z80: 64 KiB, rv32: 1 MiB). */
+  mem_size(): number;
+  /** Inject external pin levels on 6502 VIA port A (0) / B (1). */
+  via_pins(port: number, v: number): void;
+  /** Full 256-byte 8051 I2C EEPROM image (undefined for other ISAs). */
+  i2c_dump(): Uint8Array | undefined;
+  /** Write an RTC register via CMOS ports 0x70/0x71 (8086/8085). */
+  rtc_write(reg: number, val: number): void;
 }
 
 export function init(module_or_path?: unknown): Promise<unknown>;

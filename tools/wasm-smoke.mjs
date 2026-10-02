@@ -1,5 +1,5 @@
 // Self-contained WASM smoke test: loads the built pkg directly (no server) and
-// exercises all three ISAs plus the new external-memory / time-travel features.
+// exercises the 8086/8085/8051 cores plus the external-memory / time-travel features.
 // Run with: node tools/wasm-smoke.mjs   (after: wasm-pack build --target web --out-dir docs/pkg --release --features wasm)
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -104,4 +104,4 @@ for (const [name, src, entry, expect] of [
   assert(lines.length > 0 && lines[0].includes(expect), `${name} disasm shows "${expect}" after one step`);
 }
 
-console.log('WASM smoke test passed for all three ISAs.');
+console.log('WASM smoke test passed for the 8086/8085/8051 paths (+ disasm for all three).');

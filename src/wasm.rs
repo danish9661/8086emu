@@ -1,7 +1,8 @@
 //! wasm-bindgen surface (feature = "wasm").
 //!
-//! Exposes a single `Emulator` class that swaps between the 8086/8085/8051
-//! cores, mirroring the JS-facing API documented in AGENTS.md.
+//! Exposes a single `Emulator` class that swaps between the six ISA cores
+//! (8086/8085/8051/6502/Z80/rv32), mirroring the JS-facing API documented in
+//! AGENTS.md.
 
 use crate::{cpu::RunResult, Emulator as Core};
 use wasm_bindgen::prelude::*;
@@ -99,16 +100,27 @@ impl Emulator {
         self.inner.pc()
     }
 
-    /// Register dump as "NAME=value" strings (e.g. "AX=1234").
+    /// Register dump as "NAME=value" strings (e.g. "AX=1234"). rv32 registers
+    /// print full 8-digit hex; 16-bit ISAs print 4 digits.
     pub fn regs(&self) -> Vec<String> {
+        let wide = matches!(self.inner, Core::Rv32(_));
         self.inner
             .regs()
             .iter()
-            .map(|r| format!("{}={:04X}", r.name, r.value & 0xFFFF))
+            .map(|r| {
+                if wide {
+                    format!("{}={:08X}", r.name, r.value)
+                } else {
+                    format!("{}={:04X}", r.name, r.value & 0xFFFF)
+                }
+            })
             .collect()
     }
 
-    /// Active flag names as short strings (e.g. "ZF", "CY").
+    /// Active flag names in the 8086 naming ("CF","ZF","SF","PF","AF","OF",
+    /// "DF","IF","TF"). Every ISA's state is translated into this canonical
+    /// set, so e.g. an 8085 carry shows as "CF" and its interrupt-enable as
+    /// "IF" (see `docs/app.js` FLAG_MAP for the per-ISA display labels).
     pub fn flags(&self) -> Vec<String> {
         let f = self.inner.flags();
         let mut v = Vec::new();
@@ -231,8 +243,10 @@ impl Emulator {
         self.inner.reset();
     }
 
-    /// Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
-    /// "INTR" (data = vector); 8051 = "INT0" | "INT1". Throws on unknown kind.
+    /// Hardware interrupt: 8086 = "NMI" | "INTR" (data = vector);
+    /// 8085 = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR" (data = vector);
+    /// 8051 = "INT0" | "INT1"; 6502 = "NMI" (else IRQ); Z80 = "NMI" (else INT).
+    /// rv32 has no interrupt model (throws).
     pub fn interrupt(&mut self, kind: &str, data: u32) -> Result<(), JsValue> {
         to_js(self.inner.request_interrupt(kind, data))
     }
@@ -270,6 +284,12 @@ impl Emulator {
     /// Drive a VIA handshake input (`line`: 0 = CA1, 1 = CB1). 6502 only.
     pub fn via_handshake(&mut self, line: u8, high: bool) {
         self.inner.via_handshake(line, high);
+    }
+
+    /// Inject external pin levels seen on VIA port A (0) / B (1). 6502 only.
+    /// Lets a circuit board drive the VIA inputs (quasi-bidirectional merge).
+    pub fn via_pins(&mut self, port: u8, v: u8) {
+        self.inner.via_pins(port, v);
     }
 
     /// Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
@@ -377,6 +397,31 @@ impl Emulator {
     /// RTC register read via CMOS ports 0x70/0x71.
     pub fn rtc_reg(&self, reg: u8) -> u8 { self.inner.rtc_read(reg) }
 
+    /// Total code/main memory for the current ISA in bytes
+    /// (8086: 1 MiB, 8085/8051-code/6502/Z80/rv32 from the core's `Mem`).
+    /// Lets circuit boards size memory views without hardcoding per ISA.
+    pub fn mem_size(&self) -> u32 {
+        match &self.inner {
+            Core::I8086(c) => c.mem.size() as u32,
+            Core::I8085(c) => c.mem.size() as u32,
+            Core::Mcs51(c) => c.code.size() as u32,
+            Core::M6502(c) => c.mem.size() as u32,
+            Core::Z80(c) => c.mem_size(),
+            Core::Rv32(c) => c.mem.size() as u32,
+        }
+    }
+
+    /// Write an RTC register via CMOS ports 0x70/0x71 (8086/8085).
+    /// The read half already exists as `rtc_reg`; boards need the write half
+    /// to set the clock without going through port I/O.
+    pub fn rtc_write(&mut self, reg: u8, val: u8) {
+        match &mut self.inner {
+            Core::I8086(c) => { c.rtc.write_sel(reg); c.rtc.write_data(val); }
+            Core::I8085(c) => { c.rtc.write_sel(reg); c.rtc.write_data(val); }
+            _ => {}
+        }
+    }
+
     /// 8237 DMA status register.
     pub fn dma_status(&self) -> u8 { self.inner.dma_status() }
 
@@ -389,6 +434,9 @@ impl Emulator {
     /// 8051 I2C EEPROM
     pub fn i2c_write(&mut self, addr: u8, data: u8) { self.inner.i2c_write(addr, data); }
     pub fn i2c_read(&mut self, addr: u8) -> u8 { self.inner.i2c_read(addr) }
+    /// Full 256-byte I2C EEPROM image (8051 only, `undefined` otherwise).
+    /// Needed by circuit boards to render/save attached EEPROM state.
+    pub fn i2c_dump(&self) -> Option<Vec<u8>> { self.inner.i2c_dump() }
     pub fn spi_write(&mut self, addr: u8, data: u8) { self.inner.spi_write(addr, data); }
     pub fn spi_read(&mut self, addr: u8) -> u8 { self.inner.spi_read(addr) }
 }

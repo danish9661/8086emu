@@ -140,7 +140,10 @@ export class Emulator {
         return v1;
     }
     /**
-     * Active flag names as short strings (e.g. "ZF", "CY").
+     * Active flag names in the 8086 naming ("CF","ZF","SF","PF","AF","OF",
+     * "DF","IF","TF"). Every ISA's state is translated into this canonical
+     * set, so e.g. an 8085 carry shows as "CF" and its interrupt-enable as
+     * "IF" (see `docs/app.js` FLAG_MAP for the per-ISA display labels).
      * @returns {string[]}
      */
     flags() {
@@ -213,6 +216,20 @@ export class Emulator {
         return ret !== 0;
     }
     /**
+     * Full 256-byte I2C EEPROM image (8051 only, `undefined` otherwise).
+     * Needed by circuit boards to render/save attached EEPROM state.
+     * @returns {Uint8Array | undefined}
+     */
+    i2c_dump() {
+        const ret = wasm.emulator_i2c_dump(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
      * @param {number} addr
      * @returns {number}
      */
@@ -229,8 +246,10 @@ export class Emulator {
         wasm.emulator_i2c_write(this.__wbg_ptr, addr, data);
     }
     /**
-     * Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
-     * "INTR" (data = vector); 8051 = "INT0" | "INT1". Throws on unknown kind.
+     * Hardware interrupt: 8086 = "NMI" | "INTR" (data = vector);
+     * 8085 = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR" (data = vector);
+     * 8051 = "INT0" | "INT1"; 6502 = "NMI" (else IRQ); Z80 = "NMI" (else INT).
+     * rv32 has no interrupt model (throws).
      * @param {string} kind
      * @param {number} data
      */
@@ -315,6 +334,16 @@ export class Emulator {
         var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
         return v1;
+    }
+    /**
+     * Total code/main memory for the current ISA in bytes
+     * (8086: 1 MiB, 8085/8051-code/6502/Z80/rv32 from the core's `Mem`).
+     * Lets circuit boards size memory views without hardcoding per ISA.
+     * @returns {number}
+     */
+    mem_size() {
+        const ret = wasm.emulator_mem_size(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * Write bytes into memory (IDE memory poking).
@@ -413,7 +442,8 @@ export class Emulator {
         wasm.emulator_push_key(this.__wbg_ptr, ch);
     }
     /**
-     * Register dump as "NAME=value" strings (e.g. "AX=1234").
+     * Register dump as "NAME=value" strings (e.g. "AX=1234"). rv32 registers
+     * print full 8-digit hex; 16-bit ISAs print 4 digits.
      * @returns {string[]}
      */
     regs() {
@@ -458,6 +488,16 @@ export class Emulator {
     rtc_reg(reg) {
         const ret = wasm.emulator_rtc_reg(this.__wbg_ptr, reg);
         return ret;
+    }
+    /**
+     * Write an RTC register via CMOS ports 0x70/0x71 (8086/8085).
+     * The read half already exists as `rtc_reg`; boards need the write half
+     * to set the clock without going through port I/O.
+     * @param {number} reg
+     * @param {number} val
+     */
+    rtc_write(reg, val) {
+        wasm.emulator_rtc_write(this.__wbg_ptr, reg, val);
     }
     /**
      * Run up to `max_steps` instructions; returns steps executed.
@@ -706,6 +746,15 @@ export class Emulator {
     via_irq() {
         const ret = wasm.emulator_via_irq(this.__wbg_ptr);
         return ret;
+    }
+    /**
+     * Inject external pin levels seen on VIA port A (0) / B (1). 6502 only.
+     * Lets a circuit board drive the VIA inputs (quasi-bidirectional merge).
+     * @param {number} port
+     * @param {number} v
+     */
+    via_pins(port, v) {
+        wasm.emulator_via_pins(this.__wbg_ptr, port, v);
     }
     /**
      * Read a MOS 6522 VIA register `rs` (0-15, mapped at $6000). 6502 only.

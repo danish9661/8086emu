@@ -17,6 +17,25 @@ versions are dated snapshots of `main`.
 - Root `package.json` marked `private:true`, corrected license to MIT, added keywords/engines.
 - `Cargo.toml` version `0.1.0` → `1.0.0`, README refreshed (badges, 6-ISA layout, 133-test count, WASM API trait).
 
+## [1.1.0] - 2026-10-02
+
+### Added
+- WASM board helpers for circuit platforms (OpenHW-style): `via_pins(port, v)`
+  (drive 6502 VIA port A/B inputs), `i2c_dump()` (full 256-byte 8051 I2C EEPROM
+  image), `rtc_write(reg, val)` (CMOS write half of `rtc_reg`), and
+  `mem_size()` (addressable memory per ISA: 8086/rv32 1 MiB, others 64 KiB).
+  All four are in `docs/types.d.ts` and rebuilt into `docs/pkg/`.
+- Z80 `CpuZ80::mem_size()` (64 KiB) backing the new WASM helper.
+- rv32 `LUI`/`AUIPC` fix: the operand is the 20-bit upper immediate
+  (`LUI x1, 0x12345` → `0x12345000`); the old mask produced `0x45000000`.
+- `8086api.md`: refreshed API spec (sections 1–4) — live 77-method proto list,
+  corrected package sizes/counts, 8088 alias, rv32 8-digit regs, canonical
+  8086 flag naming, full INT 21h/output-convention coverage, and the new board
+  helpers. Sections 5–6 (OpenHW gap) intentionally untouched.
+- WASM `regs()` now prints full 8-digit hex for rv32 (was truncated to 16 bits).
+- Doc-comment accuracy: canonical 8086 flag naming documented on `FlagSet`,
+  full per-ISA `interrupt()` kinds on `Emulator::request_interrupt` + WASM.
+
 ## [Unreleased]
 
 ### Performance

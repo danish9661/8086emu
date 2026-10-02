@@ -1,4 +1,4 @@
-//! Assembler entry points for all three ISAs.
+//! Assembler entry points for all six ISAs.
 
 pub mod asm8051;
 pub mod asm8085;

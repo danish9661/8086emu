@@ -53,7 +53,10 @@ export class Emulator {
      */
     ext_code_region(): Uint32Array | undefined;
     /**
-     * Active flag names as short strings (e.g. "ZF", "CY").
+     * Active flag names in the 8086 naming ("CF","ZF","SF","PF","AF","OF",
+     * "DF","IF","TF"). Every ISA's state is translated into this canonical
+     * set, so e.g. an 8085 carry shows as "CF" and its interrupt-enable as
+     * "IF" (see `docs/app.js` FLAG_MAP for the per-ISA display labels).
      */
     flags(): string[];
     /**
@@ -76,14 +79,21 @@ export class Emulator {
      * True once the CPU has executed HLT (or otherwise stopped).
      */
     halted(): boolean;
+    /**
+     * Full 256-byte I2C EEPROM image (8051 only, `undefined` otherwise).
+     * Needed by circuit boards to render/save attached EEPROM state.
+     */
+    i2c_dump(): Uint8Array | undefined;
     i2c_read(addr: number): number;
     /**
      * 8051 I2C EEPROM
      */
     i2c_write(addr: number, data: number): void;
     /**
-     * Hardware interrupt: 8085 = "TRAP" | "RST75" | "RST65" | "RST55" |
-     * "INTR" (data = vector); 8051 = "INT0" | "INT1". Throws on unknown kind.
+     * Hardware interrupt: 8086 = "NMI" | "INTR" (data = vector);
+     * 8085 = "TRAP" | "RST75" | "RST65" | "RST55" | "INTR" (data = vector);
+     * 8051 = "INT0" | "INT1"; 6502 = "NMI" (else IRQ); Z80 = "NMI" (else INT).
+     * rv32 has no interrupt model (throws).
      */
     interrupt(kind: string, data: number): void;
     /**
@@ -109,6 +119,12 @@ export class Emulator {
      * Linear memory read of `len` bytes starting at `addr`.
      */
     mem(addr: number, len: number): Uint8Array;
+    /**
+     * Total code/main memory for the current ISA in bytes
+     * (8086: 1 MiB, 8085/8051-code/6502/Z80/rv32 from the core's `Mem`).
+     * Lets circuit boards size memory views without hardcoding per ISA.
+     */
+    mem_size(): number;
     /**
      * Write bytes into memory (IDE memory poking).
      */
@@ -147,7 +163,8 @@ export class Emulator {
      */
     push_key(ch: number): void;
     /**
-     * Register dump as "NAME=value" strings (e.g. "AX=1234").
+     * Register dump as "NAME=value" strings (e.g. "AX=1234"). rv32 registers
+     * print full 8-digit hex; 16-bit ISAs print 4 digits.
      */
     regs(): string[];
     /**
@@ -166,6 +183,12 @@ export class Emulator {
      * RTC register read via CMOS ports 0x70/0x71.
      */
     rtc_reg(reg: number): number;
+    /**
+     * Write an RTC register via CMOS ports 0x70/0x71 (8086/8085).
+     * The read half already exists as `rtc_reg`; boards need the write half
+     * to set the clock without going through port I/O.
+     */
+    rtc_write(reg: number, val: number): void;
     /**
      * Run up to `max_steps` instructions; returns steps executed.
      */
@@ -270,6 +293,11 @@ export class Emulator {
      */
     via_irq(): number;
     /**
+     * Inject external pin levels seen on VIA port A (0) / B (1). 6502 only.
+     * Lets a circuit board drive the VIA inputs (quasi-bidirectional merge).
+     */
+    via_pins(port: number, v: number): void;
+    /**
      * Read a MOS 6522 VIA register `rs` (0-15, mapped at $6000). 6502 only.
      */
     via_read(rs: number): number;
@@ -330,6 +358,7 @@ export interface InitOutput {
     readonly emulator_fs_put: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly emulator_gfx: (a: number) => number;
     readonly emulator_halted: (a: number) => number;
+    readonly emulator_i2c_dump: (a: number) => [number, number];
     readonly emulator_i2c_read: (a: number, b: number) => number;
     readonly emulator_i2c_write: (a: number, b: number, c: number) => void;
     readonly emulator_interrupt: (a: number, b: number, c: number, d: number) => [number, number];
@@ -340,6 +369,7 @@ export interface InitOutput {
     readonly emulator_load_flash: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_load_rom: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_mem: (a: number, b: number, c: number) => [number, number];
+    readonly emulator_mem_size: (a: number) => number;
     readonly emulator_mem_write: (a: number, b: number, c: number, d: number) => void;
     readonly emulator_new: (a: number, b: number) => [number, number, number];
     readonly emulator_out: (a: number) => [number, number];
@@ -354,6 +384,7 @@ export interface InitOutput {
     readonly emulator_restore: (a: number, b: number, c: number) => void;
     readonly emulator_rom_region: (a: number) => [number, number];
     readonly emulator_rtc_reg: (a: number, b: number) => number;
+    readonly emulator_rtc_write: (a: number, b: number, c: number) => void;
     readonly emulator_run: (a: number, b: number) => number;
     readonly emulator_run_bp: (a: number, b: number, c: number, d: number) => number;
     readonly emulator_run_to: (a: number, b: number, c: number) => number;
@@ -382,6 +413,7 @@ export interface InitOutput {
     readonly emulator_usart_status: (a: number) => number;
     readonly emulator_via_handshake: (a: number, b: number, c: number) => void;
     readonly emulator_via_irq: (a: number) => number;
+    readonly emulator_via_pins: (a: number, b: number, c: number) => void;
     readonly emulator_via_read: (a: number, b: number) => number;
     readonly emulator_via_write: (a: number, b: number, c: number) => void;
     readonly emulator_video_mode: (a: number) => number;

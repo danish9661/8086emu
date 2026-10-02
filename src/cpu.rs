@@ -148,8 +148,10 @@ impl Disasm {
     }
 }
 
-/// All flags each CPU exposes; cores translate their internal flag state into
-/// this canonical set so the frontend/UI can be shared.
+/// All flags each CPU exposes, in 8086 naming ("CF","ZF","SF","PF","AF","OF",
+/// "DF","IF","TF"). Cores translate their internal flag state into this
+/// canonical set so the frontend/UI can be shared (see `docs/app.js` FLAG_MAP
+/// for the per-ISA display labels).
 #[derive(Default, Clone)]
 pub struct FlagSet {
     pub carry: bool,

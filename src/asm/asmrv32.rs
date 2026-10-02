@@ -219,8 +219,10 @@ fn enc_instr(mnem: &str, ops: &[String], syms: &HashMap<String, u32>, cur: u32, 
     let op1 = || ops.get(1).ok_or_else(|| format!("{mnem}: missing operand")).cloned();
     let op2 = || ops.get(2).ok_or_else(|| format!("{mnem}: missing operand")).cloned();
     match mnem {
-        "LUI" => { let rd = r(&op0()?)?; let v = iv(&op1()?)? & 0xfffff000; Ok((0x37 | (rd as u32) << 7 | v << 12).to_le_bytes().to_vec()) }
-        "AUIPC" => { let rd = r(&op0()?)?; let v = iv(&op1()?)? & 0xfffff000; Ok((0x17 | (rd as u32) << 7 | v << 12).to_le_bytes().to_vec()) }
+        // LUI/AUIPC take the 20-bit upper immediate (bits 31..12 of the
+        // instruction); `LUI x1, 0x12345` sets x1 = 0x12345000.
+        "LUI" => { let rd = r(&op0()?)?; let v = iv(&op1()?)? & 0xfffff; Ok((0x37 | (rd as u32) << 7 | v << 12).to_le_bytes().to_vec()) }
+        "AUIPC" => { let rd = r(&op0()?)?; let v = iv(&op1()?)? & 0xfffff; Ok((0x17 | (rd as u32) << 7 | v << 12).to_le_bytes().to_vec()) }
         "JAL" => { let rd = r(&op0()?)?; let t = iv(&op1()?)?; Ok(jtype(0x6f, rd, t, cur)) }
         "JALR" => { let rd = r(&op0()?)?; let (off, rs) = parse_mem(&op1()?)?; let rs = r(&rs)?; Ok(itype(0x67, rd, 0, rs, off)) }
         "BEQ" => Ok(btype(0, r(&op0()?)?, r(&op1()?)?, iv(&op2()?)?, cur)),
