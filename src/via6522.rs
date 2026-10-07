@@ -319,7 +319,9 @@ impl Via6522 {
     }
 
     pub fn restore(&mut self, d: &[u8]) {
-        if d.len() < 21 || d[0] != 1 {
+        // `snapshot()` emits exactly 20 bytes; accept that (older callers
+        // passed a 21-byte window whose last byte was already ignored).
+        if d.len() < 20 || d[0] != 1 {
             return;
         }
         self.ora = d[1];

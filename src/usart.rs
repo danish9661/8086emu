@@ -22,12 +22,23 @@ impl Default for Usart8251 {
 
 impl Usart8251 {
     pub fn new()->Self{ Self::default() }
+    /// Maximum queued Tx bytes. Nothing drains the Tx queue yet (host reads
+    /// program output via the shared `Output` buffer instead), so cap it and
+    /// drop the oldest — an unthrottled `OUT 50h` loop must not grow memory
+    /// without bound (same rationale as `OUTPUT_CAP` in `cpu.rs`).
+    const TX_CAP: usize = 1024;
     pub fn write_data(&mut self, v:u8){
+        if self.tx.len() >= Self::TX_CAP { self.tx.pop_front(); }
         self.tx.push_back(v);
         self.status |= 0x04; // TxEMPTY
     }
     pub fn read_data(&mut self)->u8{
         self.rx.pop_front().unwrap_or(0)
+    }
+    /// Non-destructive read of the head Rx byte (0 when empty). The debugger
+    /// memory view uses this so polling never consumes serial input.
+    pub fn peek_data(&self)->u8{
+        self.rx.front().copied().unwrap_or(0)
     }
     pub fn write_ctrl(&mut self, v:u8){
         // first write after reset is mode, subsequent are cmd
@@ -57,7 +68,7 @@ impl Usart8251 {
         if d.len()<3 { return; }
         self.status=d[0]; self.cmd=d[1]; self.mode=d[2];
         let mut off=3;
-        if off < d.len() { let n=d[off] as usize; off+=1; self.tx.clear(); for &b in &d[off..off.min(off+n)]{self.tx.push_back(b);} off+=n; }
-        if off < d.len() { let n=d[off] as usize; off+=1; self.rx.clear(); for &b in &d[off..off.min(off+n)]{self.rx.push_back(b);} }
+        if off < d.len() { let n=d[off] as usize; off+=1; self.tx.clear(); let end=(off+n).min(d.len()); for &b in &d[off..end]{self.tx.push_back(b);} off+=n; }
+        if off < d.len() { let n=d[off] as usize; off+=1; self.rx.clear(); let end=(off+n).min(d.len()); for &b in &d[off..end]{self.rx.push_back(b);} }
     }
 }

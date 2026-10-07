@@ -292,18 +292,29 @@ impl Emulator {
         self.inner.via_pins(port, v);
     }
 
-    /// Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
+    /// Read an I/O port byte (8085/8086: port space; 8051: P0-P3 pins;
+    /// Z80: latch/CTC; rv32: 0xE0 = GPIO DATA, 0xE1 = DIR; 6502: use via_read).
     pub fn port_read(&self, port: u8) -> u8 {
         self.inner.port_read(port)
     }
 
-    /// Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins).
+    /// Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins;
+    /// Z80: latch/CTC; rv32: 0xE0 injects GPIO input pins; 6502: use via_write).
     pub fn port_write(&mut self, port: u8, val: u8) {
         self.inner.port_write(port, val)
     }
 
-    /// Total clock cycles executed (machine cycles / T-states). Drives the
-    /// cycle-accurate timers (8086 PIT, 8051 timers, 8085 8155 timer).
+    /// Inject external pin levels into an 8255 PPI input port (8086/8085).
+    /// `port` is 0xE0 (A), 0xE1 (B) or 0xE2 (C). Input-mode bits read back
+    /// the injected level while the firmware's output latch is untouched.
+    pub fn ppi_set_input(&mut self, port: u8, val: u8) {
+        self.inner.ppi_set_input(port, val)
+    }
+
+    /// Total clock cycles executed. All six ISAs now count: machine cycles /
+    /// T-states for 8086/8085/8051, nominal per-instruction costs for
+    /// 6502/Z80, single-cycle for rv32. Drives cycle-accurate timers and host
+    /// sim-time stamps.
     pub fn cycles(&self) -> u64 {
         self.inner.cycles()
     }
@@ -425,7 +436,10 @@ impl Emulator {
     /// 8237 DMA status register.
     pub fn dma_status(&self) -> u8 { self.inner.dma_status() }
 
-    /// 8251 USART status / Rx push.
+    /// 8251 USART status / Rx push — the universal serial hook, routed per
+    /// ISA: 8086/8085/Z80 kit USART (ports 0x50/0x51), 6502 board ACIA
+    /// ($5000/$5001), 8051 SBUF/SCON (bit1 = RI, bit2 = TI), rv32 board UART
+    /// (0xF0000). `usart_rx` is the RX-inject call for every ISA.
     pub fn usart_status(&self) -> u8 { self.inner.usart_status() }
     pub fn usart_rx(&mut self, v: u8) { self.inner.usart_push_rx(v); }
     /// 8279 display RAM (8 bytes) + push key.

@@ -275,9 +275,10 @@ impl Emulator {
         }
     }
 
-    /// Read an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins
-    /// merged with the latch, quasi-bidirectional). For 8086/8085 this also
-    /// reflects PPI/Flash/RTC/ADC/LCD/DMA registers.
+    /// Read an I/O port byte. 8085/8086: port space 0-255 (also reflects
+    /// PPI/Flash/RTC/ADC/LCD/DMA registers); 8051: P0-P3 pins merged with the
+    /// latch, quasi-bidirectional; Z80: plain latch (0x10-0x13 read the CTC);
+    /// rv32: 0xE0 = board-GPIO DATA, 0xE1 = DIR; 6502: 0 (use `via_read`).
     pub fn port_read(&self, port: u8) -> u8 {
         match self {
             Self::I8085(c) => {
@@ -317,15 +318,22 @@ impl Emulator {
                 }
             }
             Self::Mcs51(c) => c.port_read(port),
-            Self::Rv32(_) => 0,
+            // rv32 board GPIO: 0xE0 = DATA (latch/pin merge by DIR, same kit
+            // convention the runner already uses for Z80), 0xE1 = DIR.
+            Self::Rv32(c) => match port {
+                0xE0 => c.gpio_data_reg(),
+                0xE1 => c.gpio_dir_reg(),
+                _ => 0,
+            },
             Self::M6502(_) => 0,
             Self::Z80(c) => c.port_read(port),
         }
     }
 
-    /// Write an I/O port byte (8085/8086: port space; 8051: P0-P3 external
-    /// pin state that port reads observe). For 8086/8085 this also drives
-    /// PPI/Flash/RTC/ADC/LCD/DMA registers.
+    /// Write an I/O port byte. 8085/8086: port space (also drives
+    /// PPI/Flash/RTC/ADC/LCD/DMA registers); 8051: P0-P3 external pin state;
+    /// Z80: plain latch (0x10-0x13 program the CTC); rv32: 0xE0 injects
+    /// board-GPIO input pins; 6502: ignored (use `via_write`/`via_pins`).
     pub fn port_write(&mut self, port: u8, v: u8) {
         match self {
             Self::I8085(c) => {
@@ -365,22 +373,29 @@ impl Emulator {
                 }
             }
             Self::Mcs51(c) => c.port_write(port, v),
-            Self::Rv32(_) => {}
+            // rv32 host pin injection: 0xE0 drives the GPIO input pins (reads
+            // merge latch/pins by DIR); other ports are ignored.
+            Self::Rv32(c) => {
+                if port == 0xE0 {
+                    c.gpio_set_pins(v);
+                }
+            }
             Self::M6502(_) => {}
             Self::Z80(c) => c.port_write(port, v),
         }
     }
 
-    /// Total clock cycles executed (machine cycles / T-states). Drives the
-    /// cycle-accurate timers (8086 PIT, 8051 timers, 8085 8155 timer).
+    /// Total clock cycles executed (machine cycles / T-states for
+    /// 8086/8085/8051; nominal per-instruction costs for 6502/Z80, single-cycle
+    /// for rv32). Drives cycle-accurate timers and host sim-time stamps.
     pub fn cycles(&self) -> u64 {
         match self {
             Self::I8085(c) => c.cycles(),
             Self::I8086(c) => c.cycles(),
             Self::Mcs51(c) => c.cycles(),
-            Self::Rv32(_) => 0,
-            Self::M6502(_) => 0,
-            Self::Z80(_) => 0,
+            Self::Rv32(c) => c.cycles(),
+            Self::M6502(c) => c.cycles(),
+            Self::Z80(c) => c.cycles(),
         }
     }
 
@@ -465,6 +480,24 @@ impl Emulator {
         }
     }
 
+    /// Inject external pin levels into an 8255 PPI input port (8086/8085).
+    /// `port` is 0xE0 (A), 0xE1 (B) or 0xE2 (C); other values are ignored.
+    /// Input-mode bits read back the injected level while the firmware's
+    /// output latch is untouched, so a circuit board can drive buttons and
+    /// switches without clobbering driven outputs (output-mode bits keep
+    /// reading the latch). Covered by snapshot/restore.
+    pub fn ppi_set_input(&mut self, port: u8, v: u8) {
+        let idx = port.wrapping_sub(0xE0);
+        if idx > 2 {
+            return;
+        }
+        match self {
+            Emulator::I8086(c) => c.ppi.set_input(idx, v),
+            Emulator::I8085(c) => c.ppi.set_input(idx, v),
+            _ => {}
+        }
+    }
+
     /// 8255 PPI direct access (ports 0xE0..0xE3). Returns PA/PB/PC/ctrl.
     pub fn ppi_state(&self) -> Option<[u8;4]> {
         match self {
@@ -497,12 +530,39 @@ impl Emulator {
         match self { Emulator::I8086(c)=>c.dma.read(0x08), Emulator::I8085(c)=>c.dma.read(0x08), _=>0 }
     }
 
-    /// 8251 USART status.
+    /// 8251 USART status. 8086/8085/Z80: the kit USART at ports 0x50/0x51
+    /// (bit0 TxRDY, bit1 RxRDY, bit2 TxEMPTY). 6502: the board ACIA at
+    /// $5000/$5001 in the same bit layout. 8051: mapped from SCON
+    /// (bit1 = RI, bit2 = TI, bit0 TxRDY = 1). rv32: the board UART at
+    /// 0xF0000 in the same layout. 0 when no serial model applies.
     pub fn usart_status(&self) -> u8 {
-        match self { Emulator::I8086(c)=>c.usart.read_status(), Emulator::I8085(c)=>c.usart.read_status(), _=>0 }
+        match self {
+            Emulator::I8086(c) => c.usart.read_status(),
+            Emulator::I8085(c) => c.usart.read_status(),
+            Emulator::Z80(c) => c.usart.read_status(),
+            Emulator::M6502(c) => c.acia.read_status(),
+            Emulator::Mcs51(c) => {
+                let s = c.sfr_byte(0x98);
+                0x01 | ((s & 0x01) << 1) | ((s & 0x02) << 1)
+            }
+            Emulator::Rv32(c) => c.uart_status(),
+        }
     }
+    /// Queue one host serial byte for the firmware to read. This is the
+    /// universal serial-RX hook, routed per ISA: 8086/8085/Z80 into the kit
+    /// USART Rx queue (firmware `IN` from 0x50), 6502 into the board ACIA
+    /// (firmware `LDA $5000`), 8051 into SBUF (sets RI, like `serial_rx`),
+    /// rv32 into the board UART (firmware `LB` from 0xF0000). The older
+    /// per-ISA names (`serial_rx`, `push_key`, `set_sid`) keep working.
     pub fn usart_push_rx(&mut self, v: u8) {
-        match self { Emulator::I8086(c)=>c.usart.push_rx(v), Emulator::I8085(c)=>c.usart.push_rx(v), _=>{} }
+        match self {
+            Emulator::I8086(c) => c.usart.push_rx(v),
+            Emulator::I8085(c) => c.usart.push_rx(v),
+            Emulator::Z80(c) => c.usart.push_rx(v),
+            Emulator::M6502(c) => c.acia.push_rx(v),
+            Emulator::Mcs51(c) => c.serial_rx(v),
+            Emulator::Rv32(c) => c.uart_push_rx(v),
+        }
     }
     /// 8279 keyboard/display: push a keycode (0..0xFF).
     pub fn kb_push(&mut self, k: u8) {

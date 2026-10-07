@@ -47,6 +47,7 @@ export const emulator_pit_count: (a: number, b: number) => number;
 export const emulator_port_read: (a: number, b: number) => number;
 export const emulator_port_write: (a: number, b: number, c: number) => void;
 export const emulator_ppi: (a: number) => [number, number];
+export const emulator_ppi_set_input: (a: number, b: number, c: number) => void;
 export const emulator_push_key: (a: number, b: number) => void;
 export const emulator_regs: (a: number) => [number, number];
 export const emulator_reset: (a: number) => void;

@@ -38,6 +38,60 @@ versions are dated snapshots of `main`.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-07
+
+### Added (circuit-board hooks for simulator runner wiring)
+- `Emulator::ppi_set_input(port, v)` + WASM `ppi_set_input` (8086/8085):
+  drive 8255 PPI external input levels (`0xE0`/`0xE1`/`0xE2` = A/B/C) without
+  touching the firmware output latch. Input-mode bits read the injected pins;
+  snapshot/restore covers the latch. Lets a board runner drop its
+  read-modify-write workaround on the output latch.
+- Z80 kit USART: an Intel 8251 at firmware ports `0x50` (data) / `0x51`
+  (status), same addresses as the 8086/8085 kits. `OUT (50h)` transmits
+  (echoes to program output), `IN A,(50h)` receives host-injected bytes.
+- 6502 board ACIA at `$5000`–`$5003` (6851-style data/status/cmd/ctrl):
+  `STA $5000` transmits, `LDA $5000` receives. Debugger `mem()`/disassembly
+  paths peek (never consume Rx); keep code and data clear of the block.
+- rv32 board I/O block at `0xF0000` (byte `LB`/`SB` accesses): UART DATA
+  (store = Tx, load = Rx pop) + STATUS (TxRDY/RxRDY/TxEMPTY) and GPIO DIR
+  (1 = output) + DATA (store = latch, load = latch/pin merge by DIR).
+  Host side: `port_write(0xE0, v)` injects GPIO pins, `port_read(0xE0/0xE1)`
+  reads DATA/DIR — the same kit convention the runner uses for Z80.
+- Cycle clocks for 6502/Z80/rv32: nominal per-instruction tables for 6502
+  (base costs, branches taken, no page-cross) and Z80 (main/CB-exact/ED/IX/IY
+  tables, +11 NMI / +13 INT acknowledge), single-cycle for rv32. `cycles()`
+  is now nonzero on all six ISAs and is covered by snapshot/restore.
+- `usart_rx` / `usart_status` are now the universal serial hook, routed per
+  ISA (8086/8085/Z80 USART, 6502 ACIA, 8051 SBUF/SCON, rv32 board UART); the
+  older per-ISA names (`serial_rx`, `push_key`, `set_sid`) keep working.
+
+### Fixed (2026-10-06)
+- 8085 snapshot/restore read the i8155 + cycle clock 267 bytes too late
+  (`v3end` double-counted the i8155 length): restored i8155 state was garbage
+  and `cycles()` always restored as 0. Offsets corrected; old snapshots stay
+  loadable.
+- 6502 snapshot/restore assumed a 21-byte VIA blob; `Via6522::snapshot()` is
+  20 bytes, so `ext_irq`, the new cycle clock and the ACIA blob restored from
+  one byte late. Length corrected to 20 (and `Via6522::restore` now accepts
+  the exact 20-byte form instead of demanding 21).
+- `Usart8251::restore` never restored the Tx/Rx queues (the copy range
+  `off..off.min(off+n)` is always empty); fixed to `(off+n).min(len)`.
+- `Usart8251` Tx queue was unbounded (nothing drains it); capped at 1024
+  bytes, oldest dropped — same rationale as the program-output cap.
+
+### Worker init contract (fixes `__wbindgen_malloc` use-before-init deaths)
+- Root cause, proven with a real Worker repro: every `Emulator` method touches
+  `wasm.__wbindgen_malloc`, which only exists after `init()`/`initSync()`
+  resolves. A Worker that constructs first dies with `TypeError: Cannot read
+  properties of undefined (reading '__wbindgen_malloc')` — byte-identical
+  bundle passes in Node (`initSync({module})` first) and in a real browser
+  `Worker` (`await init()` first, then `ppi_set_input` GPIO-in + `usart_rx`
+  echo verified with zero page errors). Each Worker owns its own WASM
+  instance and must init separately; the model was never broken. Runner
+  pattern: `import init, {Emulator} from '8086emu'; await init();` (browser /
+  worker) or `initSync({module: bytes})` (Node) before the first `new
+  Emulator(...)`.
+
 ### Performance
 - 8086 (and rv32) cores now **trust their decode cache for ROM-loaded images**:
   `exec` skips the per-step prefix+opcode re-read/verify when the instruction

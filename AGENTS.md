@@ -234,6 +234,14 @@ pub trait Cpu {
   branches (BCC/BCS/BEQ/BNE/BMI/BPL/BVC/BVS), PHP/PLP/PHA/PLA, CLC/SEC/CLI/SEI
   /CLV/CLD/SED, BRK, NOP. Zero-page and indexed addressing fully supported.
 - `BRK` vectors through 0xFFFE/0xFFFF; `RTI` restores the pushed status.
+- Board ACIA at $5000–$5003 (6851-style data/status/cmd/ctrl): `STA $5000`
+  transmits (echoes to `Output`), `LDA $5000` pops the host-injected Rx queue
+  (`Emulator::usart_push_rx`). Debugger `mem()`/disassembly peek without
+  consuming. Keep code and data clear of the block (like the VIA block).
+- Cycle clock: nominal base costs per opcode (`m6502_cycles`; branches use
+  the taken cost, no page-cross penalty; +7 per interrupt entry). Host
+  sim-time only; the VIA keeps its own per-step tick. Covered by
+  snapshot/restore (which also fixed a latent 21-vs-20 VIA length skew).
 - IRQ/NMI raised via `Emulator::request_interrupt` / wasm `interrupt()`.
 - Output: programs print via a monitor convention; see `tests/` for examples.
 
@@ -253,6 +261,14 @@ pub trait Cpu {
   register to port (BC), `IN r,(C)` reads port (BC) — both via `out_port` /
   `in_port` (so `Emulator::port_read/write` observe them). `OUT (n),A` writes
   A to port ((A<<8)|n); `IN A,(n)` reads it back.
+- Kit USART: Intel 8251 at ports 0x50 (data) / 0x51 (status), same addresses
+  as the 8086/8085 kits. `OUT (50h)` transmits (echoes to `Output`);
+  `IN A,(50h)` pops the host-injected Rx queue (`Emulator::usart_push_rx`).
+  The host `port_read(0x50)` path stays a plain latch (never consumes Rx),
+  mirroring the 8086/8085 split.
+- Cycle clock: nominal T-states per retired instruction (`z80_tstates_main`
+  / `_cb` (exact 8/12/15 rule) / `_ed`, IX/IY = base + 4, +11 NMI / +13 INT
+  acknowledge). Host sim-time only; covered by snapshot/restore.
 - Interrupts: maskable (IM 0/1/2) and NMI; `Emulator::request_interrupt` /
   wasm `interrupt()`. `RETI`/`RETN` restore IFF state.
 - Assembler (`asmz80.rs`) covers the above; `ORG` places code (forward ORG
@@ -273,6 +289,12 @@ pub trait Cpu {
 - `ECALL` implements a tiny semihosting ABI (a7 = syscall; 64 = write
   fd/a1/a2, 93 = exit); `EBREAK` halts. Assembler (`asmrv32.rs`) covers all
   of the above.
+- Board I/O block at 0xF0000 (byte `LB`/`SB` only): UART DATA (store = Tx,
+  load = Rx pop) + STATUS (TxRDY/RxRDY/TxEMPTY) and GPIO DIR (1 = output) +
+  DATA (store = latch, load = latch/pin merge by DIR). Host side:
+  `port_write(0xE0, v)` injects GPIO pins, `port_read(0xE0/0xE1)` reads
+  DATA/DIR. No CLINT/PLIC; `cycles()` (+1 per retired step) is the time base.
+  Covered by snapshot/restore.
 
 ## Assembler design (src/asm)
 
@@ -314,11 +336,15 @@ push_key(ch: u8)                         // 8086 keyboard input (type-ahead)
 reset()
 snapshot() -> Vec<u8>
 restore(data: &[u8])
-port_read(port: u8) -> u8             // 8085/8086 port space; 8051 P0-P3 (latch|pin)
-port_write(port: u8, val: u8)        // 8085/8086 port space; 8051 pin injection
+port_read(port: u8) -> u8             // 8085/8086 port space; 8051 P0-P3 (latch|pin); Z80 latch/CTC; rv32 0xE0=GPIO DATA, 0xE1=DIR; 6502: use via_read
+port_write(port: u8, val: u8)        // 8085/8086 port space; 8051 pin injection; Z80 latch/CTC; rv32 0xE0=pin inject; 6502: use via_write
+ppi_set_input(port: u8, val: u8)     // 8086/8085: 8255 external input levels (0xE0/0xE1/0xE2 = A/B/C), output latch untouched
 serial_rx(ch: u8)                     // 8051: inject received byte (SBUF + RI)
 set_sid(ch: bool)                      // 8085: inject SID input pin (read by RIM bit 7)
 sod() -> u8                             // 8085: read SOD output pin (set by SIM bit 7)
+usart_rx(v: u8)                       // UNIVERSAL serial-RX hook: 8086/8085/Z80 USART, 6502 ACIA, 8051 SBUF, rv32 board UART
+usart_status() -> u8                  // same routing: bit0 TxRDY, bit1 RxRDY, bit2 TxEMPTY (8051 mapped from SCON)
+cycles() -> u64                       // nonzero on ALL six ISAs now (8086/8085/8051 machine cycles; 6502/Z80 nominal; rv32 single-cycle)
 interrupt(kind: &str, data: u32)     // 8085: TRAP|RST75|RST65|RST55|INTR; 8051: INT0|INT1; 8086: NMI|INTR(data=vector)
 ```
 

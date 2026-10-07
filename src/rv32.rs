@@ -5,8 +5,21 @@
 //! (no M/A/F/C extensions). `ECALL` implements a tiny semihosting ABI so
 //! programs can print and exit: a7 = syscall number (64 = write fd/a1/a2,
 //! 93 = exit), matching the Linux RISC-V convention.
+//!
+//! A minimal board I/O block lives at `RV_IO_BASE` (0xF0000, byte accesses):
+//! a polled console UART (DATA/STATUS) plus an 8-bit GPIO port (DIR/DATA),
+//! so circuit boards get the same serial + GPIO hooks as the other ISAs.
+//! Keep code and data clear of 0xF0000-0xF0003.
+
+use std::collections::VecDeque;
 
 use crate::cpu::{Cpu, Mem, Output, FlagSet, Reg, Disasm, RunResult};
+
+/// Base of the board I/O block (4 bytes, byte accesses only):
+/// +0 UART DATA (store = Tx, load = Rx pop), +1 UART STATUS (bit0 TxRDY,
+/// bit1 RxRDY, bit2 TxEMPTY), +2 GPIO DIR (1 = output), +3 GPIO DATA
+/// (store = output latch, load = latch/pin merge by DIR).
+pub const RV_IO_BASE: u32 = 0x000F_0000;
 
 #[derive(Clone, Copy)]
 struct RvDec {
@@ -35,6 +48,16 @@ pub struct CpuRv32 {
     dec: Option<(u32, u32, RvDec)>,
     /// Control/status registers (full 4 KiB space), plain storage.
     pub csr: [u32; 4096],
+    /// Nominal cycles retired (single-cycle model: +1 per step). Host
+    /// sim-time clock; nothing in the core reads it.
+    cycles: u64,
+    /// Board-UART Rx queue (host serial inject via `uart_push_rx`).
+    uart_rx: VecDeque<u8>,
+    /// Board-GPIO direction (1 = output), output latch, and host-injected
+    /// external pin levels (see `RV_IO_BASE`).
+    gpio_dir: u8,
+    gpio_out: u8,
+    gpio_pins: u8,
 }
 
 impl Default for CpuRv32 {
@@ -48,6 +71,11 @@ impl Default for CpuRv32 {
             halted_reason: None,
             dec: None,
             csr: [0u32; 4096],
+            cycles: 0,
+            uart_rx: VecDeque::new(),
+            gpio_dir: 0,
+            gpio_out: 0,
+            gpio_pins: 0,
         };
         c.reset();
         c
@@ -62,6 +90,58 @@ impl CpuRv32 {
     pub fn load_rom(&mut self, data: &[u8], addr: u32) {
         self.mem.load(addr as usize, data);
         self.mem.set_rom(addr as usize, data.len());
+    }
+    /// Board-UART status byte (bit0 TxRDY = 1, bit1 RxRDY, bit2 TxEMPTY = 1).
+    pub fn uart_status(&self) -> u8 {
+        0x01 | if self.uart_rx.is_empty() { 0 } else { 0x02 } | 0x04
+    }
+    /// Queue one host serial byte for the board UART (firmware `LB` from
+    /// `RV_IO_BASE+0` pops it).
+    pub fn uart_push_rx(&mut self, v: u8) {
+        self.uart_rx.push_back(v);
+    }
+    /// Board-GPIO DATA as firmware sees it: output bits from the latch,
+    /// input bits from the host-injected pins.
+    pub fn gpio_data_reg(&self) -> u8 {
+        (self.gpio_out & self.gpio_dir) | (self.gpio_pins & !self.gpio_dir)
+    }
+    /// Board-GPIO direction register (1 = output).
+    pub fn gpio_dir_reg(&self) -> u8 {
+        self.gpio_dir
+    }
+    /// Inject external pin levels seen on the board-GPIO input bits.
+    pub fn gpio_set_pins(&mut self, v: u8) {
+        self.gpio_pins = v;
+    }
+    /// Byte load from the I/O block (`None` = not an I/O address; pops UART Rx).
+    fn io_load_byte(&mut self, a: u32) -> Option<u32> {
+        match a & 0xF_FFFF {
+            x if x == RV_IO_BASE => Some(self.uart_rx.pop_front().unwrap_or(0) as u32),
+            x if x == RV_IO_BASE + 1 => Some(self.uart_status() as u32),
+            x if x == RV_IO_BASE + 2 => Some(self.gpio_dir as u32),
+            x if x == RV_IO_BASE + 3 => Some(self.gpio_data_reg() as u32),
+            _ => None,
+        }
+    }
+    /// Byte store to the I/O block (`false` = not an I/O address; Tx echoes
+    /// to program output like the other ISAs' console ports).
+    fn io_store_byte(&mut self, a: u32, v: u8) -> bool {
+        match a & 0xF_FFFF {
+            x if x == RV_IO_BASE => {
+                self.out.put_char(v as char);
+                true
+            }
+            x if x == RV_IO_BASE + 1 => true, // STATUS is read-only
+            x if x == RV_IO_BASE + 2 => {
+                self.gpio_dir = v;
+                true
+            }
+            x if x == RV_IO_BASE + 3 => {
+                self.gpio_out = v;
+                true
+            }
+            _ => false,
+        }
     }
     fn wr(&mut self, i: usize, v: u32) {
         if i != 0 {
@@ -245,6 +325,11 @@ impl Cpu for CpuRv32 {
         self.out = Output::default();
         self.dec = None;
         self.csr = [0u32; 4096];
+        self.cycles = 0;
+        self.uart_rx.clear();
+        self.gpio_dir = 0;
+        self.gpio_out = 0;
+        self.gpio_pins = 0;
     }
 
     fn step(&mut self) -> bool {
@@ -302,10 +387,11 @@ impl Cpu for CpuRv32 {
             0x03 => {
                 let a = self.rd(rs1).wrapping_add(imm_i);
                 let v = match f3 {
-                    0 => self.lb(a),
+                    // Byte loads are I/O-aware (board UART/GPIO block).
+                    0 => self.io_load_byte(a).unwrap_or_else(|| self.lb(a)),
                     1 => self.lh(a),
                     2 => self.lw(a),
-                    4 => self.mem.read(a as usize) as u32,
+                    4 => self.io_load_byte(a).unwrap_or_else(|| self.mem.read(a as usize) as u32),
                     5 => self.mem.read16(a as usize) as u32,
                     _ => 0,
                 };
@@ -315,7 +401,12 @@ impl Cpu for CpuRv32 {
                 let a = self.rd(rs1).wrapping_add(rel_s(insn));
                 let v = self.rd(rs2);
                 match f3 {
-                    0 => self.mem.write(a as usize, v as u8),
+                    // Byte stores are I/O-aware (board UART/GPIO block).
+                    0 => {
+                        if !self.io_store_byte(a, v as u8) {
+                            self.mem.write(a as usize, v as u8);
+                        }
+                    }
                     1 => self.mem.write16(a as usize, v as u16),
                     2 => {
                         self.mem.write(a as usize, v as u8);
@@ -427,6 +518,7 @@ impl Cpu for CpuRv32 {
                 return false;
             }
         }
+        self.cycles += 1; // single-cycle nominal model: one clock per retired step
         true
     }
 
@@ -475,6 +567,15 @@ impl Cpu for CpuRv32 {
         for c in &self.csr {
             v.extend_from_slice(&c.to_le_bytes());
         }
+        // Added tail: cycles (8 LE), GPIO DIR/OUT/PINS (3), then the Rx queue
+        // (u32 LE length + bytes). Older snapshots end at the CSR file and
+        // still restore, with the new state zeroed.
+        v.extend_from_slice(&self.cycles.to_le_bytes());
+        v.push(self.gpio_dir);
+        v.push(self.gpio_out);
+        v.push(self.gpio_pins);
+        v.extend_from_slice(&(self.uart_rx.len() as u32).to_le_bytes());
+        v.extend(self.uart_rx.iter());
         v
     }
     fn restore(&mut self, data: &[u8]) {
@@ -503,8 +604,36 @@ impl Cpu for CpuRv32 {
         for c in &mut self.csr {
             *c = get4(data, &mut o);
         }
+        // Added tail (see `snapshot`); absent in older snapshots.
+        if data.len() >= o + 8 {
+            let mut cy = [0u8; 8];
+            cy.copy_from_slice(&data[o..o + 8]);
+            self.cycles = u64::from_le_bytes(cy);
+            o += 8;
+        } else {
+            self.cycles = 0;
+        }
+        if data.len() >= o + 3 {
+            self.gpio_dir = data[o];
+            self.gpio_out = data[o + 1];
+            self.gpio_pins = data[o + 2];
+            o += 3;
+        } else {
+            self.gpio_dir = 0;
+            self.gpio_out = 0;
+            self.gpio_pins = 0;
+        }
+        self.uart_rx.clear();
+        if data.len() >= o + 4 {
+            let mut ln = [0u8; 4];
+            ln.copy_from_slice(&data[o..o + 4]);
+            o += 4;
+            let n = (u32::from_le_bytes(ln) as usize).min(data.len() - o);
+            self.uart_rx.extend(data[o..o + n].iter());
+        }
     }
     fn is_halted(&self) -> bool { self.halt }
+    fn cycles(&self) -> u64 { self.cycles }
 
     fn disasm(&self, addr: u32, count: usize) -> Vec<Disasm> {
         let mut out = Vec::new();

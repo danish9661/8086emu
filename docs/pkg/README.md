@@ -31,7 +31,7 @@ See `AGENTS.md` for the full architecture and per-ISA coverage.
 ## Build & test
 
 ```bash
-cargo test                         # 133 tests (13 unit + 120 integration across all 6 ISAs)
+cargo test                         # 153 tests (20 unit + 133 integration across all 6 ISAs)
 cargo clippy --all-targets         # should be warning-free
 
 # wasm build (needs wasm-pack)
@@ -197,10 +197,13 @@ emu.sfr(0xD0);  emu.set_sfr(0xD0, 0x00);     // read/write an SFR
   output buffer.
 - **8085** — `OUT 01h` prints the char in A.
 - **8051** — writing to `SBUF` prints the char.
-- **6502/Z80** — memory-mapped or port-mapped I/O via `OUT`/`STA` (see `examples/` and `docs/doc.html`).
-- **RV32** — `ECALL` semihosting (a7=64 write, a7=93 exit). A memory-mapped
-  UART/CLINT is **not** modelled and is distant-future work with no current
-  plan — use semihosting for program output.
+- **6502** — `STA` to `$01`/`$F001`, or `STA` to the board ACIA at `$5000`.
+- **Z80** — `OUT` to port `01h`, or to the kit USART at `50h`.
+- **RV32** — `ECALL` semihosting (a7=64 write, a7=93 exit), or `SB` to the
+  board UART at `0xF0000`.
+- **RV32** — a minimal memory-mapped board block is modelled at `0xF0000`
+  (UART DATA/STATUS + GPIO DIR/DATA, byte accesses); there is no CLINT/PLIC —
+  use the cycle counter (`cycles()`) for time.
 
 ## Peripheral map (quick reference)
 
@@ -209,7 +212,10 @@ emu.sfr(0xD0);  emu.set_sfr(0xD0, 0x00);     // read/write an SFR
 | PC speaker (PIT ch2 + `61h`) | 8086 | `42h/43h` timer, `61h` gate+enable |
 | Z80 CTC | Z80 | `10h`–`13h` (timer/counter + IRQ) |
 | 6522 VIA | 6502 | `$6000`–`$600F` (ports/timers/IRQ) |
-| 8255 PPI | 8086/8085 | `E0h`–`E3h` |
+| Board ACIA (6851-style UART) | 6502 | `$5000`–`$5003` (data/status/cmd/ctrl) |
+| 8251 USART | 8086/8085/Z80 | `50h` data, `51h` status |
+| 8255 PPI | 8086/8085 | `E0h`–`E3h` (+ `ppi_set_input` pin inject) |
+| RV32 board UART+GPIO | rv32 | `0xF0000`–`0xF0003` (LB/SB byte accesses) |
 | ADC0808 | 8086/8085 | `28h` ctrl, `29h` data |
 | LCD1602 | 8086/8085 | `38h` cmd, `39h` data |
 | 8237 DMA | 8086/8085 | `D0h`–`DFh` |

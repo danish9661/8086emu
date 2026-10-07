@@ -2442,7 +2442,7 @@ fn m6502_hello() {
      msg: DB 'H','i',10,0
      END
      "#;
-     let (_, out, halted) = run_asm("6502", src, 1000);
+     let (_, out, _) = run_asm("6502", src, 1000);
      assert_eq!(out, "Hi\n");
 }
 
@@ -2545,7 +2545,7 @@ fn z80_nmi_vectors() {
     let mut emu = make_emulator("Z80").unwrap();
     emu.mem_write(0x66, &[0x76]);
     emu.set_pc(0x10);
-    emu.request_interrupt("NMI", 0);
+    let _ = emu.request_interrupt("NMI", 0);
     emu.step();
     assert_eq!(emu.pc(), 0x66, "NMI always vectors to 0066h");
 }
@@ -2558,7 +2558,7 @@ fn z80_int_when_enabled() {
     emu.mem_write(0, &code);
     emu.set_pc(0);
     emu.run(10);
-    emu.request_interrupt("INT", 0);
+    let _ = emu.request_interrupt("INT", 0);
     emu.step();
     assert_eq!(emu.pc(), 0x38, "INT vectors to 0038h when IFF1 set");
 }
@@ -2571,7 +2571,7 @@ fn z80_int_masked_when_di() {
     emu.set_pc(0);
     emu.run(5);
     let pc_before = emu.pc();
-    emu.request_interrupt("INT", 0);
+    let _ = emu.request_interrupt("INT", 0);
     emu.step();
     assert_eq!(emu.pc(), pc_before, "INT ignored while IFF1 clear (DI)");
 }
@@ -2617,7 +2617,7 @@ fn m6502_irq_vectors() {
     emu.mem_write(0, &code);
     emu.set_pc(0);
     emu.run(5);
-    emu.request_interrupt("IRQ", 0);
+    let _ = emu.request_interrupt("IRQ", 0);
     emu.step();
     assert_eq!(emu.pc(), 0x0200, "IRQ (I cleared) vectors through FFFEh");
 }
@@ -2630,7 +2630,7 @@ fn m6502_nmi_vectors() {
     emu.mem_write(0, &code);
     emu.set_pc(0);
     emu.run(5);
-    emu.request_interrupt("NMI", 0);
+    let _ = emu.request_interrupt("NMI", 0);
     emu.step();
     assert_eq!(emu.pc(), 0x0200, "NMI vectors through FFFAh even with I set");
 }
@@ -2872,4 +2872,238 @@ fn isa_8088_alias_matches_8086() {
     emu.run(100);
     assert!(emu.is_halted());
     assert_eq!(reg(&emu.regs(), "AX"), 0x4C11, "PUSHA/POPA + ENTER/LEAVE round-trip under the 8088 alias");
+}
+
+#[test]
+fn ppi_set_input_8086() {
+    // External pin injection on input-mode PPI ports; the output latch stays
+    // intact so input sampling never corrupts firmware-driven outputs.
+    let mut emu = make_emulator("8086").unwrap();
+    // Power-up control (0x9B) is all-input: injected levels read straight back.
+    assert_eq!(emu.port_read(0xE3), 0x9B, "PPI powers up all-input");
+    emu.ppi_set_input(0xE0, 0x5A);
+    emu.ppi_set_input(0xE2, 0xF0);
+    assert_eq!(emu.port_read(0xE0), 0x5A, "PA input reads injected pins");
+    assert_eq!(emu.port_read(0xE2), 0xF0, "PC input reads injected pins");
+    // Firmware writes the output latch, then switches PA to output: the latch
+    // (not the pins) is visible, and injection must not clobber it.
+    emu.port_write(0xE0, 0xA5);
+    emu.port_write(0xE3, 0x80); // mode 0, all output
+    assert_eq!(emu.port_read(0xE0), 0xA5, "PA output reads the latch");
+    emu.ppi_set_input(0xE0, 0xFF);
+    assert_eq!(emu.port_read(0xE0), 0xA5, "injection leaves output latch alone");
+    // Back to input: the newly injected level shows.
+    emu.port_write(0xE3, 0x9B);
+    assert_eq!(emu.port_read(0xE0), 0xFF, "PA input follows the last injection");
+    // Out-of-range ports are ignored (no panic, no state change).
+    emu.ppi_set_input(0xE4, 0x00);
+    emu.ppi_set_input(0x01, 0x00);
+    assert_eq!(emu.port_read(0xE0), 0xFF);
+    // The ppi() readout still reports latch + control.
+    let ppi = emu.ppi_state().unwrap();
+    assert_eq!(ppi, [0xFF, 0x00, 0xF0, 0x9B], "ppi_state reads pins in input mode");
+    // Snapshot covers the injected pins.
+    let snap = emu.snapshot();
+    let mut emu2 = make_emulator("8086").unwrap();
+    emu2.restore(&snap);
+    assert_eq!(emu2.port_read(0xE0), 0xFF, "injected pins survive restore");
+}
+
+#[test]
+fn ppi_set_input_8085() {
+    // Same input-latch contract on the 8085 kit.
+    let mut emu = make_emulator("8085").unwrap();
+    emu.ppi_set_input(0xE1, 0x3C);
+    assert_eq!(emu.port_read(0xE1), 0x3C, "PB input reads injected pins");
+    emu.port_write(0xE3, 0x80); // all output
+    emu.port_write(0xE1, 0xA5);
+    emu.ppi_set_input(0xE1, 0x00);
+    assert_eq!(emu.port_read(0xE1), 0xA5, "output latch wins in output mode");
+}
+
+#[test]
+fn cycles_count_all_isas() {
+    // Every ISA retires a nonzero, monotonic cycle clock for sim-time.
+    let progs = [
+        ("8086", "ORG 100h\nMOV CX, 4\nlp:\nNOP\nLOOP lp\nHLT\nEND", 0x100),
+        ("8085", "MVI B, 4\nlp:\nNOP\nDCR B\nJNZ lp\nHLT\nEND", 0),
+        ("8051", "MOV R2, #04h\nlp:\nNOP\nDJNZ R2, lp\nSJMP $\nEND", 0),
+        ("6502", "LDX #4\nlp:\nNOP\nDEX\nBNE lp\nBRK\nEND", 0),
+        ("z80", "LD B, 4\nlp:\nNOP\nDJNZ lp\nHALT\nEND", 0),
+        ("rv32", "ADDI x1, x0, 4\nlp:\nADDI x1, x1, 0xFFF\nBNE x1, x0, lp\nEBREAK\nEND", 0),
+    ];
+    for (isa, src, entry) in progs {
+        let mut emu = make_emulator(isa).unwrap();
+        let code = emu.assemble(src).unwrap();
+        emu.mem_write(0, &code);
+        emu.set_pc(entry);
+        assert_eq!(emu.cycles(), 0, "{isa}: clock starts at zero");
+        emu.run(3);
+        let c1 = emu.cycles();
+        assert!(c1 > 0, "{isa}: retired steps advance the clock");
+        emu.run(100);
+        let c2 = emu.cycles();
+        assert!(c2 >= c1, "{isa}: clock is monotonic");
+        // Snapshot/restore preserves the clock exactly.
+        let snap = emu.snapshot();
+        let c3 = emu.cycles();
+        emu.run(50);
+        assert!(emu.cycles() >= c3, "{isa}: keeps counting after snapshot");
+        let mut emu2 = make_emulator(isa).unwrap();
+        emu2.restore(&snap);
+        assert_eq!(emu2.cycles(), c3, "{isa}: clock survives restore");
+    }
+}
+
+#[test]
+fn usart_z80_tx_rx() {
+    // Z80 kit USART at ports 0x50/0x51: Tx echoes to output, Rx injects.
+    let mut emu = make_emulator("z80").unwrap();
+    let code = emu.assemble("ORG 0\nLD A, 'Z'\nOUT (50h), A\nHALT\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(emu.take_output(), "Z", "OUT (50h),A transmits");
+
+    let mut emu = make_emulator("z80").unwrap();
+    emu.usart_push_rx(b'Q');
+    assert_ne!(emu.usart_status() & 0x02, 0, "RxRDY set after inject");
+    let code = emu.assemble("ORG 0\nIN A, (50h)\nOUT (01h), A\nHALT\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(emu.take_output(), "Q", "IN A,(50h) receives the injected byte");
+    assert_eq!(emu.usart_status() & 0x02, 0, "queue drains, RxRDY clears");
+    // The host port_read path stays a plain latch (no destructive pop).
+    emu.usart_push_rx(b'W');
+    assert_eq!(emu.usart_status() & 0x02, 0x02);
+    let _ = emu.port_read(0x50);
+    assert_eq!(emu.usart_status() & 0x02, 0x02, "port_read must not consume Rx");
+}
+
+#[test]
+fn usart_snapshot_roundtrip_z80() {
+    // Queued serial bytes and the cycle clock survive save/restore.
+    let mut emu = make_emulator("z80").unwrap();
+    emu.usart_push_rx(b'K');
+    let code = emu.assemble("ORG 0\nNOP\nNOP\nHALT\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(2);
+    let snap = emu.snapshot();
+    let c1 = emu.cycles();
+    assert!(c1 > 0);
+    let mut emu2 = make_emulator("z80").unwrap();
+    emu2.restore(&snap);
+    assert_eq!(emu2.cycles(), c1, "cycles survive restore");
+    assert_ne!(emu2.usart_status() & 0x02, 0, "Rx byte survives restore");
+    let code2 = emu2.assemble("ORG 0\nIN A, (50h)\nOUT (01h), A\nHALT\nEND").unwrap();
+    emu2.mem_write(0, &code2);
+    emu2.set_pc(0);
+    emu2.run(100);
+    assert_eq!(emu2.take_output(), "K", "restored Rx byte is readable");
+}
+
+#[test]
+fn acia_6502_tx_rx() {
+    // Board ACIA at $5000/$5001: STA transmits, LDA receives.
+    // (Programs spin on `JMP done`: 6502 BRK vectors into RAM and re-runs.)
+    let mut emu = make_emulator("6502").unwrap();
+    let code = emu.assemble("ORG 0\nLDA #'W'\nSTA $5000\ndone:\nJMP done\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(10);
+    assert_eq!(emu.take_output(), "W", "STA $5000 transmits");
+
+    let mut emu = make_emulator("6502").unwrap();
+    emu.usart_push_rx(b'V');
+    assert_ne!(emu.usart_status() & 0x02, 0, "ACIA RxRDY set after inject");
+    let code = emu.assemble("ORG 0\nLDA $5000\nSTA $01\ndone:\nJMP done\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(10);
+    assert_eq!(emu.take_output(), "V", "LDA $5000 receives the injected byte");
+    assert_eq!(emu.usart_status() & 0x02, 0, "queue drains, RxRDY clears");
+    // Observer paths (memory dump, disassembly) must not consume Rx.
+    emu.usart_push_rx(b'U');
+    let _ = emu.mem_read(0x5000, 1);
+    assert_eq!(emu.mem_read(0x5000, 1)[0], b'U', "mem_read peeks without popping");
+    assert_ne!(emu.usart_status() & 0x02, 0, "mem_read must not consume Rx");
+    let _ = emu.disassemble(0x5000, 2);
+    assert_ne!(emu.usart_status() & 0x02, 0, "disasm must not consume Rx");
+    // ...but the value stays put, so save/restore keeps working.
+    let snap = emu.snapshot();
+    let mut emu2 = make_emulator("6502").unwrap();
+    emu2.restore(&snap);
+    assert_ne!(emu2.usart_status() & 0x02, 0, "ACIA Rx survives restore");
+}
+
+#[test]
+fn rv32_board_uart_gpio() {
+    // Board I/O block at 0xF0000: UART Tx/Rx + GPIO DIR/DATA via LB/SB.
+    let mut emu = make_emulator("rv32").unwrap();
+    emu.usart_push_rx(b'D');
+    assert_ne!(emu.usart_status() & 0x02, 0, "board UART RxRDY set after inject");
+    let src = "ORG 0\nLUI s0, 0xF0\nADDI a0, x0, 67\nSB a0, 0(s0)\nLB a1, 0(s0)\nADDI a0, x0, 3\nSB a0, 2(s0)\nADDI a0, x0, 1\nSB a0, 3(s0)\nLB a2, 3(s0)\nADDI a7, x0, 93\nECALL\nEND";
+    let code = emu.assemble(src).unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    // Inject GPIO pins before the firmware reads DATA back.
+    emu.port_write(0xE0, 0x04);
+    let r = emu.run(100);
+    assert!(r.halted, "ECALL exit halts");
+    assert_eq!(emu.take_output(), "C", "SB to 0xF0000 transmits");
+    assert_eq!(reg(&emu.regs(), "x11"), 0x44, "LB from 0xF0000 receives 'D' (a1=x11)");
+    // DIR=0x03: bits 0-1 output (latch 0x01), bit 2 input (pin 1).
+    assert_eq!(reg(&emu.regs(), "x12"), 0x05, "GPIO DATA merges latch/pins by DIR (a2=x12)");
+    assert_eq!(emu.port_read(0xE0), 0x05, "host sees the merged GPIO byte");
+    assert_eq!(emu.port_read(0xE1), 0x03, "host sees GPIO DIR");
+    assert_eq!(emu.usart_status() & 0x02, 0, "UART queue drains");
+    // Snapshot covers UART/GPIO/cycles.
+    let snap = emu.snapshot();
+    let mut emu2 = make_emulator("rv32").unwrap();
+    emu2.restore(&snap);
+    assert_eq!(emu2.port_read(0xE0), 0x05, "GPIO survives restore");
+    assert_eq!(emu2.cycles(), emu.cycles(), "cycles survive restore");
+}
+
+#[test]
+fn usart_rx_universal_8086_8085_8051() {
+    // `usart_push_rx` is the RX-inject call for every ISA with a serial model.
+    // 8086: IN AL,50h reads the injected byte.
+    let mut emu = make_emulator("8086").unwrap();
+    emu.usart_push_rx(b'Y');
+    let code = emu.assemble("ORG 100h\nIN AL, 50h\nOUT 01h, AL\nHLT\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(emu.take_output(), "Y", "8086 USART Rx injects");
+    // 8086 Tx: OUT 50h,AL echoes to output (existing convention, pinned).
+    let mut emu = make_emulator("8086").unwrap();
+    let code = emu.assemble("ORG 100h\nMOV AL, 'Z'\nOUT 50h, AL\nHLT\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0x100);
+    emu.run(100);
+    assert_eq!(emu.take_output(), "Z", "8086 USART Tx echoes");
+    // 8085: same kit ports.
+    let mut emu = make_emulator("8085").unwrap();
+    emu.usart_push_rx(b'X');
+    let code = emu.assemble("IN 50h\nOUT 01h\nHLT\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert_eq!(emu.take_output(), "X", "8085 USART Rx injects");
+    // 8051: routes into SBUF (sets RI, like serial_rx).
+    let mut emu = make_emulator("8051").unwrap();
+    emu.usart_push_rx(b'Q');
+    assert_eq!(emu.sfr(0x99), b'Q', "8051 SBUF holds the byte");
+    assert_ne!(emu.sfr(0x98) & 0x01, 0, "8051 RI set");
+    assert_ne!(emu.usart_status() & 0x02, 0, "8051 RxRDY mirrors RI");
+    // ...and a transmit sets TI, mirrored in the status bit.
+    let code = emu.assemble("ORG 0\nMOV A, #'T'\nMOV SBUF, A\nSJMP $\nEND").unwrap();
+    emu.mem_write(0, &code);
+    emu.set_pc(0);
+    emu.run(100);
+    assert!(emu.take_output().contains('T'), "8051 SBUF Tx echoes");
+    assert_ne!(emu.usart_status() & 0x04, 0, "8051 TxEMPTY mirrors TI");
 }

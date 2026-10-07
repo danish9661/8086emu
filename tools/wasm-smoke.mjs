@@ -104,4 +104,57 @@ for (const [name, src, entry, expect] of [
   assert(lines.length > 0 && lines[0].includes(expect), `${name} disasm shows "${expect}" after one step`);
 }
 
+// Circuit-board hooks (GPIO/UART/cycles) across all six ISAs.
+{
+  // 8086 PPI external-input latch: injection never clobbers the output latch.
+  const e = new Emulator('8086');
+  e.ppi_set_input(0xE0, 0x5A);
+  assert(e.port_read(0xE0) === 0x5A, 'ppi_set_input drives PA in input mode');
+  e.port_write(0xE3, 0x80); // all output
+  e.port_write(0xE0, 0xA5);
+  e.ppi_set_input(0xE0, 0xFF);
+  assert(e.port_read(0xE0) === 0xA5, 'ppi_set_input leaves the output latch alone');
+}
+// Every ISA retires a nonzero cycle clock.
+for (const [name, src, entry] of [
+  ['6502', 'LDX #4\nlp:\nDEX\nBNE lp\nBRK\nEND', 0],
+  ['Z80', 'LD B, 4\nlp:\nDJNZ lp\nHALT\nEND', 0],
+  ['rv32', 'ADDI x1, x0, 4\nlp:\nADDI x1, x1, 0xFFF\nBNE x1, x0, lp\nEBREAK\nEND', 0],
+]) {
+  const e = new Emulator(name);
+  e.load(e.assemble(src), 0);
+  e.set_pc(entry);
+  e.run(10);
+  assert(Number(e.cycles()) > 0, `${name} cycles() advances`);
+}
+// Z80 kit USART: Rx inject -> IN (50h) -> OUT (01h) echo.
+{
+  const e = new Emulator('Z80');
+  e.usart_rx(0x51);
+  const code = e.assemble('ORG 0\nIN A, (50h)\nOUT (01h), A\nHALT\nEND');
+  e.load(code, 0);
+  e.run(100);
+  assert(e.out() === 'Q', 'Z80 USART Rx injects via usart_rx');
+}
+// 6502 board ACIA: Rx inject -> LDA $5000.
+{
+  const e = new Emulator('6502');
+  e.usart_rx(0x56);
+  const code = e.assemble('ORG 0\nLDA $5000\nSTA $01\ndone:\nJMP done\nEND');
+  e.load(code, 0);
+  e.run(10);
+  assert(e.out() === 'V', '6502 ACIA Rx injects via usart_rx');
+}
+// 8051: usart_rx aliases SBUF+RI; rv32: GPIO DATA/DIR via 0xE0/0xE1.
+{
+  const e = new Emulator('8051');
+  e.usart_rx(0x51);
+  assert(e.sfr(0x99) === 0x51, '8051 usart_rx lands in SBUF');
+}
+{
+  const e = new Emulator('rv32');
+  e.port_write(0xE0, 0x04);
+  assert(e.port_read(0xE0) === 0x04, 'rv32 GPIO pins inject via port_write');
+}
+
 console.log('WASM smoke test passed for the 8086/8085/8051 paths (+ disasm for all three).');

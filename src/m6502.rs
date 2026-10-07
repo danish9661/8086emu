@@ -4,9 +4,17 @@
 //! $FFFA (NMI) / $FFFE (IRQ+BRK). Writing port `0x01` prints A.
 
 use crate::cpu::{Cpu, Mem, Output, FlagSet, Reg, Disasm, RunResult};
+use crate::usart::Usart8251;
 use crate::via6522::{Via6522, VIA_BASE, VIA_SIZE};
 
 const STACK_BASE: u32 = 0x100;
+
+/// Base address of the board console ACIA (6851-style: data/status/cmd/ctrl).
+/// Four bytes at $5000-$5003; Tx echoes to program output, Rx arrives via
+/// `Emulator::usart_push_rx`. Keep code and data clear of this block (like
+/// the VIA block at $6000): executed reads of $5000 pop the Rx queue.
+pub const ACIA_BASE: u32 = 0x5000;
+pub const ACIA_SIZE: u32 = 4;
 
 #[derive(Clone)]
 pub struct Cpu6502 {
@@ -28,6 +36,13 @@ pub struct Cpu6502 {
     ext_irq: bool,
     /// MOS 6522 VIA (memory-mapped at $6000-$600F).
     pub via: Via6522,
+    /// Board console ACIA (memory-mapped at $5000-$5003, 6851-style data /
+    /// status / cmd / ctrl). Tx echoes to `out`; Rx arrives via
+    /// `Emulator::usart_push_rx` (host serial inject).
+    pub acia: Usart8251,
+    /// Nominal CPU cycles retired (see `m6502_cycles`). Host sim-time clock;
+    /// nothing in the core reads it. The VIA keeps its own per-step tick.
+    cycles: u64,
 }
 
 impl Default for Cpu6502 {
@@ -37,6 +52,7 @@ impl Default for Cpu6502 {
             a: 0, x: 0, y: 0, pc: 0, sp: 0xFD, p: 0x24,
             halt: false, out: Output::default(), halted_reason: None, ports: [0; 256],
             pending_nmi: false, pending_irq: false, ext_irq: false, via: Via6522::new(),
+            acia: Usart8251::new(), cycles: 0,
         };
         c.reset();
         c
@@ -61,15 +77,49 @@ impl Cpu6502 {
         self.set(Self::Z, v == 0);
         self.set(Self::N, v & 0x80 != 0);
     }
-    fn rd(&self, a: u32) -> u8 {
+    /// Execution-path read: reading ACIA DATA ($5000) pops one Rx byte, so
+    /// firmware `LDA $5000` consumes input. Observers (memory dump,
+    /// disassembler) must use `rd_view` instead so polling never eats input.
+    fn rd(&mut self, a: u32) -> u8 {
         if a >= VIA_BASE && a < VIA_BASE + VIA_SIZE {
             return self.via.read((a - VIA_BASE) as u8);
+        }
+        if a >= ACIA_BASE && a < ACIA_BASE + ACIA_SIZE {
+            return match a - ACIA_BASE {
+                0 => self.acia.read_data(),
+                1 => self.acia.read_status(),
+                _ => 0, // CMD/CTRL are write-only
+            };
+        }
+        self.mem.read(a as usize)
+    }
+    /// Observer-path read: identical to `rd` except ACIA DATA ($5000) peeks
+    /// without consuming. Used by the memory view and the disassembler.
+    fn rd_view(&self, a: u32) -> u8 {
+        if a >= VIA_BASE && a < VIA_BASE + VIA_SIZE {
+            return self.via.read((a - VIA_BASE) as u8);
+        }
+        if a >= ACIA_BASE && a < ACIA_BASE + ACIA_SIZE {
+            return match a - ACIA_BASE {
+                0 => self.acia.peek_data(),
+                1 => self.acia.read_status(),
+                _ => 0,
+            };
         }
         self.mem.read(a as usize)
     }
     fn wr(&mut self, a: u32, v: u8) {
         if a >= VIA_BASE && a < VIA_BASE + VIA_SIZE {
             self.via.write((a - VIA_BASE) as u8, v);
+            return;
+        }
+        if a >= ACIA_BASE && a < ACIA_BASE + ACIA_SIZE {
+            match a - ACIA_BASE {
+                // DATA: Tx echoes to program output (host serial tap).
+                0 => { self.acia.write_data(v); self.out.put_char(v as char); }
+                // STATUS reads live; a firmware write is treated as control.
+                _ => self.acia.write_ctrl(v),
+            }
             return;
         }
         self.mem.write(a as usize, v);
@@ -274,9 +324,9 @@ impl Cpu6502 {
                     self.a = r; self.set_nz(r);
                 }
             }
-            CMP => self.cmp(self.a, self.rd(addr)),
-            CPX => self.cmp(self.x, self.rd(addr)),
-            CPY => self.cmp(self.y, self.rd(addr)),
+            CMP => { let m = self.rd(addr); self.cmp(self.a, m); }
+            CPX => { let m = self.rd(addr); self.cmp(self.x, m); }
+            CPY => { let m = self.rd(addr); self.cmp(self.y, m); }
             BIT => {
                 let m = self.rd(addr);
                 self.set(Self::Z, (self.a & m) == 0);
@@ -393,24 +443,61 @@ impl Cpu6502 {
         let mut p = pc.wrapping_add(1);
         match mode {
             Mode::IMP => ("".into(), p),
-            Mode::IMM => { let v = self.rd(p as u32); p = p.wrapping_add(1); (format!("#${v:02X}"), p) }
-            Mode::ZP => { let v = self.rd(p as u32); p = p.wrapping_add(1); (format!("${v:02X}"), p) }
-            Mode::ZPX => { let v = self.rd(p as u32); p = p.wrapping_add(1); (format!("${v:02X},X"), p) }
-            Mode::ZPY => { let v = self.rd(p as u32); p = p.wrapping_add(1); (format!("${v:02X},Y"), p) }
-            Mode::IZX => { let v = self.rd(p as u32); p = p.wrapping_add(1); (format!("(${v:02X},X)"), p) }
-            Mode::IZY => { let v = self.rd(p as u32); p = p.wrapping_add(1); (format!("(${v:02X}),Y"), p) }
+            Mode::IMM => { let v = self.rd_view(p as u32); p = p.wrapping_add(1); (format!("#${v:02X}"), p) }
+            Mode::ZP => { let v = self.rd_view(p as u32); p = p.wrapping_add(1); (format!("${v:02X}"), p) }
+            Mode::ZPX => { let v = self.rd_view(p as u32); p = p.wrapping_add(1); (format!("${v:02X},X"), p) }
+            Mode::ZPY => { let v = self.rd_view(p as u32); p = p.wrapping_add(1); (format!("${v:02X},Y"), p) }
+            Mode::IZX => { let v = self.rd_view(p as u32); p = p.wrapping_add(1); (format!("(${v:02X},X)"), p) }
+            Mode::IZY => { let v = self.rd_view(p as u32); p = p.wrapping_add(1); (format!("(${v:02X}),Y"), p) }
             Mode::ABS => { let a16 = self.abs16(p); p = p.wrapping_add(2); (format!("${a16:04X}"), p) }
             Mode::ABX => { let a16 = self.abs16(p); p = p.wrapping_add(2); (format!("${a16:04X},X"), p) }
             Mode::ABY => { let a16 = self.abs16(p); p = p.wrapping_add(2); (format!("${a16:04X},Y"), p) }
             Mode::IND => { let a16 = self.abs16(p); p = p.wrapping_add(2); (format!("(${a16:04X})"), p) }
-            Mode::REL => { let off = self.rd(p as u32) as i8; p = p.wrapping_add(1); let t = (p as i32 + off as i32) as u16; (format!("${t:04X}"), p) }
+            Mode::REL => { let off = self.rd_view(p as u32) as i8; p = p.wrapping_add(1); let t = (p as i32 + off as i32) as u16; (format!("${t:04X}"), p) }
         }
     }
 
     fn abs16(&self, p: u16) -> u16 {
-        let lo = self.rd(p as u32);
-        let hi = self.rd(p.wrapping_add(1) as u32);
+        let lo = self.rd_view(p as u32);
+        let hi = self.rd_view(p.wrapping_add(1) as u32);
         lo as u16 | ((hi as u16) << 8)
+    }
+}
+
+/// Nominal 6502 cycle cost per opcode (base cost without the page-cross
+/// penalty; branches use the taken cost of 3). Feeds the host sim-time clock
+/// only — nothing in the core reads it. The VIA keeps its own per-step tick.
+fn m6502_cycles(op: u8) -> u8 {
+    match op {
+        0x00 => 7, // BRK
+        0x01 => 6, 0x05 => 3, 0x06 => 5, 0x08 => 3, 0x09 => 2, 0x0A => 2,
+        0x0D => 4, 0x0E => 6, // ORA izx/zp, ASL zp, PHP, ORA imm, ASL A, ORA abs, ASL abs
+        0x10 | 0x30 | 0x50 | 0x70 | 0x90 | 0xB0 | 0xD0 | 0xF0 => 3, // Bxx (taken)
+        0x11 => 5, 0x15 => 4, 0x16 => 6, 0x18 => 2, 0x19 => 4, 0x1D => 4, 0x1E => 7,
+        0x20 => 6, 0x21 => 6, 0x24 => 3, 0x25 => 3, 0x26 => 5, 0x28 => 4,
+        0x29 => 2, 0x2A => 2, 0x2C => 4, 0x2D => 4, 0x2E => 6, // JSR, AND.., BIT..
+        0x31 => 5, 0x35 => 4, 0x36 => 6, 0x38 => 2, 0x39 => 4, 0x3D => 4, 0x3E => 7,
+        0x40 => 6, 0x41 => 6, 0x45 => 3, 0x46 => 5, 0x48 => 3, 0x49 => 2,
+        0x4A => 2, 0x4C => 3, 0x4D => 4, 0x4E => 6, // RTI, EOR.., JMP abs..
+        0x51 => 5, 0x55 => 4, 0x56 => 6, 0x58 => 2, 0x59 => 4, 0x5D => 4, 0x5E => 7,
+        0x60 => 6, 0x61 => 6, 0x65 => 3, 0x66 => 5, 0x68 => 4, 0x69 => 2,
+        0x6A => 2, 0x6C => 5, 0x6D => 4, 0x6E => 6, // RTS, ADC.., JMP ind..
+        0x71 => 5, 0x75 => 4, 0x76 => 6, 0x78 => 2, 0x79 => 4, 0x7D => 4, 0x7E => 7,
+        0x81 => 6, 0x84 => 3, 0x85 => 3, 0x86 => 3, 0x88 => 2, 0x8A => 2,
+        0x8C => 4, 0x8D => 4, 0x8E => 4, // STA izx, STY/STX zp, STY/STA/STX abs
+        0x91 => 6, 0x94 => 4, 0x95 => 4, 0x96 => 4, 0x98 => 2, 0x99 => 5,
+        0x9A => 2, 0x9D => 5,
+        0xA0 => 2, 0xA1 => 6, 0xA2 => 2, 0xA4 => 3, 0xA5 => 3, 0xA6 => 3,
+        0xA8 => 2, 0xA9 => 2, 0xAA => 2, 0xAC => 4, 0xAD => 4, 0xAE => 4,
+        0xB1 => 5, 0xB4 => 4, 0xB5 => 4, 0xB6 => 4, 0xB8 => 2, 0xB9 => 4,
+        0xBA => 2, 0xBC => 4, 0xBD => 4, 0xBE => 4,
+        0xC0 => 2, 0xC1 => 6, 0xC4 => 3, 0xC5 => 3, 0xC6 => 5, 0xC8 => 2,
+        0xC9 => 2, 0xCA => 2, 0xCC => 4, 0xCD => 4, 0xCE => 6,
+        0xD1 => 5, 0xD5 => 4, 0xD6 => 6, 0xD8 => 2, 0xD9 => 4, 0xDD => 4, 0xDE => 7,
+        0xE0 => 2, 0xE1 => 6, 0xE4 => 3, 0xE5 => 3, 0xE6 => 5, 0xE8 => 2,
+        0xE9 => 2, 0xEC => 4, 0xED => 4, 0xEE => 6,
+        0xF1 => 5, 0xF5 => 4, 0xF6 => 6, 0xF8 => 2, 0xF9 => 4, 0xFD => 4, 0xFE => 7,
+        _ => 2,
     }
 }
 
@@ -420,6 +507,8 @@ impl Cpu for Cpu6502 {
         self.halt = false; self.halted_reason = None; self.out = Output::default();
         self.pending_nmi = false; self.pending_irq = false; self.ext_irq = false;
         self.via = Via6522::new();
+        self.acia = Usart8251::new();
+        self.cycles = 0;
         // fetch reset vector
         let lo = self.mem.read(0xFFFC);
         let hi = self.mem.read(0xFFFD);
@@ -440,6 +529,8 @@ impl Cpu for Cpu6502 {
             if (mode == Mode::ZP || mode == Mode::ABS) && addr == 0xF001 { self.out.put_char(self.a as char); }
         }
         self.execute(inst, mode, addr);
+        // Nominal cycles of the retired instruction (host clock only).
+        self.cycles += m6502_cycles(op) as u64;
         // The VIA runs alongside the CPU: one timer tick per instruction.
         // Its IRQ is a *level*: follow the live line so a request latched
         // while I = 1 vanishes if the ISR already cleared the source (no
@@ -447,12 +538,15 @@ impl Cpu for Cpu6502 {
         self.via.tick();
         self.pending_irq = self.ext_irq || self.via.irq();
         // Service hardware interrupts between instructions (NMI > IRQ).
+        // Entry costs 7 cycles on top of the retired instruction.
         if self.pending_nmi {
             self.pending_nmi = false;
+            self.cycles += 7;
             self.do_interrupt(0xFFFA, false);
         } else if self.pending_irq && !self.get(Self::I) {
             self.pending_irq = false;
             self.ext_irq = false;
+            self.cycles += 7;
             self.do_interrupt(0xFFFE, false);
         }
         true
@@ -493,7 +587,8 @@ impl Cpu for Cpu6502 {
         }
     }
     fn mem_read(&self, addr: u32, len: usize) -> Vec<u8> {
-        (0..len).map(|i| self.rd(addr + i as u32)).collect()
+        // Observer path: ACIA DATA peeks (never consumes Rx).
+        (0..len).map(|i| self.rd_view(addr + i as u32)).collect()
     }
     fn mem_write(&mut self, addr: u32, data: &[u8]) {
         // Loader/debugger path: write backing RAM directly so bulk image loads
@@ -514,11 +609,16 @@ impl Cpu for Cpu6502 {
         v.extend_from_slice(&self.mem.data);
         v.extend_from_slice(&self.via.snapshot());
         v.push(self.ext_irq as u8);
+        // Added tail: fixed-size cycles first so older snapshots (which end at
+        // ext_irq) still restore, then the variable-length ACIA blob last.
+        v.extend_from_slice(&self.cycles.to_le_bytes());
+        v.extend_from_slice(&self.acia.snapshot());
         v
     }
     fn restore(&mut self, data: &[u8]) {
         const OLD_NEED: usize = 2 + 5 + 3 + 65536;
-        const VIA_LEN: usize = 21;
+        // Via6522::snapshot() is 20 bytes (version + 19 state bytes).
+        const VIA_LEN: usize = 20;
         if data.len() < OLD_NEED {
             return;
         }
@@ -541,17 +641,35 @@ impl Cpu for Cpu6502 {
         // the (reset) VIA line cannot explain, else drop it.
         self.ext_irq = data.get(o).is_some_and(|b| *b != 0)
             || (self.pending_irq && !self.via.irq());
+        if data.get(o).is_some() { o += 1; }
+        // Post-1.6 snapshots append cycles (8 bytes LE) then the ACIA blob.
+        // Older snapshots stop above and restore with cycles = 0 / fresh ACIA.
+        if data.len() >= o + 8 {
+            let mut cy = [0u8; 8];
+            cy.copy_from_slice(&data[o..o + 8]);
+            self.cycles = u64::from_le_bytes(cy);
+            o += 8;
+        } else {
+            self.cycles = 0;
+        }
+        if o < data.len() {
+            self.acia.restore(&data[o..]);
+        } else {
+            self.acia = Usart8251::new();
+        }
     }
     fn is_halted(&self) -> bool { self.halt }
+    fn cycles(&self) -> u64 { self.cycles }
 
     fn disasm(&self, addr: u32, count: usize) -> Vec<Disasm> {
         let mut out = Vec::new();
         let mut a = addr as u16;
         for _ in 0..count {
-            let op = self.rd(a as u32);
+            // Observer path: never consume ACIA Rx while decoding.
+            let op = self.rd_view(a as u32);
             let (text, next) = self.decode_str(op, a);
             let len = (next.wrapping_sub(a)) as usize;
-            let bytes: Vec<u8> = (0..len).map(|i| self.rd(a.wrapping_add(i as u16) as u32)).collect();
+            let bytes: Vec<u8> = (0..len).map(|i| self.rd_view(a.wrapping_add(i as u16) as u32)).collect();
             out.push(Disasm { addr: a as u32, bytes, text });
             a = next;
         }

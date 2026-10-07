@@ -31,8 +31,10 @@ export class Emulator {
      */
     cursor(): Uint8Array;
     /**
-     * Total clock cycles executed (machine cycles / T-states). Drives the
-     * cycle-accurate timers (8086 PIT, 8051 timers, 8085 8155 timer).
+     * Total clock cycles executed. All six ISAs now count: machine cycles /
+     * T-states for 8086/8085/8051, nominal per-instruction costs for
+     * 6502/Z80, single-cycle for rv32. Drives cycle-accurate timers and host
+     * sim-time stamps.
      */
     cycles(): bigint;
     /**
@@ -147,17 +149,25 @@ export class Emulator {
      */
     pit_count(n: number): number;
     /**
-     * Queue a key for the 8086's INT 21h keyboard reads (AH=01/06/07/08/0C).
+     * Read an I/O port byte (8085/8086: port space; 8051: P0-P3 pins;
+     * Z80: latch/CTC; rv32: 0xE0 = GPIO DATA, 0xE1 = DIR; 6502: use via_read).
      */
     port_read(port: number): number;
     /**
-     * Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins).
+     * Write an I/O port byte (8085/8086: port space 0-255; 8051: P0-P3 pins;
+     * Z80: latch/CTC; rv32: 0xE0 injects GPIO input pins; 6502: use via_write).
      */
     port_write(port: number, val: number): void;
     /**
      * 8255 PPI state [PA, PB, PC, ctrl] if present.
      */
     ppi(): Uint8Array | undefined;
+    /**
+     * Inject external pin levels into an 8255 PPI input port (8086/8085).
+     * `port` is 0xE0 (A), 0xE1 (B) or 0xE2 (C). Input-mode bits read back
+     * the injected level while the firmware's output latch is untouched.
+     */
+    ppi_set_input(port: number, val: number): void;
     /**
      * Queue a type-ahead character for INT 21h/keyboard reads (8086).
      */
@@ -281,7 +291,10 @@ export class Emulator {
     step(): void;
     usart_rx(v: number): void;
     /**
-     * 8251 USART status / Rx push.
+     * 8251 USART status / Rx push — the universal serial hook, routed per
+     * ISA: 8086/8085/Z80 kit USART (ports 0x50/0x51), 6502 board ACIA
+     * ($5000/$5001), 8051 SBUF/SCON (bit1 = RI, bit2 = TI), rv32 board UART
+     * (0xF0000). `usart_rx` is the RX-inject call for every ISA.
      */
     usart_status(): number;
     /**
@@ -378,6 +391,7 @@ export interface InitOutput {
     readonly emulator_port_read: (a: number, b: number) => number;
     readonly emulator_port_write: (a: number, b: number, c: number) => void;
     readonly emulator_ppi: (a: number) => [number, number];
+    readonly emulator_ppi_set_input: (a: number, b: number, c: number) => void;
     readonly emulator_push_key: (a: number, b: number) => void;
     readonly emulator_regs: (a: number) => [number, number];
     readonly emulator_reset: (a: number) => void;

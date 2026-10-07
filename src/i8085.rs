@@ -807,7 +807,7 @@ impl Cpu for Cpu8085 {
             if n < fixed {
                 return;
             }
-            let v3end = 25 + MEM_SIZE + 256 + 267;
+            let v3end = 25 + MEM_SIZE + 256;
             if n < v3end {
                 return;
             }

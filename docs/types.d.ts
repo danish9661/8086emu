@@ -77,16 +77,24 @@ export class Emulator {
   video_mode(): number;
 
   // ---- I/O ----
-  /** Read a byte from the 256-entry port space (or P0-P3 for 8051). */
+  /** Read a byte from the port space (8085/8086 ports; 8051 P0-P3; Z80 latch/CTC; rv32 0xE0 = GPIO DATA, 0xE1 = DIR; 6502: use via_read). */
   port_read(port: number): number;
-  /** Write a byte to the port space. */
+  /** Write a byte to the port space (rv32 0xE0 injects GPIO input pins; 6502: use via_write/via_pins). */
   port_write(port: number, val: number): void;
+  /** 8086/8085: inject 8255 PPI external input levels (0xE0/0xE1/0xE2 = A/B/C) without touching the output latch. */
+  ppi_set_input(port: number, val: number): void;
   /** 8051: inject a received serial byte (SBUF + RI). */
   serial_rx(ch: number): void;
+  /** Universal serial-RX hook, routed per ISA: 8086/8085/Z80 kit USART, 6502 board ACIA ($5000), 8051 SBUF, rv32 board UART (0xF0000). */
+  usart_rx(v: number): void;
+  /** Serial status for the same routing (bit0 TxRDY, bit1 RxRDY, bit2 TxEMPTY). */
+  usart_status(): number;
   /** 8085: drive the SID input pin (read by RIM bit 7). */
   set_sid(v: boolean): void;
   /** 8085: read the SOD output pin (set by SIM bit 7). */
   sod(): number;
+  /** Cycle clock, nonzero on all six ISAs (host sim-time; timers derive from it). */
+  cycles(): bigint;
 
   // ---- interrupts ----
   /** Raise a hardware interrupt. 8086: NMI/INTR+vector; 8085: TRAP/RST75/RST65/RST55/INTR+vector; 8051: INT0/INT1; 6502: NMI (else IRQ); Z80: NMI (else INT); rv32: throws. */

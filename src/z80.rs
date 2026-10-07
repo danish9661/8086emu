@@ -12,6 +12,7 @@
 //! `0xDD 0xCB` / `0xFD 0xCB` for indexed bit ops.
 
 use crate::cpu::{Cpu, Disasm, FlagSet, Mem, Output, Reg};
+use crate::usart::Usart8251;
 use crate::z80ctc::Z80Ctc;
 
 #[derive(Clone)]
@@ -34,6 +35,19 @@ pub struct CpuZ80 {
     ext_int: bool,
     /// Z80 CTC counter/timer (channels at I/O 0x10-0x13).
     pub ctc: Z80Ctc,
+    /// Intel 8251 USART kit (firmware ports 0x50 data / 0x51 status, same
+    /// addresses as the 8086/8085 kits). Tx echoes to `out`; Rx arrives via
+    /// `Emulator::usart_push_rx` (host serial inject).
+    pub usart: Usart8251,
+    /// Nominal T-states retired (see `z80_tstates`). Host sim-time clock;
+    /// nothing in the core reads it.
+    cycles: u64,
+    /// Prefix context of the last retired instruction (0 = none,
+    /// 0xCB/0xED/0xDD/0xFD), its final opcode byte, and whether it was a
+    /// DD/FD CB indexed bit op. Feeds the cycle counter only.
+    last_prefix: u8,
+    last_op: u8,
+    last_ddcb: bool,
 }
 
 impl Default for CpuZ80 {
@@ -45,6 +59,7 @@ impl Default for CpuZ80 {
             iff1: false, iff2: false, im: 0, halted: false,
             out: Output::default(), ports: [0; 256], mem: Mem::new(1 << 16),
             pending_int: false, pending_nmi: false, ext_int: false, ctc: Z80Ctc::new(),
+            usart: Usart8251::new(), cycles: 0, last_prefix: 0, last_op: 0, last_ddcb: false,
         };
         m.reset();
         m
@@ -57,6 +72,96 @@ const H: u8 = 1 << 4;
 const PV: u8 = 1 << 2;
 const N: u8 = 1 << 1;
 const C: u8 = 1 << 0;
+
+/// Nominal T-state cost of an unprefixed Z80 opcode (taken-branch costs, like
+/// `i8085_tstates`; repeat-block ops use the non-repeat cost). Feeds the host
+/// sim-time clock only — nothing in the core reads it.
+fn z80_tstates_main(op: u8) -> u8 {
+    match op {
+        0x00 => 4, // NOP
+        0x06 | 0x0E | 0x16 | 0x1E | 0x26 | 0x2E | 0x3E => 7, // LD r,n
+        0x36 => 10, // LD (HL),n
+        0x0A | 0x1A => 7, // LD A,(BC)/(DE)
+        0x02 | 0x12 => 7, // LD (BC)/(DE),A
+        0x3A | 0x32 => 13, // LD A,(nn) / LD (nn),A
+        0x2A | 0x22 => 16, // LD HL,(nn) / LD (nn),HL
+        0x01 | 0x11 | 0x21 | 0x31 => 10, // LD rp,nn
+        0xF9 => 6, // LD SP,HL
+        0x08 | 0xEB | 0xD9 => 4, // EX AF,AF' / EX DE,HL / EXX
+        0xE3 => 19, // EX (SP),HL
+        0xC5 | 0xD5 | 0xE5 | 0xF5 => 11, // PUSH rp
+        0xC1 | 0xD1 | 0xE1 | 0xF1 => 10, // POP rp
+        0x40..=0x7F => 4, // LD r,r' (HALT counted only while running)
+        0x80..=0x85 | 0x87 => 4, // ADD A,r
+        0x86 => 7, // ADD A,(HL)
+        0x88..=0x8D | 0x8F => 4, // ADC A,r
+        0x8E => 7, // ADC A,(HL)
+        0x90..=0x95 | 0x97 => 4, // SUB r
+        0x96 => 7, // SUB (HL)
+        0x98..=0x9D | 0x9F => 4, // SBC A,r
+        0x9E => 7, // SBC A,(HL)
+        0xA0..=0xA5 | 0xA7 => 4, // AND r
+        0xA6 => 7, // AND (HL)
+        0xA8..=0xAD | 0xAF => 4, // XOR r
+        0xAE => 7, // XOR (HL)
+        0xB0..=0xB5 | 0xB7 => 4, // OR r
+        0xB6 => 7, // OR (HL)
+        0xB8..=0xBD | 0xBF => 4, // CP r
+        0xBE => 7, // CP (HL)
+        0xC6 | 0xCE | 0xD6 | 0xDE | 0xE6 | 0xEE | 0xF6 | 0xFE => 7, // ALU n
+        0x04 | 0x0C | 0x14 | 0x1C | 0x24 | 0x2C | 0x3C => 4, // INC r
+        0x34 => 11, // INC (HL)
+        0x05 | 0x0D | 0x15 | 0x1D | 0x25 | 0x2D | 0x3D => 4, // DEC r
+        0x35 => 11, // DEC (HL)
+        0x03 | 0x13 | 0x23 | 0x33 => 6, // INC rp
+        0x0B | 0x1B | 0x2B | 0x3B => 6, // DEC rp
+        0x09 | 0x19 | 0x29 | 0x39 => 11, // ADD HL,rp
+        0x27 | 0x2F | 0x37 | 0x3F => 4, // DAA/CPL/SCF/CCF
+        0x07 | 0x0F | 0x17 | 0x1F => 4, // RLCA/RRCA/RLA/RRA
+        0xC3 => 10, // JP nn
+        0xC2 | 0xCA | 0xD2 | 0xDA | 0xE2 | 0xEA | 0xF2 | 0xFA => 10, // JP cc
+        0xE9 => 4, // JP (HL)
+        0x18 => 12, // JR e
+        0x20 | 0x28 | 0x30 | 0x38 => 12, // JR cc (taken cost)
+        0x10 => 13, // DJNZ (taken cost)
+        0xCD => 17, // CALL nn
+        0xC4 | 0xCC | 0xD4 | 0xDC | 0xE4 | 0xEC | 0xF4 | 0xFC => 17, // CALL cc
+        0xC9 => 10, // RET
+        0xC0 | 0xC8 | 0xD0 | 0xD8 | 0xE0 | 0xE8 | 0xF0 | 0xF8 => 11, // RET cc
+        0xC7 | 0xCF | 0xD7 | 0xDF | 0xE7 | 0xEF | 0xF7 | 0xFF => 11, // RST
+        0xDB | 0xD3 => 11, // IN A,(n) / OUT (n),A
+        0xF3 | 0xFB => 4, // DI / EI
+        _ => 4,
+    }
+}
+
+/// Nominal T-state cost of a CB-prefixed bit op, from its bit pattern:
+/// register ops cost 8; `(HL)` ops cost 15, except BIT b,(HL) at 12.
+fn z80_tstates_cb(sub: u8) -> u8 {
+    if sub & 7 != 6 {
+        return 8;
+    }
+    if sub >> 6 == 1 { 12 } else { 15 }
+}
+
+/// Nominal T-state cost of an ED-prefixed op. Block-transfer/compare ops use
+/// the non-repeat cost; IN/OUT (C) cost 12.
+fn z80_tstates_ed(sub: u8) -> u8 {
+    match sub {
+        0x44 | 0x4C | 0x54 | 0x5C | 0x64 | 0x6C | 0x74 | 0x7C => 8, // NEG
+        0x45 | 0x4D | 0x55 | 0x5D | 0x65 | 0x6D | 0x75 | 0x7D => 14, // RETN/RETI
+        0x46 | 0x4E | 0x56 | 0x5E | 0x66 | 0x6E | 0x76 | 0x7E => 8, // IM n
+        0x47 | 0x4F | 0x57 | 0x5F => 9, // LD I/R,A and LD A,I/R
+        0x67 | 0x6F => 18, // RRD / RLD
+        0x42 | 0x52 | 0x62 | 0x72 => 15, // SBC HL,rp
+        0x4A | 0x5A | 0x6A | 0x7A => 15, // ADC HL,rp
+        0x43 | 0x53 | 0x63 | 0x73 => 16, // LD (nn),rp
+        0x4B | 0x5B | 0x6B | 0x7B => 16, // LD rp,(nn)
+        0xA0..=0xA3 | 0xA8..=0xAB | 0xB0..=0xB3 | 0xB8..=0xBB => 16, // block ops
+        0x40..=0x7F => 12, // IN r,(C) / OUT (C),r
+        _ => 8,
+    }
+}
 
 impl CpuZ80 {
     fn get_flag(&self, bit: u8) -> bool { self.f & bit != 0 }
@@ -93,12 +198,30 @@ impl CpuZ80 {
         if (0x10..=0x13).contains(&p) {
             return self.ctc.read(p - 0x10);
         }
+        // 8251 USART kit (same ports as the 8086/8085 kits): data + status.
+        if p == 0x50 {
+            return self.usart.read_data();
+        }
+        if p == 0x51 {
+            return self.usart.read_status();
+        }
         self.ports[p]
     }
     fn out_port(&mut self, port: u16, v: u8) {
         let p = (port & 0xFF) as usize;
         if (0x10..=0x13).contains(&p) {
             self.ctc.write(p - 0x10, v);
+            return;
+        }
+        // USART Tx echoes to the program-output buffer (host serial tap),
+        // mirroring the 8086/8085 `OUT 50h` convention.
+        if p == 0x50 {
+            self.usart.write_data(v);
+            self.out.put_char(v as char);
+            return;
+        }
+        if p == 0x51 {
+            self.usart.write_ctrl(v);
             return;
         }
         self.ports[p] = v;
@@ -239,12 +362,15 @@ impl CpuZ80 {
     fn run_step(&mut self) -> bool {
         if self.halted { return false; }
         self.r = self.r.wrapping_add(1);
+        self.last_prefix = 0;
+        self.last_ddcb = false;
         let op = self.fetch();
+        self.last_op = op;
         match op {
-            0xCB => { let sub = self.fetch(); self.exec_cb(sub); }
-            0xDD => { let next = self.fetch(); if next == 0xCB { self.exec_ddcb(false); } else { self.exec_xy(next, false); } }
-            0xFD => { let next = self.fetch(); if next == 0xCB { self.exec_ddcb(true); } else { self.exec_xy(next, true); } }
-            0xED => { let next = self.fetch(); self.exec_ed(next); }
+            0xCB => { let sub = self.fetch(); self.last_prefix = 0xCB; self.last_op = sub; self.exec_cb(sub); }
+            0xDD => { let next = self.fetch(); self.last_prefix = 0xDD; self.last_op = next; if next == 0xCB { self.last_ddcb = true; self.exec_ddcb(false); } else { self.exec_xy(next, false); } }
+            0xFD => { let next = self.fetch(); self.last_prefix = 0xFD; self.last_op = next; if next == 0xCB { self.last_ddcb = true; self.exec_ddcb(true); } else { self.exec_xy(next, true); } }
+            0xED => { let next = self.fetch(); self.last_prefix = 0xED; self.last_op = next; self.exec_ed(next); }
             _ => self.exec_main(op),
         }
         true
@@ -665,6 +791,9 @@ impl Cpu for CpuZ80 {
         self.iff1 = false; self.iff2 = false; self.im = 0; self.halted = false; self.pending_int = false; self.pending_nmi = false;
         self.ext_int = false;
         self.ctc = Z80Ctc::new();
+        self.usart = Usart8251::new();
+        self.cycles = 0;
+        self.last_prefix = 0; self.last_op = 0; self.last_ddcb = false;
         self.out = Output::default();
     }
 
@@ -674,6 +803,7 @@ impl Cpu for CpuZ80 {
             self.iff1 = false;
             self.push(self.pc);
             self.pc = 0x0066;
+            self.cycles += 11; // NMI acknowledge (nominal)
             return true;
         }
         if self.pending_int && self.iff1 {
@@ -685,10 +815,26 @@ impl Cpu for CpuZ80 {
             let addr = if self.im == 2 { ((self.i as u16) << 8) as u16 } else { 0x0038 };
             self.push(self.pc);
             self.pc = addr;
+            self.cycles += 13; // maskable interrupt acknowledge (nominal)
             return true;
         }
         let ok = self.run_step();
         if ok {
+            // Nominal T-states of the retired instruction (host clock only).
+            // Skipped once halted (HLT retires nothing), mirroring the 8086.
+            if !self.halted {
+                let t = if self.last_ddcb {
+                    23 // DD/FD CB indexed bit op
+                } else {
+                    match self.last_prefix {
+                        0xCB => z80_tstates_cb(self.last_op),
+                        0xED => z80_tstates_ed(self.last_op),
+                        0xDD | 0xFD => z80_tstates_main(self.last_op).saturating_add(4),
+                        _ => z80_tstates_main(self.last_op),
+                    }
+                };
+                self.cycles += t as u64;
+            }
             // The CTC runs alongside the CPU: one timer tick per instruction.
             // Its IRQ is a *level*: follow the live line so a request latched
             // while IFF1 = 0 vanishes if the source was cleared meanwhile (no
@@ -763,6 +909,11 @@ impl Cpu for CpuZ80 {
         v.extend_from_slice(&self.ports);
         v.extend_from_slice(&self.ctc.snapshot());
         v.push(self.ext_int as u8);
+        // Added tail (cycles + USART): fixed-size cycles first so older
+        // snapshots (which end here) still restore with cycles = 0, then the
+        // variable-length USART blob last.
+        v.extend_from_slice(&self.cycles.to_le_bytes());
+        v.extend_from_slice(&self.usart.snapshot());
         v
     }
     fn restore(&mut self, data: &[u8]) {
@@ -796,8 +947,25 @@ impl Cpu for CpuZ80 {
         // (reset) CTC line cannot explain, else drop it.
         self.ext_int = data.get(p).is_some_and(|b| *b != 0)
             || (self.pending_int && !self.ctc.irq_pending());
+        if data.get(p).is_some() { p += 1; }
+        // Post-1.6 snapshots append cycles (8 bytes LE) then the USART blob.
+        // Older snapshots stop above and restore with cycles = 0 / fresh USART.
+        if data.len() >= p + 8 {
+            let mut cy = [0u8; 8];
+            cy.copy_from_slice(&data[p..p + 8]);
+            self.cycles = u64::from_le_bytes(cy);
+            p += 8;
+        } else {
+            self.cycles = 0;
+        }
+        if p < data.len() {
+            self.usart.restore(&data[p..]);
+        } else {
+            self.usart = Usart8251::new();
+        }
     }
     fn is_halted(&self) -> bool { self.halted }
+    fn cycles(&self) -> u64 { self.cycles }
     fn disasm(&self, addr: u32, count: usize) -> Vec<Disasm> {
         let mut out = Vec::new();
         let mut pc = addr as u16;
