@@ -93,7 +93,11 @@ jobs:
           if echo "$VER" | grep -qE '^[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
             VER=$(echo "$VER" | sed -E 's/^([0-9]+\.[0-9]+)(-[a-zA-Z0-9.]+)?$/\1.0\2/')
           fi
-          npm version "$VER" --no-git-tag-version
+          # --allow-same-version: wasm-pack already stamps Cargo.toml's
+          # version, so when the release version equals it (e.g. Cargo
+          # pre-bumped to 1.6.0) plain `npm version` fails with
+          # "Version not changed" and would red the workflow.
+          npm version "$VER" --no-git-tag-version --allow-same-version
           echo "npm_version=$VER" >> "$GITHUB_OUTPUT"
 
       # ----- publish to npmjs.com as `8086emu` -----
